@@ -28,6 +28,7 @@ try {
   process.umask(0o077);
   const environment = { workspace, image: values.image as string, uid: process.getuid(), gid: process.getgid!(), home: values.home as string, runtime: values.runtime as string };
   const run = configuredProgramRunner(environment);
+  await run.verify();
   unlock = acquireProcessLock(join(state, 'program-lock.db'));
   log = new ProgramLog(join(state, 'programs.db'), JSON.stringify(environment), run);
   // Recovery only terminates saved containers. It does not infer success or repeat their commands.

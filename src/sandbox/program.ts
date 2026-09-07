@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { lstatSync } from 'node:fs';
 import { isAbsolute, relative } from 'node:path';
 import { assertDirectoryPath } from '../config/paths.ts';
+import { validatePodmanInfo } from './preflight.ts';
 
 export interface ProgramEnvironment { workspace: string; image: string; uid: number; gid: number; home: string; runtime: string }
 export interface ProgramRequest { command: string[]; seconds: number }
@@ -65,7 +66,13 @@ export function configuredProgramRunner(environment: ProgramEnvironment) {
     assertDirectoryPath(environment.workspace);
     return executeProgram(environment, request, call, signal, name);
   };
-  return Object.assign(run, { cleanup: async (name: string) => {
+  return Object.assign(run, { verify: async () => {
+    const info = await call(['info', '--format=json'], 15);
+    if (info.code !== 0) throw new Error('Podman information unavailable');
+    validatePodmanInfo(JSON.parse(info.stdout), environment);
+    if (!/^sha256:[a-f0-9]{64}$/.test(environment.image) || (await call(['image', 'exists', environment.image], 15)).code !== 0)
+      throw new Error('Configured execution image must already be installed');
+  }, cleanup: async (name: string) => {
     if (!/^niwa-program-[a-f0-9-]{36}$/.test(name)) throw new Error('Invalid saved container');
     if ((await call(['rm', '--force', '--ignore', name], 15)).code !== 0) throw new Error('Container recovery failed');
   } });
