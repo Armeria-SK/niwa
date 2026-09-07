@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Avatar, EmptyState, Modal, Segmented } from '../components.jsx';
 import { ActivityIcon, ArrowUpRightIcon, CheckCircleIcon, FileIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
@@ -38,6 +38,13 @@ export function Activity({ activities, members, paused, onPause, onDecide, onThr
 
 function TaskDetail({ task, member, paused, onClose, onControl, onThread }) {
   const [instruction, setInstruction] = useState('');
+  const [busy, setBusy] = useState(false); const pending = useRef(false);
+  async function control(action, body) {
+    if (pending.current) return false;
+    pending.current = true; setBusy(true);
+    try { return await onControl(task.id, action, body); }
+    finally { pending.current = false; setBusy(false); }
+  }
   const [history, setHistory] = useState([]); const [historyError, setHistoryError] = useState('');
   useEffect(() => {
     let active = true;
@@ -48,14 +55,14 @@ function TaskDetail({ task, member, paused, onClose, onControl, onThread }) {
   const canAct = !member?.deleted && openStatuses.includes(task.status);
   return <Modal title={task.title} onClose={onClose} className="task-modal"><div className="modal-body form-stack"><div className="activity-detail-owner"><Avatar member={member} size={40} /><span>{member?.name}</span><span role="status">{paused && task.status === 'running' ? '全体の再開待ち' : taskStatus[task.status]}</span></div><p>{task.detail}</p>{task.reason ? <p className="task-reason">{task.reason}</p> : null}<div><h3 className="small-heading">これまでの進み具合</h3><ol className="task-steps">{task.steps.map((step, i) => <li key={`${i}-${step}`}>{step}</li>)}</ol></div>
     {task.instructions?.length ? <div><h3 className="small-heading">追加した指示</h3><ul className="task-instructions">{task.instructions.map(item => <li key={item.id}><time>{item.time}</time><p>{item.text}</p></li>)}</ul></div> : null}
-    {canAct ? <form className="form-stack" onSubmit={async e => { e.preventDefault(); if (instruction.trim() && await onControl(task.id, 'instruct', instruction.trim())) setInstruction(''); }}><label className="field"><span>この仕事への追加指示</span><textarea rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="進め方や、優先してほしいことなど" /></label><button className="button secondary" disabled={!instruction.trim()}>指示を追加</button></form> : null}
+    {canAct ? <form className="form-stack" onSubmit={async e => { e.preventDefault(); if (instruction.trim() && await control('instruct', instruction.trim())) setInstruction(''); }}><label className="field"><span>この仕事への追加指示</span><textarea disabled={busy} rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="進め方や、優先してほしいことなど" /></label><button className="button secondary" disabled={busy || !instruction.trim()}>指示を追加</button></form> : null}
     {historyError ? <p role="alert">履歴を取得できませんでした。{historyError}</p> : null}
     {history.length ? <div><h3 className="small-heading">操作の履歴（直近100件）</h3><ul className="task-log">{history.map(item => <li key={item.sequence}><time dateTime={new Date(item.created_at).toISOString()}>{new Date(item.created_at).toLocaleString('ja-JP')}</time> {eventLabels[item.kind] || '状態を更新'}</li>)}</ul></div> : null}
     </div><div className="form-actions task-controls">{task.thread ? <button className="button subtle" onClick={() => { onClose(); onThread(task.thread); }}>関連する会話</button> : null}
-    {['running', 'waiting'].includes(task.status) ? <button className="button secondary" onClick={() => onControl(task.id, 'pause')}>この仕事を一時停止</button> : null}
-    {task.status === 'running' ? <button className="button primary" onClick={() => onControl(task.id, 'complete')}>完了にする</button> : null}
-    {['paused', 'waiting'].includes(task.status) && (task.paused || task.state !== 'waiting_child') ? <button className="button primary" onClick={() => onControl(task.id, 'resume')}>この仕事を再開</button> : null}
-    {!member?.deleted && ['failed', 'canceled'].includes(task.status) ? <button className="button primary" onClick={() => onControl(task.id, 'retry')}>再試行</button> : null}
-    {canAct ? <button className="button subtle" onClick={() => onControl(task.id, 'cancel')}>この仕事を中止</button> : null}
+    {['running', 'waiting'].includes(task.status) ? <button className="button secondary" disabled={busy} onClick={() => control('pause')}>この仕事を一時停止</button> : null}
+    {task.status === 'running' ? <button className="button primary" disabled={busy} onClick={() => control('complete')}>完了にする</button> : null}
+    {['paused', 'waiting'].includes(task.status) && (task.paused || task.state !== 'waiting_child') ? <button className="button primary" disabled={busy} onClick={() => control('resume')}>この仕事を再開</button> : null}
+    {!member?.deleted && ['failed', 'canceled'].includes(task.status) ? <button className="button primary" disabled={busy} onClick={() => control('retry')}>再試行</button> : null}
+    {canAct ? <button className="button subtle" disabled={busy} onClick={() => control('cancel')}>この仕事を中止</button> : null}
     </div></Modal>;
 }
