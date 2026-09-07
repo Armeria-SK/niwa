@@ -6,10 +6,12 @@ Windowsでこれらを使う場合はWSL2のUbuntu内でサービスを動かす
 
 ## 現在の確認範囲
 
-2026-09-07、Ubuntu-22.04で診断スクリプトを実行した。
+2026-09-07、WSL登録名Ubuntu-22.04で診断スクリプトを実行した。実OSはUbuntu 26.04.1（登録名からOS版を推定しない）。
 Linux・非rootユーザーniwa・cgroup v2の存在・Windowsドライブの未マウントを確認。
 Node.js、Podman、専用ユーザーniwa-execは未導入。
 本番配置やユーザー作成はまだ実施していない。
+製品ルート `/home/niwa/niwa/` は空ディレクトリとして存在することを確認した。
+パッケージ候補はPodman 5.7.0、Node.js 22系。Node.jsは公式の24.16.0バイナリーを製品内へ別途配置する。
 
 ```sh
 sh deploy/ubuntu/check-prerequisites.sh
@@ -17,6 +19,21 @@ sh deploy/ubuntu/check-prerequisites.sh
 
 この診断は読み取りだけを行い、不足があると終了コード1を返す。
 診断の成功はコンテナによる隔離の実証ではない。
+
+## 管理者が確認して実行する準備
+
+`prepare-executor.sh` は未実行。空の製品ルート、未作成の専用主体、x86_64を前提とする。
+Podman・uidmap・fuse-overlayfs・ACL・ダウンロード関連のOSパッケージを導入し、niwa-execとniwa-ipcを作成する。
+Node.js 24.16.0は公式SHA-256と照合して `app/runtime/` へ配置する。システムのNode.jsを置き換えない。
+必要なディレクトリごとに所有者・モードを設定し、niwa-execには `/home/niwa` の通過権限だけを追加する。
+サービス登録・起動、モデル認証、実行イメージ取得、Windowsドライブのマウント変更は行わない。
+
+```sh
+sudo sh deploy/ubuntu/prepare-executor.sh --apply
+```
+
+既存インストールや同名実行主体がある場合は停止する。途中失敗後に無条件で再実行せず、作成済みの状態を確認する。
+WSLでの `sh -n` 構文検査とaptの変更なしシミュレーションは実施済み。実導入は未実施。
 
 ## 配置前に用意するもの
 
