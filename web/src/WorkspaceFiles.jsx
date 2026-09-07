@@ -20,11 +20,16 @@ export function WorkspaceFiles({ onClose }) {
     try {
       const result = await api(`/workspace/file?path=${encodeURIComponent([path, name].filter(Boolean).join('/'))}`);
       const bytes = Uint8Array.from(atob(result.data), character => character.charCodeAt(0));
+      const header = String.fromCharCode(...bytes.slice(0, 12));
+      const mime = header.startsWith('\x89PNG\r\n\x1a\n') ? 'image/png'
+        : header.startsWith('\xff\xd8\xff') ? 'image/jpeg'
+        : /^GIF8[79]a/.test(header) ? 'image/gif'
+        : header.startsWith('RIFF') && header.slice(8) === 'WEBP' ? 'image/webp' : null;
       let content = null;
       if (bytes.length <= 65536) {
         try { const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes); if (!decoded.includes('\0')) content = decoded; } catch { /* Binary files remain downloadable. */ }
       }
-      if (id === request.current) setFile({ name, bytes, content });
+      if (id === request.current) setFile({ name, bytes, content, image: mime ? `data:${mime};base64,${result.data}` : null });
     } catch (error) { if (id === request.current) setError(`${error.message} ダウンロードは8MBまでです。`); }
     finally { if (id === request.current) setBusy(false); }
   }
@@ -42,12 +47,13 @@ export function WorkspaceFiles({ onClose }) {
     {error ? <p className="field-error" role="alert">{error}</p> : null}
     {listing?.available === false ? <p>共有ファイルサービスは未接続です。本体の接続設定を確認してください。</p> : file ? <>
       <p className="field-hint">{file.bytes.length.toLocaleString()}バイト</p>
-      {file.content === null ? <p>この形式・サイズのプレビューには対応していません。ダウンロードして確認できます。</p> : <pre className="artifact-document">{file.content}</pre>}
+      {file.image ? <img src={file.image} alt={file.name} style={{ display: 'block', maxWidth: '100%', maxHeight: '60vh', margin: '0 auto', objectFit: 'contain' }} onError={() => setFile(current => current === file ? { ...current, image: null, content: null } : current)} />
+        : file.content === null ? <p>この形式・サイズのプレビューには対応していません。ダウンロードして確認できます。</p> : <pre className="artifact-document">{file.content}</pre>}
     </> : listing?.available ? <><label className="field"><span>このフォルダーを検索</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>
       <div className="artifact-grid">{entries.map(entry => <article className="artifact-card" key={entry.name}><div className="artifact-card-meta"><FileIcon size={24} /><span>{entry.kind === 'directory' ? 'フォルダー' : 'ファイル'}</span></div><button className="artifact-title" disabled={busy} onClick={() => entry.kind === 'directory' ? setPath([path, entry.name].filter(Boolean).join('/')) : open(entry.name)}>{entry.name}</button></article>)}</div>
       {!entries.length ? <p>表示するファイルがありません。</p> : null}
       {listing.truncated ? <p className="field-hint">件数が多いため一覧を一部に制限しています。</p> : null}
     </> : null}
-    <p className="field-hint">全Botの共有作業ファイルです。ダウンロードは8MBまで、本文プレビューはUTF-8の64KBまでです。</p>
+    <p className="field-hint">全Botの共有作業ファイルです。画像（PNG・JPEG・GIF・WebP）の表示とダウンロードは8MBまで、本文プレビューはUTF-8の64KBまでです。</p>
   </div><div className="form-actions"><button className="button subtle" onClick={onClose}>閉じる</button>{file ? <button className="button primary" disabled={busy} onClick={download}><DownloadIcon size={17} />ダウンロード</button> : null}</div></Modal>;
 }
