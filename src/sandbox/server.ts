@@ -1,15 +1,18 @@
 import { createServer } from 'node:http';
 import type { ProgramLog, ProgramOperation } from './program-log.ts';
+import type { PackageLog, PackageOperation } from '../tools/packages/log.ts';
 
 /** Composition root must bind only to a protected Unix socket shared with the trusted Niwa service. */
-export function createProgramServer(log: Pick<ProgramLog, 'execute'>) {
+export function createProgramServer(log: Pick<ProgramLog, 'execute'>, packages?: Pick<PackageLog, 'execute' | 'list'>) {
   const active = new Set<AbortController>();
   const work = new Set<Promise<void>>();
   let stopping = false;
   const server = createServer((request, response) => {
     response.setHeader('Content-Type', 'application/json; charset=utf-8'); response.setHeader('Cache-Control', 'no-store');
     if (stopping || active.size >= 4) { response.writeHead(503).end('{"error":"unavailable"}'); request.resume(); return; }
-    if (request.method !== 'POST' || request.url !== '/programs' || request.headers['content-type'] !== 'application/json') {
+    if (request.method === 'GET' && request.url === '/packages' && packages) { response.end(JSON.stringify(packages.list())); request.resume(); return; }
+    const isPackage = request.url === '/packages' && packages;
+    if (request.method !== 'POST' || (request.url !== '/programs' && !isPackage) || request.headers['content-type'] !== 'application/json') {
       response.writeHead(400).end('{"error":"invalid_request"}'); request.resume(); return;
     }
     const controller = new AbortController(); active.add(controller);
@@ -25,10 +28,10 @@ export function createProgramServer(log: Pick<ProgramLog, 'execute'>) {
         }
         const input: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if (!input || typeof input !== 'object' || Array.isArray(input) ||
-            Object.keys(input).some(key => !['operation_id', 'agent_id', 'room_id', 'task_id', 'command', 'seconds', 'allow_start'].includes(key))) {
+            Object.keys(input).some(key => !['operation_id', 'agent_id', 'room_id', 'task_id', 'allow_start', ...(isPackage ? ['names'] : ['command', 'seconds'])].includes(key))) {
           response.writeHead(400).end('{"error":"invalid_request"}'); return;
         }
-        const result = await log.execute(input as ProgramOperation, controller.signal);
+        const result = isPackage ? await packages!.execute(input as PackageOperation, controller.signal) : await log.execute(input as ProgramOperation, controller.signal);
         if (!response.destroyed) response.end(JSON.stringify({ operation_id: (input as ProgramOperation).operation_id, result }));
       } catch { if (!response.destroyed) response.writeHead(400).end('{"error":"request_failed"}'); }
       finally { active.delete(controller); response.off('close', disconnect); }

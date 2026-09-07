@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync } from 'node:fs';
+import { chmodSync, lstatSync, rmSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { assertDirectoryPath } from '../config/paths.ts';
@@ -8,13 +8,17 @@ import { ProgramLog } from '../sandbox/program-log.ts';
 import { createProgramServer } from '../sandbox/server.ts';
 import { configuredBrowserRunner } from '../sandbox/browser.ts';
 import { createBrowserServer } from '../tools/browser/server.ts';
+import { PackageCatalog } from '../tools/packages/catalog.ts';
+import { PackageLog } from '../tools/packages/log.ts';
+import { installPackages, packageVerificationName } from '../tools/packages/install.ts';
 
 let broker: ReturnType<typeof createProgramServer> | undefined;
 let browser: ReturnType<typeof createBrowserServer> | undefined;
+let packages: PackageLog | undefined;
 let log: ProgramLog | undefined; let unlock: (() => void) | undefined; let closing: Promise<void> | undefined;
-const close = () => closing ??= (async () => { await browser?.stop(); await broker?.stop(); log?.close(); unlock?.(); })();
+const close = () => closing ??= (async () => { await browser?.stop(); await broker?.stop(); await packages?.close(); log?.close(); unlock?.(); })();
 try {
-  const { values } = parseArgs({ options: Object.fromEntries(['workspace', 'socket', 'state', 'home', 'runtime', 'image', 'browser-image'].map(key => [key, { type: 'string' as const }])) });
+  const { values } = parseArgs({ options: Object.fromEntries(['workspace', 'socket', 'state', 'home', 'runtime', 'image', 'browser-image', 'packages'].map(key => [key, { type: 'string' as const }])) });
   if (process.platform !== 'linux' || !process.getuid?.() || Object.values(values).some(value => typeof value !== 'string') ||
       !values.workspace || !values.socket || !values.state || !values.home || !values.runtime || !values.image) throw new Error('Executor configuration required');
   if (!isAbsolute(values.workspace as string)) throw new Error('Absolute workspace required');
@@ -30,13 +34,34 @@ try {
     throw new Error('Protected executor directories required');
   process.umask(0o077);
   const environment = { workspace, image: values.image as string, uid: process.getuid(), gid: process.getgid!(), home: values.home as string, runtime: values.runtime as string };
-  const run = configuredProgramRunner(environment);
+  const run = configuredProgramRunner(environment, () => packages?.currentImage() ?? environment.image);
   await run.verify();
   unlock = acquireProcessLock(join(state, 'program-lock.db'));
+  if (values.packages) {
+    const catalogPath = resolve(values.packages as string); const relation = relative(workspace, catalogPath);
+    if (!isAbsolute(values.packages as string) || !relation || (!relation.startsWith('../') && relation !== '..')) throw new Error('Package catalog must be outside workspace');
+    const catalog = new PackageCatalog(catalogPath);
+    const cleanup = async (name: string) => {
+      if (!/^niwa-package-[a-f0-9-]{36}$/.test(name)) throw new Error('Invalid saved package container');
+      for (const container of [name, packageVerificationName(name)]) {
+        if ((await run.call(['rm', '--force', '--ignore', container], 15)).code !== 0) throw new Error('Package recovery failed');
+      }
+      const stage = resolve(state, name);
+      if (dirname(stage) !== resolve(state)) throw new Error('Invalid package stage');
+      rmSync(stage, { recursive: true, force: true });
+    };
+    packages = new PackageLog(join(state, 'packages.db'), environment.image, catalog, async (image, name, entries, signal) => {
+      const stage = join(state, name);
+      try { catalog.stage(entries.map(entry => entry.name), stage); return await installPackages(image, stage, name, entries, run.call, signal); }
+      finally { await cleanup(name); }
+    });
+    for (const name of packages.pending()) await cleanup(name);
+    await run.verify();
+  }
   log = new ProgramLog(join(state, 'programs.db'), JSON.stringify(environment), run);
   // Recovery only terminates saved containers. It does not infer success or repeat their commands.
   for (const pending of log.pending()) await run.cleanup(pending.container);
-  broker = createProgramServer(log);
+  broker = createProgramServer(log, packages);
   await new Promise<void>((resolve, reject) => { broker!.server.once('error', reject); broker!.server.listen(socket, resolve); });
   chmodSync(socket, 0o660);
   if (values['browser-image']) {

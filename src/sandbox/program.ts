@@ -40,7 +40,7 @@ export async function executeProgram(environment: ProgramEnvironment, request: P
 }
 
 /** Construction is restricted to the dedicated Linux executor, never the web/model process. */
-export function configuredProgramRunner(environment: ProgramEnvironment) {
+export function configuredProgramRunner(environment: ProgramEnvironment, currentImage: () => string = () => environment.image) {
   if (process.platform !== 'linux' || process.getuid?.() !== environment.uid || !environment.uid || process.getgid?.() !== environment.gid)
     throw new Error('Dedicated non-root Linux identity required');
   for (const directory of [environment.workspace, environment.home, environment.runtime]) {
@@ -64,13 +64,13 @@ export function configuredProgramRunner(environment: ProgramEnvironment) {
   });
   const run = (request: ProgramRequest, signal?: AbortSignal, name?: string) => {
     assertDirectoryPath(environment.workspace);
-    return executeProgram(environment, request, call, signal, name);
+    return executeProgram({ ...environment, image: currentImage() }, request, call, signal, name);
   };
-  return Object.assign(run, { verify: async () => {
+  return Object.assign(run, { call, verify: async () => {
     const info = await call(['info', '--format=json'], 15);
     if (info.code !== 0) throw new Error('Podman information unavailable');
     validatePodmanInfo(JSON.parse(info.stdout), environment);
-    if (!/^sha256:[a-f0-9]{64}$/.test(environment.image) || (await call(['image', 'exists', environment.image], 15)).code !== 0)
+    if (!/^sha256:[a-f0-9]{64}$/.test(currentImage()) || (await call(['image', 'exists', currentImage()], 15)).code !== 0)
       throw new Error('Configured execution image must already be installed');
   }, cleanup: async (name: string) => {
     if (!/^niwa-program-[a-f0-9-]{36}$/.test(name)) throw new Error('Invalid saved container');

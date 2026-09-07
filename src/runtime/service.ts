@@ -22,6 +22,7 @@ import { XOAuth } from '../auth/x-oauth.ts';
 import { readXClient } from '../auth/x-client.ts';
 import { XApi } from '../tools/x/api.ts';
 import { XPostLog } from '../tools/x/post-log.ts';
+import { configuredPackageExecutor } from '../tools/packages/client.ts';
 
 /** All paths originate at the product root. Listening is loopback-only for the HTTPS proxy. */
 export async function startService(root: string, resolve?: ResolveAdapter, portOverride?: number) {
@@ -55,6 +56,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
       ...(xApi && xPosts ? { x: { api: xApi, posts: xPosts } } : {}),
       ...(config.browserExecutorUid ? { browser: configuredBrowserExecutor(join(paths.runtime, 'sockets', 'browser.sock'), config.browserExecutorUid) } : {}),
       ...(config.programExecutorUid ? { program: configuredProgramExecutor(join(paths.runtime, 'sockets', 'program.sock'), config.programExecutorUid) } : {}),
+      ...(config.packagesEnabled && config.programExecutorUid ? { packages: configuredPackageExecutor(join(paths.runtime, 'sockets', 'program.sock'), config.programExecutorUid) } : {}),
       ...(searchKey ? { search: braveSearch(searchKey) } : {}),
       ...(config.workspaceExecutorUid ? {
         workspace: configuredWorkspaceReader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid),
