@@ -52,7 +52,8 @@ function TaskDetail({ task, member, paused, onClose, onControl, onThread }) {
     {historyError ? <p role="alert">履歴を取得できませんでした。{historyError}</p> : null}
     {history.length ? <div><h3 className="small-heading">操作の履歴（直近100件）</h3><ul className="task-log">{history.map(item => <li key={item.sequence}><time dateTime={new Date(item.created_at).toISOString()}>{new Date(item.created_at).toLocaleString('ja-JP')}</time> {eventLabels[item.kind] || '状態を更新'}</li>)}</ul></div> : null}
     </div><div className="form-actions task-controls">{task.thread ? <button className="button subtle" onClick={() => { onClose(); onThread(task.thread); }}>関連する会話</button> : null}
-    {task.status === 'running' ? <><button className="button secondary" onClick={() => onControl(task.id, 'pause')}>この仕事を一時停止</button><button className="button primary" onClick={() => onControl(task.id, 'complete')}>完了にする</button></> : null}
+    {['running', 'waiting'].includes(task.status) ? <button className="button secondary" onClick={() => onControl(task.id, 'pause')}>この仕事を一時停止</button> : null}
+    {task.status === 'running' ? <button className="button primary" onClick={() => onControl(task.id, 'complete')}>完了にする</button> : null}
     {['paused', 'waiting'].includes(task.status) && (task.paused || task.state !== 'waiting_child') ? <button className="button primary" onClick={() => onControl(task.id, 'resume')}>この仕事を再開</button> : null}
     {['failed', 'canceled'].includes(task.status) ? <button className="button primary" onClick={() => onControl(task.id, 'retry')}>再試行</button> : null}
     {canAct ? <button className="button subtle" onClick={() => onControl(task.id, 'cancel')}>この仕事を中止</button> : null}
