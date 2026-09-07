@@ -1,0 +1,12 @@
+ARG NIWA_BROWSER_BASE
+FROM ${NIWA_BROWSER_BASE}
+RUN apt-get update && apt-get install -y --no-install-recommends chromium ca-certificates fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json /app/package.json
+COPY node_modules/@sinclair/typebox /app/node_modules/@sinclair/typebox
+COPY dist/entrypoints/browser-worker.js /app/dist/entrypoints/browser-worker.js
+COPY dist/tools/browser /app/dist/tools/browser
+COPY dist/tools/web/public-page.js /app/dist/tools/web/public-page.js
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/node", "/app/dist/entrypoints/browser-worker.js"]

@@ -29,7 +29,7 @@ export class BrowserPage {
       const session = await this.cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, options);
       this.#session = String(session.sessionId);
       for (const [method, params] of [
-        ['Page.enable', {}], ['Network.enable', {}], ['Network.setBypassServiceWorker', { bypass: true }],
+        ['Page.enable', {}], ['Page.setLifecycleEventsEnabled', { enabled: true }], ['Network.enable', {}], ['Network.setBypassServiceWorker', { bypass: true }],
         ['Network.setCacheDisabled', { cacheDisabled: true }], ['Fetch.enable', { patterns: [{ urlPattern: '*' }] }],
       ] as const) await this.#send(method, params, signal);
     } catch (error) { await this.close(); throw error; }
@@ -57,21 +57,28 @@ export class BrowserPage {
         ], body: redirected ? '' : resource.body_base64 }, active.signal);
     } catch (error) {
       active?.blocked.add(error instanceof BrowserRequestBlocked ? error.reason : 'resource_failed');
-      await this.#send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' });
+      // Navigation/cancellation can already have disposed this intercepted request.
+      await this.#send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => {});
     }
   }
   async navigate(url: string, signal?: AbortSignal): Promise<BrowserSnapshot> {
     if (!this.#session || this.#closed || this.#busy) throw new Error('Browser page unavailable');
+    new BrowserRequests(url); // URL validation also applies when using a parent-process broker.
     const broker = this.broker(url); // Validate before issuing browser commands.
     this.#busy = true; this.#revision = '';
     const controller = new AbortController();
     const combined = AbortSignal.any([this.#lifetime.signal, controller.signal, AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]);
     this.#active = { broker, signal: combined, blocked: new Set() };
     let dispose = () => {};
+    let expectedLoader = ''; const loadedIds = new Set<string>(); let resolveLoaded = () => {};
     const loaded = new Promise<void>((resolve, reject) => {
+      resolveLoaded = resolve;
       const abort = () => reject(new Error('Browser navigation interrupted'));
       const off = this.cdp.onEvent(event => {
-        if (event.sessionId === this.#session && event.method === 'Page.loadEventFired') resolve();
+        if (event.sessionId === this.#session && event.method === 'Page.lifecycleEvent' && event.params.name === 'load') {
+          loadedIds.add(String(event.params.loaderId));
+          if (event.params.loaderId === expectedLoader) resolve();
+        }
       });
       combined.addEventListener('abort', abort, { once: true });
       dispose = () => { off(); combined.removeEventListener('abort', abort); };
@@ -82,6 +89,8 @@ export class BrowserPage {
       combined.throwIfAborted();
       const result = await this.#send('Page.navigate', { url }, combined);
       if (result.errorText) throw new Error('Browser navigation failed');
+      expectedLoader = String(result.loaderId ?? '');
+      if (!expectedLoader || loadedIds.has(expectedLoader)) resolveLoaded();
       await loaded;
       return await this.#snapshot(combined);
     } finally {

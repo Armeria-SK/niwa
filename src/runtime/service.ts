@@ -17,6 +17,7 @@ import { readSearchKey } from '../auth/search-key.ts';
 import { braveSearch } from '../tools/web/search.ts';
 import { configuredWorkspaceReader, configuredWorkspaceWriter, configuredWorkspaceDownloader } from '../tools/files/client.ts';
 import { configuredProgramExecutor } from '../sandbox/client.ts';
+import { configuredBrowserExecutor } from '../tools/browser/client.ts';
 
 /** All paths originate at the product root. Listening is loopback-only for the HTTPS proxy. */
 export async function startService(root: string, resolve?: ResolveAdapter, portOverride?: number) {
@@ -41,6 +42,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     backups = new Backups(runtime, paths, config);
     const searchKey = readSearchKey(paths.secrets);
     scheduler = new Scheduler(runtime, new TurnRunner(runtime, resolve ?? models.resolve, {
+      ...(config.browserExecutorUid ? { browser: configuredBrowserExecutor(join(paths.runtime, 'sockets', 'browser.sock'), config.browserExecutorUid) } : {}),
       ...(config.programExecutorUid ? { program: configuredProgramExecutor(join(paths.runtime, 'sockets', 'program.sock'), config.programExecutorUid) } : {}),
       ...(searchKey ? { search: braveSearch(searchKey) } : {}),
       ...(config.workspaceExecutorUid ? {

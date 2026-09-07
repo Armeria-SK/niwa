@@ -6,12 +6,15 @@ import { acquireProcessLock } from '../runtime/process-lock.ts';
 import { configuredProgramRunner } from '../sandbox/program.ts';
 import { ProgramLog } from '../sandbox/program-log.ts';
 import { createProgramServer } from '../sandbox/server.ts';
+import { configuredBrowserRunner } from '../sandbox/browser.ts';
+import { createBrowserServer } from '../tools/browser/server.ts';
 
 let broker: ReturnType<typeof createProgramServer> | undefined;
+let browser: ReturnType<typeof createBrowserServer> | undefined;
 let log: ProgramLog | undefined; let unlock: (() => void) | undefined; let closing: Promise<void> | undefined;
-const close = () => closing ??= (async () => { await broker?.stop(); log?.close(); unlock?.(); })();
+const close = () => closing ??= (async () => { await browser?.stop(); await broker?.stop(); log?.close(); unlock?.(); })();
 try {
-  const { values } = parseArgs({ options: Object.fromEntries(['workspace', 'socket', 'state', 'home', 'runtime', 'image'].map(key => [key, { type: 'string' as const }])) });
+  const { values } = parseArgs({ options: Object.fromEntries(['workspace', 'socket', 'state', 'home', 'runtime', 'image', 'browser-image'].map(key => [key, { type: 'string' as const }])) });
   if (process.platform !== 'linux' || !process.getuid?.() || Object.values(values).some(value => typeof value !== 'string') ||
       !values.workspace || !values.socket || !values.state || !values.home || !values.runtime || !values.image) throw new Error('Executor configuration required');
   if (!isAbsolute(values.workspace as string)) throw new Error('Absolute workspace required');
@@ -36,6 +39,13 @@ try {
   broker = createProgramServer(log);
   await new Promise<void>((resolve, reject) => { broker!.server.once('error', reject); broker!.server.listen(socket, resolve); });
   chmodSync(socket, 0o660);
+  if (values['browser-image']) {
+    const browsers = configuredBrowserRunner({ ...environment, image: values['browser-image'] as string }); await browsers.verify();
+    browser = createBrowserServer(browsers.create);
+    const browserSocket = join(dirname(socket), 'browser.sock');
+    await new Promise<void>((resolve, reject) => { browser!.server.once('error', reject); browser!.server.listen(browserSocket, resolve); });
+    chmodSync(browserSocket, 0o660);
+  }
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void close().catch(() => { process.exitCode = 1; }); });
   process.stdout.write('Niwa program executor is listening on its protected local socket.\n');
 } catch {

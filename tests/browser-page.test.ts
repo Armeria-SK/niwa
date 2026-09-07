@@ -6,9 +6,12 @@ import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { once } from 'node:events';
 import type { Readable, Writable } from 'node:stream';
+import { PassThrough } from 'node:stream';
 import { CdpPipe } from '../src/tools/browser/cdp.ts';
 import { BrowserPage } from '../src/tools/browser/page.ts';
 import { BrowserRequests } from '../src/tools/browser/requests.ts';
+import { browserWorker } from '../src/tools/browser/worker.ts';
+import { BrowserSession } from '../src/tools/browser/session.ts';
 
 const executable = [process.env.NIWA_TEST_CHROMIUM, 'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe', '/usr/bin/chromium'].find(path => path && existsSync(path));
@@ -57,6 +60,33 @@ test('dedicated browser renders broker resources, blocks unknown writes, and fol
     try { await cdp.send('Browser.close', {}, { timeoutMs: 2_000 }); } catch {}
     cdp.close();
     if (child.exitCode === null && child.signalCode === null) { const exited = once(child, 'exit'); child.kill(); await exited; }
+    assert.ok(resolve(profile).startsWith(testRoot + '\\') || resolve(profile).startsWith(testRoot + '/'));
+    await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
+});
+
+test('browser session and worker exchange bounded observations and resources through private pipes', { skip: !executable, timeout: 30_000 }, async () => {
+  const testRoot = resolve('.local/browser-tests'); mkdirSync(testRoot, { recursive: true });
+  const profile = mkdtempSync(join(testRoot, 'worker-'));
+  const toWorker = new PassThrough(), toHost = new PassThrough();
+  const worker = await browserWorker(toWorker, toHost, executable!, profile);
+  const requests: string[] = [];
+  const session = new BrowserSession(toHost, toWorker, worker.close, url => new BrowserRequests(url, async address => {
+    requests.push(address);
+    const body = address.endsWith('/next') ? '<title>Next</title>' :
+      `<title>Worker</title><a href="/next">Next</a><script>fetch('/private',{method:'POST'}).catch(()=>{});</script>`;
+    return { url: address, content_type: 'text/html', body_base64: Buffer.from(body).toString('base64'), fetched_at: new Date().toISOString(), untrusted: true };
+  }));
+  try {
+    const first = await session.navigate('https://fixture.invalid/');
+    assert.equal(first.title, 'Worker'); assert.ok(first.blocked.includes('approval_required'));
+    await assert.rejects(async () => session.follow('forged', 0), /stale/);
+    const next = await session.follow(first.revision, first.elements[0]!.ref);
+    assert.equal(next.title, 'Next');
+    assert.deepEqual(requests, ['https://fixture.invalid/', 'https://fixture.invalid/next']);
+    const refreshed = await session.snapshot(); assert.notEqual(refreshed.revision, next.revision);
+  } finally {
+    await session.close();
     assert.ok(resolve(profile).startsWith(testRoot + '\\') || resolve(profile).startsWith(testRoot + '/'));
     await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
