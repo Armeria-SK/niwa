@@ -407,8 +407,11 @@ test('long room history is retained in storage and fitted automatically for know
 test('a single task completes more than twenty-four model steps without administrator continuation', async t => {
   const f = fixture(t); let requests = 0;
   const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '長い作業');
-  const runner = new TurnRunner(f.runtime, async () => model(() => ++requests <= 30
-    ? tool('history_search', { query: `資料${requests}` }) : complete('完了')));
+  const runner = new TurnRunner(f.runtime, async () => model(request => {
+    requests++;
+    if (requests === 4) assert.match(request.system_instructions, /同じ引数のツール操作が3回/);
+    return requests <= 30 ? tool('history_search', { query: '資料' }) : complete('完了');
+  }));
   await runner.run(f.runtime.tasks.claim(f.admin)!);
   assert.equal(requests, 31);
   assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'completed');
@@ -596,15 +599,15 @@ test('an instruction arriving during generation rejects the old response and rea
   assert.equal(f.runtime.updates(f.admin).filter(item => item.task_id === task.id).length, 1);
 });
 
-test('a memory correction while a model is responding discards the old answer before posting', async t => {
+test('repeated memory corrections discard stale answers without a three-retry manual stop', async t => {
   const f = fixture(t);
   const source = f.runtime.post(f.admin, f.room.id, '人工の出所');
   const memory = f.runtime.remember(f.actor, source.id, '訂正前の秘密');
   let calls = 0;
   const runner = new TurnRunner(f.runtime, async () => model(request => {
     calls++;
-    if (calls === 1) {
-      f.runtime.correctMemory(f.admin, f.leader.id, memory.id, 1, '訂正後の情報');
+    if (calls <= 4) {
+      f.runtime.correctMemory(f.admin, f.leader.id, memory.id, calls, `訂正後の情報${calls}`);
       return complete('訂正前の秘密を含む古い応答');
     }
     assert.doesNotMatch(request.system_instructions, /訂正前/);
@@ -613,7 +616,7 @@ test('a memory correction while a model is responding discards the old answer be
   }));
   f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '回答してください');
   await runner.run(f.runtime.tasks.claim(f.admin)!);
-  assert.equal(calls, 2);
+  assert.equal(calls, 5);
   assert.equal(f.runtime.messages(f.admin, f.room.id).some(message => message.body.includes('古い応答')), false);
 });
 
