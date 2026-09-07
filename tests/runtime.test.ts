@@ -140,3 +140,22 @@ test('default population is ten generated bots plus one leader', t => {
   assert.throws(() => f.runtime.createAgent(f.leaderActor, '上限超過'), /limit/);
   assert.equal(f.runtime.agents(f.admin).length, 11);
 });
+
+test('memory correction history exposes only scoped metadata and retains the latest 100 corrections', t => {
+  const f = fixture(t); const room = f.runtime.createRoom(f.admin, '人工個別', [f.child.id]);
+  const source = f.runtime.post(f.admin, room.id, '人工の出所');
+  const memory = f.runtime.remember(f.childActor, source.id, '古い本文');
+  assert.deepEqual(f.runtime.memoryCorrections(f.admin, f.child.id, memory.id), []);
+  for (let revision = 1; revision <= 101; revision++) f.runtime.correctMemory(f.admin, f.child.id, memory.id, revision, '訂正本文' + revision);
+  const result = f.runtime.memoryCorrections(f.admin, f.child.id, memory.id) as { revision: number; actor_id: string; created_at: string }[];
+  assert.equal(result.length, 100); assert.equal(result[0]?.revision, 3); assert.equal(result.at(-1)?.revision, 102);
+  assert.ok(result.every(item => item.actor_id === 'administrator' && Number.isFinite(Date.parse(item.created_at))));
+  assert.doesNotMatch(JSON.stringify(result), /古い本文|訂正本文|人工の出所/);
+  denied(() => f.runtime.memoryCorrections(f.childActor, f.child.id, memory.id));
+  denied(() => f.runtime.memoryCorrections(f.leaderActor, f.child.id, memory.id));
+  assert.throws(() => f.runtime.memoryCorrections(f.admin, f.leader.id, memory.id), /Memory not found/);
+  const reopened = new Runtime(f.path);
+  try { assert.deepEqual(reopened.memoryCorrections(reopened.administrator(), f.child.id, memory.id), result); } finally { reopened.close(); }
+  f.runtime.deleteMemory(f.admin, f.child.id, memory.id, 102);
+  assert.throws(() => f.runtime.memoryCorrections(f.admin, f.child.id, memory.id), /Memory not found/);
+});

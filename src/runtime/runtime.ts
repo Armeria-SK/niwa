@@ -598,6 +598,12 @@ export class Runtime {
     this.#admin(actor);
     return this.#memory(actor, agentId).prepare('SELECT * FROM memory_audit ORDER BY sequence').all();
   }
+  memoryCorrections(actor: Actor, agentId: string, id: string): unknown[] {
+    this.#admin(actor);
+    const db = this.#memory(actor, agentId);
+    check(db.prepare('SELECT 1 FROM memories WHERE id=?').get(text(id, 100)), 'not_found', 'Memory not found');
+    return db.prepare("SELECT sequence,actor_id,revision,created_at FROM memory_audit WHERE memory_id=? AND action='admin_corrected' ORDER BY sequence DESC LIMIT 100").all(id).reverse();
+  }
   deletionRecords(actor: Actor): { agent_id: string; memory_id: string; revision: number }[] {
     this.#admin(actor);
     const records = this.#db.prepare('SELECT * FROM deletion_records').all() as { agent_id: string; memory_id: string; revision: number }[];

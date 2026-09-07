@@ -107,6 +107,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/dormancy$/, schema: object({ dormant: Type.Boolean() }),
       run: (m, b) => { runtime.setDormant(admin, m[1]!, b.dormant as boolean); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories$/, run: (m, _b, url) => runtime.memories(admin, m[1]!, url.searchParams.get('q') ?? '') },
+    { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories\/([0-9a-f-]{36}|[0-9a-f]{64})\/corrections$/, run: m => runtime.memoryCorrections(admin, m[1]!, m[2]!) },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memory-audit$/, run: m => runtime.memoryAudit(admin, m[1]!) },
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories\/([0-9a-f-]{36}|[0-9a-f]{64})$/, schema: object({ revision: Type.Integer({ minimum: 1 }), body: string }),
       run: (m, b) => { runtime.correctMemory(admin, m[1]!, m[2]!, b.revision as number, b.body as string); return { ok: true }; } },
