@@ -45,7 +45,11 @@ export class ConnectionGate {
           const events = await collectModelEvents(adapter.run(request, { ...options, signal }),
             { signal, timeout_ms: options.timeout_ms, max_tool_calls: request.budget.max_tool_calls });
           release(); release = undefined;
-          yield* events;
+          for (const event of events) {
+            yield event.type === 'failed' && event.error.code === 'ABORTED' && timeout.aborted && !options.signal?.aborted
+              ? { ...event, error: { ...event.error, code: 'TIMED_OUT', message: 'The model connection timed out.', retryable: true } }
+              : event;
+          }
         } catch {
           yield { type: 'failed', error: { code: options.signal?.aborted ? 'ABORTED' : timeout.aborted ? 'TIMED_OUT' : 'PROVIDER_ERROR',
             message: 'Model connection could not complete.', retryable: true } };

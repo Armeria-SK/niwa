@@ -76,3 +76,18 @@ test('subscription queue timeout does not submit a request or wedge later work',
     assert.equal(calls, 2);
   } finally { clearTimeout(keepAlive); }
 });
+
+test('an active subscription time limit is classified as timeout rather than user abort', async () => {
+  const store = new MemoryCredentialStore(); await store.write(credential);
+  const connection = new CodexConnection({ credential_store: store, experimental_opt_in: true,
+    fetch: async (_url, options) => new Promise<Response>((_resolve, reject) => {
+      const signal = options?.signal; signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  });
+  const keepAlive = setTimeout(() => {}, 2000);
+  try {
+    const events = await collectModelEvents(connection.create(profile).run(request, { timeout_ms: 20 }));
+    const failed = events.find(event => event.type === 'failed');
+    assert.equal(failed?.error.code, 'TIMED_OUT');
+  } finally { clearTimeout(keepAlive); }
+});
