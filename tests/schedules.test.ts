@@ -62,6 +62,8 @@ test('schedule authorization, failed-run wait, run limit and atomic rollback', t
   }
   r.schedules.dispatch(f.admin, f.input.next_at + 3 * 60_000);
   assert.match(r.schedules.list(f.admin)[0]!.wait_reason!, /3回/);
+  assert.equal(r.updates(f.admin)[0]!.kind, 'question');
+  assert.equal(r.updates(f.admin)[0]!.task_id, r.tasks.list(f.admin).at(-1)!.id);
   r.schedules.setEnabled(f.admin, f.input.id, true);
   r.schedules.dispatch(f.admin, f.input.next_at + 3 * 60_000);
   r.tasks.cancel(f.admin, r.tasks.list(f.admin).at(-1)!.id);
@@ -102,4 +104,27 @@ test('private recipients are checked and archiving defers existing schedules', t
   r.organizeRoom(f.admin, f.room.id, { archived: false });
   r.schedules.dispatch(f.admin, f.input.next_at);
   assert.equal(r.tasks.list(f.admin).length, 1);
+});
+
+test('schedule stop is reported once with its source task before the next occurrence, including after restart', t => {
+  const f = fixture(t); let r = f.runtime; let admin = f.admin;
+  r.schedules.create(admin, { ...f.input, max_runs: 1 });
+  r.schedules.dispatch(admin, f.input.next_at);
+  const task = r.tasks.list(admin)[0]!;
+  r.tasks.cancel(admin, task.id);
+  const db = new DatabaseSync(join(f.root, 'control.db'));
+  try {
+    db.exec("CREATE TRIGGER reject_notice BEFORE INSERT ON updates BEGIN SELECT RAISE(ABORT,'notification failure'); END;");
+    assert.throws(() => r.schedules.dispatch(admin, f.input.next_at + 1), /notification failure/);
+    assert.equal(r.schedules.list(admin)[0]!.enabled, 1);
+    db.exec('DROP TRIGGER reject_notice;');
+  } finally { db.close(); }
+  r.schedules.dispatch(admin, f.input.next_at + 1);
+  const notices = r.updates(admin);
+  assert.equal(notices.length, 1); assert.equal(notices[0]!.task_id, task.id);
+  assert.equal(notices[0]!.kind, 'decision'); assert.match(String(notices[0]!.detail), /上限/);
+  r = f.reopen(); admin = r.administrator();
+  r.schedules.dispatch(admin, f.input.next_at + 2);
+  assert.equal(r.updates(admin).length, 1);
+  assert.equal(r.schedules.list(admin)[0]!.enabled, 0);
 });

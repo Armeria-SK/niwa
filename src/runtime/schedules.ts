@@ -59,8 +59,8 @@ export class Schedules {
     check(Number.isSafeInteger(now) && now >= 0 && now <= 8_000_000_000_000_000, 'invalid', 'Invalid clock');
     transaction(this.db, () => {
       if (this.db.prepare('SELECT paused FROM settings WHERE id=1').get()!.paused === 1) return;
-      for (const row of this.list(actor).filter(item => item.enabled && item.next_at <= now)) {
-        const recent = this.db.prepare(`SELECT t.state FROM schedule_runs r JOIN tasks t ON t.id=r.task_id
+      for (const row of this.list(actor).filter(item => item.enabled)) {
+        const recent = this.db.prepare(`SELECT t.id,t.state FROM schedule_runs r JOIN tasks t ON t.id=r.task_id
           WHERE r.schedule_id=? ORDER BY r.scheduled_at DESC LIMIT 3`).all(row.id);
         if (this.db.prepare(`SELECT 1 FROM schedule_runs r JOIN tasks t ON t.id=r.task_id
           WHERE r.schedule_id=? AND t.state NOT IN ('completed','failed','cancelled') LIMIT 1`).get(row.id)) continue;
@@ -68,8 +68,13 @@ export class Schedules {
         if (row.run_count - row.failure_reset >= 3 && recent.length === 3 && recent.every(task => task.state !== 'completed'))
           reason = '3回続けて完了しなかったため、定期実行を停止しました。';
         if (reason) {
-          this.db.prepare('UPDATE schedules SET enabled=0,wait_reason=? WHERE id=?').run(reason, row.id); continue;
+          this.db.prepare('UPDATE schedules SET enabled=0,wait_reason=? WHERE id=?').run(reason, row.id);
+          this.db.prepare(`INSERT INTO updates(room_id,author_id,kind,title,detail,task_id,created_at)
+            VALUES (?,?,?,?,?,?,?)`).run(row.room_id, row.agent_id, row.run_count >= row.max_runs ? 'decision' : 'question',
+            `定期実行を停止：${row.prompt.slice(0, 180)}`, reason, recent[0]?.id ?? null, Date.now());
+          continue;
         }
+        if (row.next_at > now) continue;
         // Dormancy or revoked room access leaves the occurrence pending without creating a task.
         try { this.recipient(actor, row.agent_id, row.room_id); } catch { continue; }
         const task = this.tasks.create(actor, row.agent_id, row.room_id, row.prompt, Date.now() + row.timeout_ms);
