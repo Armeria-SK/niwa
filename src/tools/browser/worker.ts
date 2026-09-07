@@ -6,6 +6,7 @@ import { BrowserPage } from './page.ts';
 import { CdpPipe } from './cdp.ts';
 import { BrowserWire } from './wire.ts';
 import type { readPublicResource } from '../web/public-page.ts';
+import { formPreparationSchema } from './client.ts';
 
 const navigateSchema = Type.Object({ url: Type.String({ minLength: 1, maxLength: 4096 }) }, { additionalProperties: false });
 const followSchema = Type.Object({ revision: Type.String({ minLength: 1, maxLength: 64 }), ref: Type.Integer({ minimum: 0, maximum: 99 }) }, { additionalProperties: false });
@@ -36,6 +37,7 @@ export async function browserWorker(input: Readable, output: Writable, executabl
       await ready;
       if (method === 'browser.navigate' && Value.Check(navigateSchema, args)) return await page.navigate(args.url, signal);
       if (method === 'browser.follow' && Value.Check(followSchema, args)) return await page.follow(args.revision, args.ref, signal);
+      if (method === 'browser.form' && Value.Check(formPreparationSchema, args)) return await page.prepareForm(args.revision, args.ref, args.fields, signal);
       if (method === 'browser.snapshot' && args && typeof args === 'object' && !Array.isArray(args) && !Object.keys(args).length)
         return await page.snapshot(signal);
       throw new Error('Invalid browser operation');

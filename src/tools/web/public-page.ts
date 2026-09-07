@@ -24,7 +24,7 @@ export function publicIPv4(address: string): boolean {
     (a === 203 && b === 0 && c === 113));
 }
 
-function pageUrl(input: string): URL {
+export function pageUrl(input: string): URL {
   if (input.length > 4096) throw new Error('URL is too long');
   const url = new URL(input);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port ||
@@ -71,20 +71,26 @@ const networkFor = (accept: string, types: RegExp): PageNetwork => ({
 const network = networkFor('text/html,text/plain,application/json', PAGE_TYPES);
 const resourceNetwork = networkFor('*/*', RESOURCE_TYPES);
 
+export async function publicAddress(host: string, signal: AbortSignal, resolveHost: PageNetwork['resolve'] = network.resolve): Promise<string> {
+  signal.throwIfAborted();
+  const addresses = await new Promise<string[]>((resolve, reject) => {
+    const abort = () => reject(new Error('Page request cancelled'));
+    signal.addEventListener('abort', abort, { once: true });
+    resolveHost(host).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+  signal.throwIfAborted();
+  if (!addresses.length || !addresses.every(publicIPv4)) throw new Error('Page host is not a public IPv4 destination');
+  return addresses[0]!;
+}
+
 async function fetchPublic(input: string, types: RegExp, signal: AbortSignal | undefined, transport: PageNetwork) {
   const cancellation = AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]);
   let url = pageUrl(input);
   for (let redirects = 0; redirects <= 5; redirects++) {
     cancellation.throwIfAborted();
     // DNS cannot open a socket; abort the wait promptly even when the OS lookup continues.
-    const addresses = await new Promise<string[]>((resolve, reject) => {
-      const abort = () => reject(new Error('Page request cancelled'));
-      cancellation.addEventListener('abort', abort, { once: true });
-      transport.resolve(url.hostname).then(resolve, reject).finally(() => cancellation.removeEventListener('abort', abort));
-    });
-    cancellation.throwIfAborted();
-    if (!addresses.length || !addresses.every(publicIPv4)) throw new Error('Page host is not a public IPv4 destination');
-    const response = await transport.get(url, addresses[0]!, cancellation);
+    const address = await publicAddress(url.hostname, cancellation, transport.resolve);
+    const response = await transport.get(url, address, cancellation);
     cancellation.throwIfAborted();
     if ([301, 302, 303, 307, 308].includes(response.status) && response.location) {
       if (redirects === 5) throw new Error('Too many page redirects');

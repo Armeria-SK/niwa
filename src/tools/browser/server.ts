@@ -3,7 +3,7 @@ import { Value } from '@sinclair/typebox/value';
 import { browserOperationSchema } from './client.ts';
 import type { BrowserSession } from './session.ts';
 
-type Session = Pick<BrowserSession, 'navigate' | 'snapshot' | 'follow' | 'close'>;
+type Session = Pick<BrowserSession, 'navigate' | 'snapshot' | 'follow' | 'close'> & Partial<Pick<BrowserSession, 'prepareForm'>>;
 /** Bind to the protected executor Unix socket only. Caller identities come from the trusted runtime, not model arguments. */
 export function createBrowserServer(create: () => Session) {
   const sessions = new Map<string, { session: Session; used: number; busy: boolean }>();
@@ -33,6 +33,7 @@ export function createBrowserServer(create: () => Session) {
         try {
           const action = input.action;
           const result = action.kind === 'navigate' ? await entry.session.navigate(action.url, controller.signal) :
+            action.kind === 'form' ? await entry.session.prepareForm?.(action.revision, action.ref, action.fields, controller.signal) :
             action.kind === 'follow' ? await entry.session.follow(action.revision, action.ref, controller.signal) : await entry.session.snapshot(controller.signal);
           if (!response.destroyed) response.end(JSON.stringify(result));
         } catch (error) { sessions.delete(key); await entry.session.close(); throw error; }

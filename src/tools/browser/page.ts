@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { CdpPipe, type CdpEvent } from './cdp.ts';
 import { BrowserRequests, BrowserRequestBlocked } from './requests.ts';
+import { normalizeForm, type PublicForm } from './form.ts';
 
 export interface BrowserSnapshot {
   revision: string; url: string; title: string; text: string;
   elements: { ref: number; role: string; name: string; href?: string }[];
   blocked: string[]; untrusted: true;
+  form?: PublicForm;
 }
 type Broker = (url: string) => Pick<BrowserRequests, 'get'>;
 
@@ -148,5 +150,40 @@ export class BrowserPage {
     if (this.#closed) return;
     this.#closed = true; this.#lifetime.abort(); this.#revision = ''; this.#active = undefined; this.#unsubscribe();
     if (this.#context) await this.cdp.send('Target.disposeBrowserContext', { browserContextId: this.#context }, { timeoutMs: 5_000 }).catch(() => {});
+  }
+  /** Snapshot a native form without invoking submit handlers or allowing network traffic. */
+  async prepareForm(revision: string, ref: number, fields: { ref: number; value: string }[], signal?: AbortSignal): Promise<BrowserSnapshot> {
+    if (this.#busy || this.#closed || revision !== this.#revision || !revision || !Number.isInteger(ref) || ref < 0 || ref >= 100 ||
+      !Array.isArray(fields) || fields.length > 32 || new Set(fields.map(field => field.ref)).size !== fields.length ||
+      fields.some(field => !Number.isInteger(field.ref) || field.ref < 0 || field.ref >= 100 || typeof field.value !== 'string' || field.value.length > 1000)) throw new Error('Invalid form reference');
+    this.#busy = true;
+    const cancellation = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]);
+    try {
+      const value = await this.#evaluate(`(() => {
+        const s = globalThis.niwaObservation, submitter = s?.nodes[${ref}];
+        if (s?.revision !== ${JSON.stringify(revision)} || !submitter?.isConnected || submitter.type !== 'submit' || !submitter.form || submitter.disabled) throw Error('Select a current submit button');
+        const form = submitter.form, changes = ${JSON.stringify(fields)}, saved = [];
+        if (Array.from(form.elements).some(el => el.name && !el.matches(':disabled') && ['file','password'].includes(el.type))) throw Error('Credentials and uploads require a dedicated connector');
+        const method = (submitter.getAttribute('formmethod') || form.method || 'get').toUpperCase();
+        const enctype = submitter.getAttribute('formenctype') || form.enctype;
+        if (!['GET','POST'].includes(method) || enctype !== 'application/x-www-form-urlencoded') throw Error('Unsupported form encoding');
+        const url = new URL(submitter.getAttribute('formaction') || form.getAttribute('action') || location.href, document.baseURI).href;
+        try {
+          for (const change of changes) {
+            const el = s.nodes[change.ref];
+            if (!el?.isConnected || el.form !== form || !el.name || el.matches(':disabled') ||
+                !['INPUT','TEXTAREA','SELECT'].includes(el.tagName) || ['file','password','checkbox','radio','submit','button','reset','image'].includes(el.type) || el.multiple) throw Error('Unsupported field');
+            saved.push([el, el.value]); el.value = change.value;
+            if (el.value !== change.value) throw Error('Invalid field value');
+          }
+          const fields = Array.from(new FormData(form, submitter), ([name,value]) => {
+            if (typeof value !== 'string') throw Error('File fields are unsupported'); return {name,value};
+          });
+          return {url,method,fields};
+        } finally { for (const [el,value] of saved) el.value = value; }
+      })()`, cancellation);
+      const form = normalizeForm(value);
+      return { ...await this.#snapshot(cancellation), form };
+    } finally { this.#busy = false; }
   }
 }

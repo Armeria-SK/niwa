@@ -16,14 +16,19 @@ import type { BrowserExecutor } from '../tools/browser/client.ts';
 import type { XApi } from '../tools/x/api.ts';
 import type { XPostLog } from '../tools/x/post-log.ts';
 import type { PackageExecutor } from '../tools/packages/client.ts';
+import { formPreparationSchema } from '../tools/browser/client.ts';
+import { formSchema, normalizeForm } from '../tools/browser/form.ts';
+import type { FormLog } from '../tools/browser/form-log.ts';
 
 export interface ExternalTools { readPage?: typeof readPublicPage; search?: WebSearch; workspace?: WorkspaceRead; workspaceWrite?: WorkspaceWriter; program?: ProgramExecutor; browser?: BrowserExecutor;
-  packages?: PackageExecutor; x?: { api: Pick<XApi, 'read' | 'mentions'>; posts: Pick<XPostLog, 'execute'> } }
+  forms?: Pick<FormLog, 'execute'>; packages?: PackageExecutor; x?: { api: Pick<XApi, 'read' | 'mentions'>; posts: Pick<XPostLog, 'execute'> } }
 
 const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  browser_form_prepare: { description: '直近画面の送信ボタンrefとテキスト項目ref/valueから通常HTMLフォームの送信内容を準備する。送信はしない。返されたformをbrowser_form_submitへ渡す。ファイル・ログイン情報・独自JavaScript送信は非対応。', schema: formPreparationSchema },
+  browser_form_submit: { description: '準備したHTTPSフォームを送信する。必ず完全な宛先・方式・項目を管理者へ提示して承認待ちになり、同じ操作の承認後だけ送る。Cookie/認証/転送先への追送は行わない。HTTP応答だけで購入等の成功を断定せず内容を確認する。不明結果を別の呼出しで再送しない。', schema: formSchema },
   packages_list: { description: '管理者が導入を許可したパッケージ名と版、導入済みの記録を確認する。必要な依存も許可一覧から選ぶ。', schema: object({}) },
   packages_install: { description: '許可一覧の名前を指定し共有の隔離実行環境へUbuntuパッケージを導入する。成功後のプログラム実行から有効。ホストOSは変更しない。依存不足は管理者へ相談する。結果不明なら再実行せず確認を待つ。', schema: object({ names: Type.Array(Type.String({ pattern: '^[a-z0-9][a-z0-9+.-]{1,127}$' }), { minItems: 1, maxItems: 32, uniqueItems: true }) }) },
   x_post: { description: 'Niwaの共有Xアカウントで公開投稿または返信を行う。共有会話でのみ利用でき、私的情報は含めない。textは最大280文字だが言語やリンク等によるX側の長さ検査にも従う。reply_toは返信先投稿ID、通常投稿はnull。投稿順と重複は一元管理し、結果不明なら再投稿せず確認を待つ。', schema: object({ text: Type.String({ minLength: 1, maxLength: 280 }), reply_to: Type.Union([Type.Null(), Type.String({ pattern: '^[0-9]{1,19}$' })]) }) },
@@ -61,13 +66,13 @@ const definitions = {
   memory_search: { description: '現在の会話へ利用できる自分の記憶だけを検索する。', schema: object({ query: Type.String({ maxLength: 200 }) }) },
 };
 export function turnTools(isLeader: boolean, external: ExternalTools = {}, sharedRoom = false, autonomous = false): ModelToolDefinition[] {
-  return Object.entries(definitions).filter(([name]) => (!name.startsWith('packages_') || (external.packages && sharedRoom)) && (!name.startsWith('x_') || external.x) && (name !== 'x_post' || sharedRoom) && (!name.startsWith('browser_') || external.browser) && (name !== 'program_run' || (external.program && sharedRoom)) && (name !== 'task_rest' || autonomous) && (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
+  return Object.entries(definitions).filter(([name]) => (name !== 'browser_form_submit' || (external.forms && sharedRoom)) && (!name.startsWith('packages_') || (external.packages && sharedRoom)) && (!name.startsWith('x_') || external.x) && (name !== 'x_post' || sharedRoom) && (!name.startsWith('browser_') || external.browser) && (name !== 'program_run' || (external.program && sharedRoom)) && (name !== 'task_rest' || autonomous) && (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
     (!name.startsWith('workspace_') || external.workspace) && (name !== 'workspace_write' || (external.workspaceWrite && sharedRoom))).map(([name, value]) => ({
     name, description: value.description, input_schema: JSON.parse(JSON.stringify(value.schema)) as JsonObject,
   }));
 }
 export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease, call: ModelToolCall, operationId: string): JsonObject {
-  const definition = definitions[call.name as keyof typeof definitions];
+  const definition: { description: string; schema: TSchema } | undefined = definitions[call.name as keyof typeof definitions];
   if (!definition || !Value.Check(definition.schema, call.arguments)) return { error: 'Unknown tool or invalid arguments' };
   const args = call.arguments as Record<string, string>;
   if (call.name.startsWith('procedure_')) {
@@ -135,6 +140,17 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
 
 export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease, call: ModelToolCall, operationId: string,
   signal?: AbortSignal, external: ExternalTools = {}): Promise<JsonObject> {
+  if (call.name === 'browser_form_submit') {
+    if (!external.forms || !external.browser) return { error: 'Form submission is not configured' };
+    if (!runtime.tasks.active(actor, lease) || signal?.aborted) return { error: 'Task is no longer active' };
+    if (runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility !== 'shared') return { error: 'Use a shared conversation for external forms' };
+    let form;
+    try { form = normalizeForm(call.arguments); } catch { return { error: 'Invalid or unsupported form' }; }
+    if (!runtime.authorizeAction(actor, lease, operationId, 'Webフォームの送信', form)) return { waiting_for_approval: true };
+    return runtime.tasks.externalOnce(actor, lease, operationId, { name: call.name, arguments: form }, async (executionId, firstAttempt) => ({ ...await external.forms!.execute({
+      operation_id: executionId, agent_id: lease.task.agent_id, room_id: lease.task.room_id, task_id: lease.task.id, allow_start: firstAttempt, form,
+    }, signal) }));
+  }
   if (call.name === 'packages_install' || call.name === 'packages_list') {
     if (!external.packages || !Value.Check(definitions[call.name].schema, call.arguments)) return { error: 'Invalid or unavailable packages' };
     if (!runtime.tasks.active(actor, lease) || signal?.aborted) return { error: 'Task is no longer active' };
@@ -176,7 +192,7 @@ export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease
     }, signal));
   }
   if (call.name !== 'web_read' && call.name !== 'web_search' && call.name !== 'workspace_list' && call.name !== 'workspace_read' &&
-      call.name !== 'browser_navigate' && call.name !== 'browser_snapshot' && call.name !== 'browser_follow' &&
+      call.name !== 'browser_navigate' && call.name !== 'browser_snapshot' && call.name !== 'browser_follow' && call.name !== 'browser_form_prepare' &&
       call.name !== 'x_read' && call.name !== 'x_mentions') return executeTurnTool(runtime, actor, lease, call, operationId);
   if (!Value.Check(definitions[call.name].schema, call.arguments)) return { error: 'Invalid tool arguments' };
   if (call.name === 'web_search' && !external.search) return { error: 'Web search is not configured' };
@@ -192,6 +208,7 @@ export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease
         call.name === 'x_mentions' ? await external.x!.api.mentions(call.arguments.since_id as string | null ?? undefined, signal) :
         call.name.startsWith('browser_') ? await external.browser!({ agent_id: lease.task.agent_id, room_id: lease.task.room_id, task_id: lease.task.id,
           action: call.name === 'browser_navigate' ? { kind: 'navigate', url: call.arguments.url as string } :
+            call.name === 'browser_form_prepare' ? { kind: 'form', revision: call.arguments.revision as string, ref: call.arguments.ref as number, fields: call.arguments.fields as { ref: number; value: string }[] } :
             call.name === 'browser_follow' ? { kind: 'follow', revision: call.arguments.revision as string, ref: call.arguments.ref as number } : { kind: 'snapshot' } }, signal)
         : call.name.startsWith('workspace_') ? await external.workspace!(call.name === 'workspace_list' ? 'list' : 'read', call.arguments.path as string, signal)
         : call.name === 'web_search' ? await external.search!(call.arguments.query as string, signal)

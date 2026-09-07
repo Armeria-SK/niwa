@@ -23,6 +23,8 @@ import { readXClient } from '../auth/x-client.ts';
 import { XApi } from '../tools/x/api.ts';
 import { XPostLog } from '../tools/x/post-log.ts';
 import { configuredPackageExecutor } from '../tools/packages/client.ts';
+import { FormLog } from '../tools/browser/form-log.ts';
+import { submitPublicForm } from '../tools/browser/form.ts';
 
 /** All paths originate at the product root. Listening is loopback-only for the HTTPS proxy. */
 export async function startService(root: string, resolve?: ResolveAdapter, portOverride?: number) {
@@ -33,10 +35,11 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
   let subscription: Subscription | undefined;
   let xPosts: XPostLog | undefined;
   let xAuth: XOAuth | undefined;
+  let forms: FormLog | undefined;
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {
     const closed = server ? new Promise<void>(done => { server!.close(() => done()); server!.closeAllConnections(); }) : Promise.resolve();
-    xAuth?.close(); await scheduler?.stop(); await xPosts?.close(); await subscription?.close(); await backups?.stop(); await closed;
+    xAuth?.close(); await scheduler?.stop(); await forms?.close(); await xPosts?.close(); await subscription?.close(); await backups?.stop(); await closed;
     runtime?.close(); unlock();
   })();
   try {
@@ -52,8 +55,10 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     xAuth = config.xAccountId && xClient ? new XOAuth(new FileCredentialStore(join(paths.secrets, 'x.json')), xClient, config.xAccountId) : undefined;
     const xApi = xAuth ? new XApi(xAuth) : undefined;
     if (xAuth && xApi) xPosts = new XPostLog(join(paths.runtime, 'x-posts.db'), xAuth.accountId, (post, signal) => xApi.post(post, signal));
+    if (config.browserExecutorUid) forms = new FormLog(join(paths.runtime, 'forms.db'), submitPublicForm);
     scheduler = new Scheduler(runtime, new TurnRunner(runtime, resolve ?? models.resolve, {
       ...(xApi && xPosts ? { x: { api: xApi, posts: xPosts } } : {}),
+      ...(forms ? { forms } : {}),
       ...(config.browserExecutorUid ? { browser: configuredBrowserExecutor(join(paths.runtime, 'sockets', 'browser.sock'), config.browserExecutorUid) } : {}),
       ...(config.programExecutorUid ? { program: configuredProgramExecutor(join(paths.runtime, 'sockets', 'program.sock'), config.programExecutorUid) } : {}),
       ...(config.packagesEnabled && config.programExecutorUid ? { packages: configuredPackageExecutor(join(paths.runtime, 'sockets', 'program.sock'), config.programExecutorUid) } : {}),

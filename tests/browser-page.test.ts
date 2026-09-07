@@ -74,14 +74,26 @@ test('browser session and worker exchange bounded observations and resources thr
   const session = new BrowserSession(toHost, toWorker, worker.close, url => new BrowserRequests(url, async address => {
     requests.push(address);
     const body = address.endsWith('/next') ? '<title>Next</title>' :
-      `<title>Worker</title><a href="/next">Next</a><script>fetch('/private',{method:'POST'}).catch(()=>{});</script>`;
+      `<title>Worker</title><a href="/next">Next</a>
+      <form action="https://forms.example.com/send" method="post" onsubmit="throw Error('must not submit')">
+        <input name="message" placeholder="Message" value="original"><input type="hidden" name="token" value="artificial">
+        <input type="checkbox" name="agree" value="yes" checked><button name="intent" value="send">Send</button>
+      </form><script>fetch('/private',{method:'POST'}).catch(()=>{});</script>`;
     return { url: address, content_type: 'text/html', body_base64: Buffer.from(body).toString('base64'), fetched_at: new Date().toISOString(), untrusted: true };
   }));
   try {
     const first = await session.navigate('https://fixture.invalid/');
     assert.equal(first.title, 'Worker'); assert.ok(first.blocked.includes('approval_required'));
     await assert.rejects(async () => session.follow('forged', 0), /stale/);
-    const next = await session.follow(first.revision, first.elements[0]!.ref);
+    const prepared = await session.prepareForm(first.revision, first.elements.find(el => el.name === 'Send')!.ref,
+      [{ ref: first.elements.find(el => el.name === 'Message')!.ref, value: 'hello & 日本語' }]);
+    assert.deepEqual(prepared.form, { url: 'https://forms.example.com/send', method: 'POST', fields: [
+      { name: 'message', value: 'hello & 日本語' }, { name: 'token', value: 'artificial' }, { name: 'agree', value: 'yes' }, { name: 'intent', value: 'send' },
+    ] });
+    assert.deepEqual(requests, ['https://fixture.invalid/']);
+    const original = await session.prepareForm(prepared.revision, prepared.elements.find(el => el.name === 'Send')!.ref, []);
+    assert.equal(original.form!.fields[0]!.value, 'original');
+    const next = await session.follow(original.revision, original.elements[0]!.ref);
     assert.equal(next.title, 'Next');
     assert.deepEqual(requests, ['https://fixture.invalid/', 'https://fixture.invalid/next']);
     const refreshed = await session.snapshot(); assert.notEqual(refreshed.revision, next.revision);

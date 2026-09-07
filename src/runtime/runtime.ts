@@ -43,6 +43,7 @@ import { summarySchema, type WorkSummary } from '../domain/summary.ts';
 import { executeProcedure } from './procedures.ts';
 import type { JsonObject } from '../contracts/model.ts';
 import { contentManagementSchema } from '../storage/content-management-schema.ts';
+import { actionApprovalSchema } from '../storage/action-approval-schema.ts';
 import { memoryReviewSchema, type MemoryReview } from '../domain/memory-review.ts';
 
 declare const identity: unique symbol;
@@ -63,7 +64,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -475,8 +476,22 @@ export class Runtime {
   requestApproval(actor: Actor, lease: TaskLease, title: string, detail: string): void {
     check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active'); text(title, 200); text(detail, 2000);
     transaction(this.#db, () => {
-      this.#db.prepare("INSERT INTO approval_requests VALUES (?,?,?,?,'pending') ON CONFLICT(task_id) DO UPDATE SET title=excluded.title,detail=excluded.detail,version=excluded.version,status='pending'").run(lease.task.id, title, detail, randomUUID());
+      this.#db.prepare("INSERT INTO approval_requests(task_id,title,detail,version,status) VALUES (?,?,?,?,'pending') ON CONFLICT(task_id) DO UPDATE SET title=excluded.title,detail=excluded.detail,version=excluded.version,status='pending',action_hash=NULL,operation_id=NULL").run(lease.task.id, title, detail, randomUUID());
       this.tasks.wait(actor, lease, 'waiting_user', title);
+    });
+  }
+  /** Caller supplies the complete normalized operation. The display and binding use identical bytes. */
+  authorizeAction(actor: Actor, lease: TaskLease, operationId: string, title: string, action: JsonObject): boolean {
+    check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
+    check(/^[A-Za-z0-9:_-]{1,160}$/.test(operationId), 'invalid', 'Invalid approval operation');
+    const detail = JSON.stringify(action, null, 2); text(detail, 2000);
+    const hash = createHash('sha256').update(detail).digest('hex');
+    return transaction(this.#db, () => {
+      const prior = this.#db.prepare('SELECT action_hash,operation_id,status FROM approval_requests WHERE task_id=?').get(lease.task.id);
+      if (prior?.action_hash === hash && prior.operation_id === operationId && prior.status === 'approved') return true;
+      this.requestApproval(actor, lease, title, detail);
+      this.#db.prepare('UPDATE approval_requests SET action_hash=?,operation_id=? WHERE task_id=?').run(hash, operationId, lease.task.id);
+      return false;
     });
   }
   decideApproval(actor: Actor, id: string, approved: boolean, version: string): void {

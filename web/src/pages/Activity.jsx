@@ -67,7 +67,7 @@ function TaskDetail({ task, member, paused, onClose, onControl, onThread }) {
 }
 
 function ApprovalDialog({ task, member, onClose, onDecide }) {
-  const [busy, setBusy] = useState(false);
-  async function decide(approved) { setBusy(true); try { if (await onDecide(task.id, approved, task.approvalVersion)) onClose(); } finally { setBusy(false); } }
-  return <Modal title="承認する内容を確認" onClose={() => { if (!busy) onClose(); }}><div className="modal-body form-stack"><div className="activity-detail-owner"><Avatar member={member} size={44} /><span>{member?.name}からの確認</span></div><h3>{task.title}</h3><p>{task.detail}</p><p className="muted">承認すると、この内容で仕事を再開します。見送ると仕事を中止します。</p></div><div className="form-actions"><button className="button secondary" disabled={busy} onClick={() => decide(false)}>今回は見送る</button><button className="button primary" disabled={busy} onClick={() => decide(true)}>承認して再開</button></div></Modal>;
+  const [busy, setBusy] = useState(false); const pending = useRef(false);
+  async function decide(approved) { if (pending.current) return; pending.current = true; setBusy(true); try { if (await onDecide(task.id, approved, task.approvalVersion)) onClose(); } finally { pending.current = false; setBusy(false); } }
+  return <Modal title="承認する内容を確認" onClose={() => { if (!pending.current) onClose(); }}><div className="modal-body form-stack"><div className="activity-detail-owner"><Avatar member={member} size={44} /><span>{member?.name}からの確認</span></div><h3>{task.title}</h3><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{task.detail}</p><p className="muted">承認すると、この内容で仕事を再開します。見送ると仕事を中止します。</p></div><div className="form-actions"><button className="button secondary" disabled={busy} onClick={() => decide(false)}>今回は見送る</button><button className="button primary" disabled={busy} onClick={() => decide(true)}>承認して再開</button></div></Modal>;
 }

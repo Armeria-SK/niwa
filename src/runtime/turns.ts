@@ -189,7 +189,7 @@ export class TurnRunner {
         return;
       }
       history.push({ role: 'assistant', content, tool_calls: calls });
-      const mixedWait = calls.length > 1 && calls.some(call => ['task_delegate', 'ask_user', 'approval_request', 'task_rest', 'conversation_send'].includes(call.name));
+      const mixedWait = calls.length > 1 && calls.some(call => ['task_delegate', 'ask_user', 'approval_request', 'browser_form_submit', 'task_rest', 'conversation_send'].includes(call.name));
       for (const [index, call] of calls.entries()) {
         const output = mixedWait ? { error: 'task_delegate, ask_user, task_rest and conversation_send must be called alone.' }
           : await executeAsyncTurnTool(runtime, actor, lease, call, `${step.step}:${index}`, signal, this.#external);
