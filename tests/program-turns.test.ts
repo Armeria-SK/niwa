@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { once } from 'node:events';
+import { DatabaseSync } from 'node:sqlite';
 import { Runtime } from '../src/runtime/runtime.ts';
 import { TurnRunner } from '../src/runtime/turns.ts';
 import { Scheduler } from '../src/runtime/scheduler.ts';
@@ -22,7 +23,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }, run: Con
   const log = new ProgramLog(join(root, 'programs.db'), 'artificial-environment', run); const broker = createProgramServer(log);
   const path = process.platform === 'win32' ? `\\\\.\\pipe\\niwa-program-${randomUUID()}` : join(root, 'socket'); broker.server.listen(path); await once(broker.server, 'listening');
   t.after(async () => { await broker.stop(); log.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); });
-  return { runtime, admin, leader, actor, room, external: { program: programExecutor(path, () => {}) } };
+  return { root, runtime, admin, leader, actor, room, external: { program: programExecutor(path, () => {}) } };
 }
 
 test('program tool is shared-only and its IPC result feeds the model loop without repeating completed work', async t => {
@@ -53,5 +54,18 @@ test('scheduler pause reaches the program service and resume reconciles the pend
   assert.equal(f.runtime.tasks.get(f.admin, task.id).paused, 1);
   f.runtime.tasks.resume(f.admin, task.id); const resumed = f.runtime.tasks.claim(f.admin)!;
   assert.deepEqual(await executeAsyncTurnTool(f.runtime, f.actor, resumed, call, '0:0', undefined, f.external), { error: 'outcome_unknown' });
+  assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'waiting_user'); assert.equal(runs, 1);
+});
+
+test('task resume after executor receipt loss only reconciles and never reruns the program', async t => {
+  let runs = 0; const f = await fixture(t, async () => { runs++; throw Error('write outcome lost'); });
+  const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '記録紛失'); const lease = f.runtime.tasks.claim(f.admin)!;
+  const injected = { ...call, arguments: { ...call.arguments, allow_start: true } };
+  assert.ok((await executeAsyncTurnTool(f.runtime, f.actor, lease, injected, 'bad', undefined, f.external)).error); assert.equal(runs, 0);
+  assert.deepEqual(await executeAsyncTurnTool(f.runtime, f.actor, lease, call, '0:0', undefined, f.external), { error: 'outcome_unknown' });
+  assert.equal(runs, 1);
+  const db = new DatabaseSync(join(f.root, 'programs.db')); db.exec('DELETE FROM programs;'); db.close();
+  f.runtime.tasks.resume(f.admin, task.id);
+  assert.deepEqual(await executeAsyncTurnTool(f.runtime, f.actor, f.runtime.tasks.claim(f.admin)!, call, '0:0', undefined, f.external), { error: 'outcome_unknown' });
   assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'waiting_user'); assert.equal(runs, 1);
 });

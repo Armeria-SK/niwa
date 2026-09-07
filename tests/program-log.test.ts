@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { ProgramLog } from '../src/sandbox/program-log.ts';
 
-const operation = () => ({ operation_id: 'op1', agent_id: 'bot1', room_id: 'room1', task_id: 'task1', command: ['python3', 'script.py'], seconds: 30 });
+const operation = () => ({ operation_id: 'op1', agent_id: 'bot1', room_id: 'room1', task_id: 'task1', command: ['python3', 'script.py'], seconds: 30, allow_start: true });
 const output = { code: 0, stdout: 'saved', stderr: '' };
 function fixture(t: { after: (fn: () => void) => void }) {
   const root = mkdtempSync(join(tmpdir(), 'niwa-program-'));
@@ -67,4 +67,14 @@ test('invalid, pre-cancelled and closed-store operations do not start programs',
   db.exec("CREATE TRIGGER reject_intent BEFORE INSERT ON programs BEGIN SELECT RAISE(ABORT,'disk failure'); END;");
   await assert.rejects(log.execute(operation()), /disk failure/); db.close(); assert.deepEqual(log.pending(), []);
   log.close(); await assert.rejects(log.execute(operation())); assert.equal(runs, 0);
+});
+
+test('reconciliation cannot start a missing operation but can retrieve a saved result', async t => {
+  const f = fixture(t); let runs = 0; const log = f.open(async () => { runs++; return output; });
+  assert.deepEqual(await log.execute({ ...operation(), allow_start: false }), { error: 'outcome_unknown' });
+  assert.deepEqual(log.pending(), []); assert.equal(runs, 0);
+  assert.deepEqual(await log.execute(operation()), output);
+  assert.deepEqual(await log.execute({ ...operation(), allow_start: false }), output); assert.equal(runs, 1);
+  const db = new DatabaseSync(f.file); db.exec('DELETE FROM programs;'); db.close();
+  assert.deepEqual(await log.execute({ ...operation(), allow_start: false }), { error: 'outcome_unknown' }); assert.equal(runs, 1);
 });

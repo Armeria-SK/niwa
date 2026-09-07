@@ -10,7 +10,7 @@ import { ProgramLog } from '../src/sandbox/program-log.ts';
 import { createProgramServer } from '../src/sandbox/server.ts';
 import { configuredProgramExecutor, programExecutor } from '../src/sandbox/client.ts';
 
-const input = { operation_id: 'operation', agent_id: 'bot', room_id: 'room', task_id: 'task', command: ['python3', 'work.py'], seconds: 10 };
+const input = { operation_id: 'operation', agent_id: 'bot', room_id: 'room', task_id: 'task', command: ['python3', 'work.py'], seconds: 10, allow_start: true };
 async function fixture(t: { after: (fn: () => Promise<void>) => void }, run: ConstructorParameters<typeof ProgramLog>[2]) {
   const root = mkdtempSync(join(tmpdir(), 'niwa-program-ipc-'));
   const path = process.platform === 'win32' ? `\\\\.\\pipe\\niwa-program-${randomUUID()}` : join(root, 'socket');

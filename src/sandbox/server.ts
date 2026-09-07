@@ -25,7 +25,7 @@ export function createProgramServer(log: Pick<ProgramLog, 'execute'>) {
         }
         const input: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if (!input || typeof input !== 'object' || Array.isArray(input) ||
-            Object.keys(input).some(key => !['operation_id', 'agent_id', 'room_id', 'task_id', 'command', 'seconds'].includes(key))) {
+            Object.keys(input).some(key => !['operation_id', 'agent_id', 'room_id', 'task_id', 'command', 'seconds', 'allow_start'].includes(key))) {
           response.writeHead(400).end('{"error":"invalid_request"}'); return;
         }
         const result = await log.execute(input as ProgramOperation, controller.signal);

@@ -191,20 +191,20 @@ export class Tasks {
   }
   /** The executor must durably deduplicate executionId. Only hashes and outcomes are stored here. */
   async externalOnce(actor: Actor, lease: TaskLease, operationId: string, input: JsonObject,
-    execute: (executionId: string) => Promise<JsonObject>): Promise<JsonObject> {
+    execute: (executionId: string, firstAttempt: boolean) => Promise<JsonObject>): Promise<JsonObject> {
     const pending = transaction(this.#db, () => {
       this.#owned(actor, lease);
       const inputHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
       const prior = this.#db.prepare('SELECT input_hash,execution_id,output FROM external_operations WHERE task_id=? AND operation_id=?')
         .get(lease.task.id, operationId) as { input_hash: string; execution_id: string; output: string | null } | undefined;
-      if (prior) { check(prior.input_hash === inputHash, 'conflict', 'External operation input changed'); return prior; }
+      if (prior) { check(prior.input_hash === inputHash, 'conflict', 'External operation input changed'); return { ...prior, firstAttempt: false }; }
       const record = { input_hash: inputHash, execution_id: randomUUID(), output: null };
       this.#db.prepare('INSERT INTO external_operations VALUES (?,?,?,?,NULL)').run(lease.task.id, operationId, inputHash, record.execution_id);
-      return record;
+      return { ...record, firstAttempt: true };
     });
     if (pending.output !== null) return JSON.parse(pending.output) as JsonObject;
     let output: JsonObject;
-    try { output = await execute(pending.execution_id); }
+    try { output = await execute(pending.execution_id, pending.firstAttempt); }
     catch { output = { error: 'outcome_unknown' }; }
     if (output.error === 'outcome_unknown') {
       if (this.active(actor, lease)) this.wait(actor, lease, 'waiting_user', '外部処理の実行結果を確認できません。再開時に実行サービスの記録を照合します。');

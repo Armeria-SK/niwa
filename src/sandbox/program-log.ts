@@ -6,7 +6,7 @@ import { assertDirectoryPath } from '../config/paths.ts';
 import { openDatabase } from '../storage/database.ts';
 import type { ProgramOutput, ProgramRequest } from './program.ts';
 
-export interface ProgramOperation extends ProgramRequest { operation_id: string; agent_id: string; room_id: string; task_id: string }
+export interface ProgramOperation extends ProgramRequest { operation_id: string; agent_id: string; room_id: string; task_id: string; allow_start: boolean }
 export type ProgramResult = ProgramOutput | { error: 'outcome_unknown' };
 type Runner = (request: ProgramRequest, signal?: AbortSignal, name?: string) => Promise<ProgramOutput>;
 interface Receipt { input_hash: string; container: string; output: string | null }
@@ -29,7 +29,7 @@ export class ProgramLog {
       .map(row => ({ operation_id: row.operation_id as string, container: row.container as string }));
   }
   async execute(input: ProgramOperation, signal?: AbortSignal): Promise<ProgramResult> {
-    if (![input.operation_id, input.agent_id, input.room_id, input.task_id].every(value => typeof value === 'string' && identifier.test(value)) ||
+    if (typeof input.allow_start !== 'boolean' || ![input.operation_id, input.agent_id, input.room_id, input.task_id].every(value => typeof value === 'string' && identifier.test(value)) ||
         !Number.isInteger(input.seconds) || input.seconds < 1 || input.seconds > 300 || !Array.isArray(input.command) ||
         !input.command.length || input.command.length > 128 || input.command.some(value => typeof value !== 'string' || value.includes('\0')) ||
         !input.command[0] || Buffer.byteLength(JSON.stringify(input.command)) > 65536) throw new Error('Invalid program operation');
@@ -39,9 +39,10 @@ export class ProgramLog {
     const inputHash = createHash('sha256').update(JSON.stringify([this.environmentKey, input.agent_id, input.room_id, input.task_id, request])).digest('hex');
     signal?.throwIfAborted();
     const container = `niwa-program-${randomUUID()}`;
-    const inserted = this.#db.prepare('INSERT INTO programs VALUES (?,?,?,NULL,?) ON CONFLICT(operation_id) DO NOTHING').run(id, inputHash, container, Date.now());
+    const inserted = input.allow_start ? this.#db.prepare('INSERT INTO programs VALUES (?,?,?,NULL,?) ON CONFLICT(operation_id) DO NOTHING').run(id, inputHash, container, Date.now()) : { changes: 0 };
     if (!inserted.changes) {
-      const prior = this.#db.prepare('SELECT input_hash,container,output FROM programs WHERE operation_id=?').get(id) as unknown as Receipt;
+      const prior = this.#db.prepare('SELECT input_hash,container,output FROM programs WHERE operation_id=?').get(id) as unknown as Receipt | undefined;
+      if (!prior) return { error: 'outcome_unknown' };
       if (prior.input_hash !== inputHash) throw new Error('Program operation conflicts with saved request');
       return prior.output === null ? { error: 'outcome_unknown' } : JSON.parse(prior.output) as ProgramOutput;
     }

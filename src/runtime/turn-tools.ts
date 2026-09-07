@@ -121,9 +121,9 @@ export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease
     if (!runtime.tasks.active(actor, lease) || signal?.aborted) return { error: 'Task is no longer active' };
     if (runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility !== 'shared') return { error: 'Use a shared conversation for shared programs' };
     const cancellation = AbortSignal.any([AbortSignal.timeout(Math.max(1, Math.min(2_147_483_647, lease.task.deadline_at - Date.now()))), ...(signal ? [signal] : [])]);
-    return runtime.tasks.externalOnce(actor, lease, operationId, { name: call.name, arguments: call.arguments }, async executionId => {
+    return runtime.tasks.externalOnce(actor, lease, operationId, { name: call.name, arguments: call.arguments }, async (executionId, firstAttempt) => {
       const result = await external.program!({ operation_id: executionId, agent_id: lease.task.agent_id, room_id: lease.task.room_id, task_id: lease.task.id,
-        command: call.arguments.command as string[], seconds: call.arguments.seconds as number }, cancellation);
+        command: call.arguments.command as string[], seconds: call.arguments.seconds as number, allow_start: firstAttempt }, cancellation);
       return 'error' in result ? result : { ...result, untrusted: true };
     });
   }
