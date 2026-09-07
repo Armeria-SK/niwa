@@ -104,10 +104,12 @@ function Message({ message, isRoot = false, title, memberMap, onMember, onReply,
     {member ? <button className="avatar-button" aria-label={`${member.name}のプロフィール`} onClick={() => onMember(member.id)}><Avatar member={member} size={60} /></button> : <Avatar size={60} />}
     <div className="message-content"><div className="message-meta"><strong>{member?.name || 'あなた'}</strong><time>{message.time}</time><IconButton label={`${member?.name || 'あなた'}のメッセージに返信`} className="message-reply" onClick={() => onReply(message)}><ReplyIcon size={18} /></IconButton></div>
       {isRoot ? <h1>{title}</h1> : null}
+      {(message.text || message.replyTo || message.artifact || message.attachments?.length) ? <div className="message-bubble">
       {message.replyTo ? <blockquote><span>{memberMap[message.replyTo.author]?.name || 'あなた'}</span>{message.replyTo.text}</blockquote> : null}
       {message.text ? <p><MentionText text={message.text} members={memberMap} /></p> : null}
       {message.artifact ? <button className="file-link" onClick={onArtifact}><FileIcon size={19} />雨音の調査メモ.md</button> : null}
       {message.attachments?.map((file, index) => <span className="file-link local-attachment" key={`${file.name}-${index}`}><FileIcon size={18} />{file.name}<small>{Math.max(1, Math.round(file.size / 1024))} KB · 添付の表示例</small></span>)}
+      </div> : null}
     </div>
   </article>;
 }

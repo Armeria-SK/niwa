@@ -1,4 +1,5 @@
 import { DeleteMember } from '../DeleteMember.jsx';
+import { MemberScroll } from '../MemberScroll.jsx';
 import { useState } from 'react';
 import { api } from '../api.js';
 import { SHAPES } from '../data.js';
@@ -15,7 +16,7 @@ export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, o
   const member = members.find(item => item.id === selected) || members[0];
   return <main className="work-area members-page" id="main-content" tabIndex={-1}>
     <div className="page-heading"><div><span className="eyebrow">それぞれの個性を、大切に。</span><h1>メンバー</h1><p>話し方、記憶、見た目。ひとりずつ、少しずつ。</p></div><div className="member-heading-actions"><span className="quiet-count">{members.length}人の仲間</span><button className="button primary" onClick={() => setAdding(true)}><PlusIcon size={17} />メンバー追加</button></div></div>
-    <div className="members-layout"><div className="member-list" aria-label="メンバー一覧">{members.map(item => <button key={item.id} className={`member-list-row ${item.id === member.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)} aria-pressed={item.id === member.id}><Avatar member={item} size={64} /><span><strong>{item.name}{item.authority === 'leader' ? <span className="role-label">リーダー</span> : null}</strong><small>{item.role}</small><StatusLabel member={item} paused={paused} showDescription={false} /></span><ChevronRightIcon size={17} /></button>)}</div>
+    <div className="members-layout"><MemberScroll>{members.map(item => <button key={item.id} className={`member-list-row ${item.id === member.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)} aria-pressed={item.id === member.id}><Avatar member={item} size={64} /><span><strong>{item.name}{item.authority === 'leader' ? <span className="role-label">リーダー</span> : null}</strong><small>{item.role}</small><StatusLabel member={item} paused={paused} showDescription={false} /></span><ChevronRightIcon size={17} /></button>)}</MemberScroll>
       <section className="member-detail" aria-label={`${member.name}の詳細`}><div className="member-detail-top"><Avatar member={member} size={76} /><div><h2>{member.name}</h2><span className="muted">{member.role}</span></div><button className="button secondary" onClick={() => onDM(member.id)}><ChatIcon size={18} />個別に話す</button></div>
         <Segmented label="メンバーの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }, { value: 'appearance', label: '見た目' }]} value={tab} onChange={setTab} />
         <div className="member-detail-scroll" key={`${member.id}-${tab}`}>

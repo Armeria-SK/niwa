@@ -760,3 +760,41 @@
 
 .sidebar { min-height: 0; }
 @media (min-width: 701px) { .app-shell { grid-template-rows: minmax(0, 1fr); } }
+
+/* Conversation bubbles: keep names outside and group message contents. */
+.message-bubble {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 7px;
+  padding: 12px 16px;
+  border-radius: 20px 20px 20px 6px;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.message-content .message-bubble > p { margin: 0; }
+.message-bubble > * + * { margin-top: 10px; }
+.message-content .message-bubble > blockquote { margin: 0 0 10px; color: var(--muted); border-color: var(--border); }
+.message-bubble .file-link { max-width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.message > .avatar-button, .message > .human-avatar { align-self: flex-end; margin-bottom: 4px; }
+.replies .message::after { display: none; }
+@media (max-width: 700px) {
+  .message-bubble { padding: 10px 13px; border-radius: 18px 18px 18px 5px; }
+}
+
+
+/* Arrow controls retain wheel, touch and keyboard scrolling. */
+.member-list-shell { min-height: 0; position: relative; }
+.member-list-shell .member-list { height: 100%; scrollbar-width: none; padding-right: 20px; }
+.member-list-shell .member-list::-webkit-scrollbar { display: none; }
+.member-scroll-controls { position: absolute; inset: 0 0 0 auto; width: 20px; pointer-events: none; }
+.member-scroll-controls button { position: absolute; right: 0; width: 20px; height: 26px; display: grid; place-items: center; padding: 2px; border: 0; border-radius: 6px; color: var(--muted); background: var(--canvas); pointer-events: auto; }
+.member-scroll-controls button:hover:not(:disabled) { background: var(--surface); color: var(--text); }
+.member-scroll-controls button:disabled { opacity: 0.3; cursor: default; }
+.member-scroll-controls svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.member-scroll-up { top: 0; }
+.member-scroll-down { bottom: 0; }
+@media (max-width: 1050px) {
+  .member-list-shell { display: contents; }
+  .member-list-shell .member-list { height: auto; padding-right: 0; }
+  .member-scroll-controls { display: none; }
+}
