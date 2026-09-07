@@ -117,6 +117,30 @@ npm run build
 
 エラーなく完了したら、次へ進んでください。
 
+### Botのプログラム実行を準備する場合
+
+Botが生成したプログラムを実行する機能には、Podmanと専用のLinuxユーザー `niwa-exec` が必要です。`niwa` は本体・会話・記憶・認証情報を管理し、`niwa-exec` は共有作業場と隔離実行を担当します。生成プログラムから本体のデータへアクセスさせないため、すでに `niwa` があっても別に作成します。
+
+この準備は、**手順5の初回設定より前**に行います。会話だけを試す場合は省略できます。すでに初回設定済みの場合は、[Ubuntu実行サービスの準備](deploy/ubuntu/README.md)を確認してください。
+
+まず、変更を行わない事前検査を実行します。
+
+```bash
+sh /home/niwa/niwa/deploy/ubuntu/prepare-executor.sh --check
+```
+
+検査が成功したら、sudoを使えるユーザーのUbuntu端末で次を実行します。Podmanなどの必要パッケージ、`niwa-exec`、連携用グループ `niwa-ipc`、ディレクトリの所有者・権限を準備します。
+
+```bash
+sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor.sh --apply
+```
+
+sudoのパスワード入力が必要です。自動実行が `interactive authentication is required` で止まった場合も、自分の端末で上のコマンドを実行してください。パスワードをチャットへ送る必要はありません。
+
+既存のruntime/workspaceや同名の専用ユーザー・グループがある場合は停止します。途中で失敗した場合も、既存ファイルを削除してやり直さず、状態を確認してください。
+
+ここではサービスの登録・起動や実行イメージの取得は行いません。プログラム実行の有効化には、[追加の準備と隔離検証](deploy/ubuntu/README.md)および[サービス設定](deploy/ubuntu/SERVICES.md)が必要です。
+
 ## 5. 初回の設定を作る
 
 以下は**最初の1回だけ**実行します。
