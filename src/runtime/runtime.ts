@@ -36,6 +36,7 @@ import { deletionSchema } from '../storage/deletion-schema.ts';
 import { assertDirectoryPath } from '../config/paths.ts';
 import { profileSchema, creationProfileSchema } from '../domain/profile.ts';
 import { Value } from '@sinclair/typebox/value';
+import { conversationReplySchema } from '../storage/conversation-reply-schema.ts';
 import type { Task, TaskLease } from '../domain/task.ts';
 import { summarySchema, type WorkSummary } from '../domain/summary.ts';
 import { executeProcedure } from './procedures.ts';
@@ -59,7 +60,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema]);
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
@@ -409,6 +410,7 @@ export class Runtime {
     const next = { ...this.roomPreferences(actor, roomId), ...patch };
     this.#db.prepare('INSERT INTO room_preferences VALUES (?,?,?) ON CONFLICT(room_id) DO UPDATE SET pinned=excluded.pinned,archived=excluded.archived')
       .run(roomId, Number(next.pinned), Number(next.archived));
+    if (next.archived) this.tasks.suspendAutonomous(actor);
   }
   #room(actor: Actor, id: string): Room {
     const principal = this.#principal(actor);
@@ -430,6 +432,25 @@ export class Runtime {
   messages(actor: Actor, roomId: string): Message[] {
     this.#room(actor, roomId);
     return this.#db.prepare('SELECT * FROM messages WHERE room_id = ? ORDER BY rowid').all(roomId) as unknown as Message[];
+  }
+
+  /** A directed conversation continues at its recipient without a reporting turn from the sender. */
+  respond(actor: Actor, lease: TaskLease, content: string): void {
+    transaction(this.#db, () => {
+    check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
+    const body = content.trim();
+    if (body) this.post(actor, lease.task.room_id, body);
+    const recipients = this.agents(actor).filter(agent => body.startsWith(`@${agent.name}`) &&
+      /^(?:\s|[、,:：]|$)/u.test(body.slice(agent.name.length + 1)));
+    if (recipients.length === 1 && recipients[0]!.id !== lease.task.agent_id) {
+      const recipient = recipients[0]!;
+      if (lease.task.parent_id && recipient.id === lease.task.requester_id && this.tasks.get(actor, lease.task.parent_id).state === 'waiting_child') {
+        this.tasks.finish(actor, lease, body); return;
+      }
+      this.tasks.address(actor, lease, recipient.id, body);
+    }
+    this.tasks.finish(actor, lease, body || '完了');
+    });
   }
 
   /** A browser retry must not post twice or start two jobs. Both records commit together. */

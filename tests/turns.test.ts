@@ -27,6 +27,61 @@ function model(reply: (request: ModelRequest) => ModelEvent[] | Promise<ModelEve
     async *run(request) { yield* await reply(request); } };
 }
 
+test('addressed bot replies continue at the recipient without leader echo and respect pause and archive', async t => {
+  const f = fixture(t); const child = f.runtime.createAgent(f.actor, '仲間');
+  let visits: string[] = [];
+  const runner = new TurnRunner(f.runtime, async agent => model(request => {
+    assert.match(request.system_instructions, /@相手の名前/); assert.match(request.system_instructions, /ラベルや署名を付けず/);
+    visits.push(agent.id);
+    return agent.id === f.leader.id ? complete('@仲間 この話題はどう思いますか？') : complete('面白いと思います。');
+  }));
+  const root = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '会話してください');
+  const original = f.runtime.tasks.claim(f.admin)!; await runner.run(original); await runner.run(original);
+  assert.equal(f.runtime.tasks.list(f.admin).length, 2);
+  f.runtime.updateSettings(f.admin, { autonomous: false }); assert.equal(f.runtime.tasks.claim(f.admin), undefined);
+  f.runtime.updateSettings(f.admin, { autonomous: true });
+  f.runtime.organizeRoom(f.admin, f.room.id, { archived: true }); assert.equal(f.runtime.tasks.claim(f.admin), undefined);
+  f.runtime.organizeRoom(f.admin, f.room.id, { archived: false });
+  await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.deepEqual(visits, [f.leader.id, child.id]); assert.equal(f.runtime.tasks.claim(f.admin), undefined);
+  assert.equal(f.runtime.tasks.get(f.admin, root.id).state, 'completed');
+  assert.deepEqual(f.runtime.messages(f.admin, f.room.id).map(message => message.author_id), visits);
+});
+
+test('directed conversation respects private membership and a bounded continuation', async t => {
+  const f = fixture(t); const child = f.runtime.createAgent(f.actor, '仲間');
+  const privateRoom = f.runtime.createRoom(f.admin, '個別', [f.leader.id]);
+  const privateTask = f.runtime.tasks.create(f.admin, f.leader.id, privateRoom.id, '非共有');
+  const privateLease = f.runtime.tasks.claim(f.admin)!; f.runtime.respond(f.actor, privateLease, '@仲間 個別の内容');
+  assert.equal(f.runtime.tasks.get(f.admin, privateTask.id).state, 'completed'); assert.equal(f.runtime.tasks.list(f.admin).length, 1);
+  const runner = new TurnRunner(f.runtime, async agent => model(() => complete(`@${agent.id === child.id ? f.leader.name : child.name} 続けますか？`)));
+  f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '会話');
+  for (let index = 0; index < 16; index++) await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.tasks.claim(f.admin), undefined);
+  const last = f.runtime.tasks.list(f.admin).at(-1)!; assert.equal(last.state, 'waiting_user'); assert.match(last.wait_reason!, /16回/);
+  const messages = f.runtime.messages(f.admin, f.room.id).length;
+  f.runtime.tasks.resume(f.admin, last.id); await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).length, messages + 1);
+  assert.ok(f.runtime.tasks.claim(f.admin));
+});
+
+test('queued addressed conversations survive restart and can rest or retry without resuming a finished sender', async t => {
+  const f = fixture(t); const child = f.runtime.createAgent(f.actor, '仲間');
+  f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '会話');
+  await new TurnRunner(f.runtime, async () => model(() => complete('@仲間 続けたい話題はありますか？'))).run(f.runtime.tasks.claim(f.admin)!);
+  f.runtime.close(); const runtime = new Runtime(f.root); const admin = runtime.administrator();
+  try {
+    const task = runtime.tasks.list(admin).at(-1)!; runtime.tasks.cancel(admin, task.id); runtime.tasks.retry(admin, task.id);
+    const runner = new TurnRunner(runtime, async agent => model(request => {
+      assert.equal(agent.id, child.id); assert.match(request.system_instructions, /別のBotからあなたへの会話/);
+      return tool('task_rest', {});
+    }));
+    await runner.run(runtime.tasks.claim(admin)!);
+    assert.equal(runtime.tasks.get(admin, task.id).state, 'completed'); assert.equal(runtime.tasks.claim(admin), undefined);
+    assert.equal(runtime.messages(admin, f.room.id).length, 1);
+  } finally { runtime.close(); }
+});
+
 test('common rules reject stale edits, persist, and discard an old rule response before publishing', async t => {
   const f = fixture(t); const initial = f.runtime.commonRules(f.admin);
   assert.throws(() => f.runtime.updateCommonRules(f.actor, initial.revision, 'モデルからの変更'), /Administrator/);
