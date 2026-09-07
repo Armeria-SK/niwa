@@ -157,7 +157,7 @@ test('model reservations share one persistent schedule budget across delegation 
 test('existing schedules migrate with a finite budget and retain creation replay compatibility', t => {
   const f = fixture(t); f.runtime.schedules.create(f.admin, f.input);
   const db = new DatabaseSync(join(f.root, 'control.db'));
-  db.exec('ALTER TABLE schedules DROP COLUMN max_model_calls; ALTER TABLE schedules DROP COLUMN model_calls; ALTER TABLE schedules DROP COLUMN trigger_kind; ALTER TABLE schedules DROP COLUMN source_revision; ALTER TABLE schedules DROP COLUMN deleted; ALTER TABLE schedules DROP COLUMN autonomous; PRAGMA user_version=14;');
+  db.exec('DROP TABLE provider_limits; ALTER TABLE schedules DROP COLUMN max_model_calls; ALTER TABLE schedules DROP COLUMN model_calls; ALTER TABLE schedules DROP COLUMN trigger_kind; ALTER TABLE schedules DROP COLUMN source_revision; ALTER TABLE schedules DROP COLUMN deleted; ALTER TABLE schedules DROP COLUMN autonomous; PRAGMA user_version=14;');
   db.close();
   const r = f.reopen(); const admin = r.administrator();
   const schedule = r.schedules.create(admin, f.input);

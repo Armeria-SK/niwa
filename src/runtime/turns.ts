@@ -64,6 +64,12 @@ export class TurnRunner {
         continue;
       }
       if (!step) {
+        if (agent.provider === 'openai_subscription' && adapter.adapter_id === 'ollama') {
+          try { adapter = await this.#resolve(agent, lease.task.id, signal); }
+          catch { if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_provider', '切替先のモデル接続を確認してください。'); return; }
+          if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
+          if (!runtime.isContextCurrent(actor, context.revision)) continue;
+        }
         if (saved.length >= 24 || discarded >= 3) {
           runtime.tasks.wait(actor, lease, 'waiting_user', 'この仕事の実行区切りに達しました。続行する場合は、新しい依頼として必要な範囲を指定してください。');
           return;
@@ -109,6 +115,12 @@ export class TurnRunner {
         if (!runtime.isContextCurrent(actor, context.revision)) { discarded++; continue; }
         const failure = events.find(event => event.type === 'failed');
         if (failure) {
+          if (failure.error.code === 'QUOTA_EXCEEDED' && adapter.adapter_id === 'openai-subscription') {
+            try {
+              const fallback = await this.#resolve(agent, lease.task.id, signal);
+              if (fallback.adapter_id === 'ollama') { adapter = fallback; continue; }
+            } catch { /* Leave a visible provider wait when the configured fallback is unavailable. */ }
+          }
           runtime.tasks.wait(actor, lease, 'waiting_provider', `モデル応答を完了できませんでした (${failure.error.code})。`);
           return;
         }

@@ -14,6 +14,68 @@ import { Subscription } from '../src/auth/subscription.ts';
 import { MemoryCredentialStore } from '../src/auth/credential-store.ts';
 import { credential, response } from './fixtures/model.ts';
 import { TurnRunner } from '../src/runtime/turns.ts';
+import { DatabaseSync } from 'node:sqlite';
+
+test('quota switches to the configured local model and a later successful probe restores the configured subscription', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-quota-route-')); let runtime = new Runtime(root);
+  const store = new MemoryCredentialStore(); await store.write(credential);
+  let primaryCalls = 0, localCalls = 0, limited = true;
+  const transport: typeof fetch = async url => {
+    const path = String(url);
+    if (path.includes('/models')) return Response.json({ models: [{ slug: 'artificial-model', display_name: 'Artificial', supported_reasoning_levels: [{ effort: 'low' }], visibility: 'list' }] });
+    if (path.endsWith('/api/show')) return Response.json({ capabilities: ['completion', 'tools'] });
+    if (path.endsWith('/api/chat')) { localCalls++; return Response.json({ done: true, message: { role: 'assistant', content: '指定ローカルで継続' } }); }
+    primaryCalls++;
+    return limited ? Response.json({ error: { type: 'usage_limit_reached', resets_at: Math.floor(Date.now() / 1000) + 3600 } }, { status: 429 }) : response('サブスクへ復帰');
+  };
+  const subscription = new Subscription(store, () => {}, { fetch: transport });
+  try {
+    let admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const room = runtime.createRoom(admin, '切替確認');
+    runtime.configureOllama(admin, 'http://127.0.0.1:11434'); runtime.configureFallback(admin, 'http://127.0.0.1:11434', 'artificial-local');
+    runtime.setAgentModel(admin, leader.id, 'openai_subscription', 'artificial-model', 'low');
+    let gateway = new ModelGateway(runtime, transport, subscription);
+    runtime.tasks.create(admin, leader.id, room.id, '回答してください');
+    await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
+    assert.equal(runtime.tasks.list(admin)[0]!.result, '指定ローカルで継続');
+    assert.equal(primaryCalls, 1); assert.equal(localCalls, 1);
+    runtime.close(); runtime = new Runtime(root); admin = runtime.administrator(); gateway = new ModelGateway(runtime, transport, subscription);
+    runtime.tasks.create(admin, leader.id, room.id, '再起動後の続き');
+    await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
+    assert.equal(primaryCalls, 1); assert.equal(localCalls, 2);
+    const db = new DatabaseSync(join(root, 'control.db')); db.exec('UPDATE provider_limits SET next_probe_at=0;'); db.close();
+    limited = false;
+    runtime.tasks.create(admin, leader.id, room.id, '回復後の仕事');
+    await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
+    assert.equal(primaryCalls, 2); assert.equal(localCalls, 2);
+    assert.equal(runtime.tasks.list(admin).at(-1)!.result, 'サブスクへ復帰');
+    assert.equal(runtime.agents(admin)[0]!.model, 'artificial-model');
+  } finally { await subscription.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('ordinary 429 does not select fallback and quota without a selected fallback waits', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-quota-wait-')); const runtime = new Runtime(root);
+  const store = new MemoryCredentialStore(); await store.write(credential);
+  let quota = false, localCalls = 0;
+  const transport: typeof fetch = async url => {
+    if (String(url).includes('/models')) return Response.json({ models: [{ slug: 'artificial-model', display_name: 'Artificial', supported_reasoning_levels: [{ effort: 'low' }], visibility: 'list' }] });
+    if (String(url).includes('127.0.0.1')) { localCalls++; throw new Error('Local transport must not be called'); }
+    return Response.json({ error: { type: quota ? 'usage_limit_reached' : 'rate_limit_exceeded' } }, { status: 429 });
+  };
+  const subscription = new Subscription(store, () => {}, { fetch: transport });
+  try {
+    const admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const room = runtime.createRoom(admin, '待機確認');
+    runtime.setAgentModel(admin, leader.id, 'openai_subscription', 'artificial-model', 'low');
+    runtime.configureOllama(admin, 'http://127.0.0.1:11434'); runtime.configureFallback(admin, 'http://127.0.0.1:11434', 'artificial-local');
+    const gateway = new ModelGateway(runtime, transport, subscription);
+    runtime.tasks.create(admin, leader.id, room.id, '通信制限');
+    await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
+    assert.match(runtime.tasks.list(admin)[0]!.wait_reason!, /RATE_LIMITED/); assert.equal(localCalls, 0);
+    quota = true; runtime.configureFallback(admin, 'http://127.0.0.1:11434', null);
+    runtime.tasks.create(admin, leader.id, room.id, '上限到達');
+    await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
+    assert.match(runtime.tasks.list(admin).at(-1)!.wait_reason!, /QUOTA_EXCEEDED/); assert.equal(localCalls, 0);
+  } finally { await subscription.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
 
 test('fallback selection persists independently and rejects remote, incapable and stale models', async () => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-fallback-')); let runtime = new Runtime(root);

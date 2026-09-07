@@ -14,6 +14,8 @@ import { scheduleBudgetSchema } from '../storage/schedule-budget-schema.ts';
 import { scheduleTriggerSchema } from '../storage/schedule-trigger-schema.ts';
 import { scheduleDeletionSchema } from '../storage/schedule-deletion-schema.ts';
 import { autonomySchema } from '../storage/autonomy-schema.ts';
+import { providerLimitSchema } from '../storage/provider-limit-schema.ts';
+import { ProviderLimits } from './provider-limits.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
 import { fallbackSchema } from '../storage/fallback-schema.ts';
@@ -42,6 +44,7 @@ type Principal = { kind: 'admin'; id: 'administrator' } | { kind: 'agent'; id: s
 export class Runtime {
   readonly tasks: Tasks;
   readonly schedules: Schedules;
+  readonly providerLimits: ProviderLimits;
   #db: DatabaseSync;
   #root: string;
   #identities = new WeakMap<Actor, Principal>();
@@ -50,7 +53,8 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema]);
+    this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
       room: (actor, id) => this.#room(actor, id),

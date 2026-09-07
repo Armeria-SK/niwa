@@ -4,11 +4,15 @@ import type { Runtime } from '../runtime/runtime.ts';
 import type { ResolveAdapter } from '../runtime/turns.ts';
 import { inspectOllamaModel, listOllamaModels, OllamaAdapter } from './ollama/adapter.ts';
 import type { Subscription } from '../auth/subscription.ts';
+import { createHash } from 'node:crypto';
+import { ConnectionGate } from './shared/serial.ts';
+import type { ModelAdapter } from './shared/adapter.ts';
 
 /** Host-owned selection and discovery. URLs and model identity never come from model tool calls. */
 export class ModelGateway {
   #runtime: Runtime;
   #fetch: typeof fetch;
+  #gate = new ConnectionGate();
   readonly subscription: Subscription | undefined;
   constructor(runtime: Runtime, fetchImpl = fetch, subscription?: Subscription) { this.#runtime = runtime; this.#fetch = fetchImpl; this.subscription = subscription; }
   #url(): string {
@@ -47,8 +51,38 @@ export class ModelGateway {
   resolve: ResolveAdapter = async (agent, _taskId, signal) => {
     signal?.throwIfAborted();
     if (agent.provider === 'openai_subscription' && this.subscription) {
+      const subscription = this.subscription; const generation = subscription.revision;
+      const credential = await subscription.account.read();
+      check(credential, 'conflict', 'Subscription login is required');
+      check(credential.account_id, 'conflict', 'Subscription account identity is required');
+      const key = createHash('sha256').update(credential.account_id).digest('hex');
+      const runtime = this.#runtime; const admin = runtime.administrator();
+      if (runtime.providerLimits.blocked(admin, key)) {
+        const fallback = await this.#fallback(signal);
+        check(subscription.revision === generation, 'conflict', 'Subscription account changed'); return fallback;
+      }
       const profile = await this.subscription.profile(agent.model, agent.reasoning); signal?.throwIfAborted();
-      return this.subscription.connection.create(profile);
+      check(subscription.revision === generation, 'conflict', 'Subscription account changed');
+      const adapter = subscription.connection.create(profile);
+      return this.#gate.wrap({ adapter_id: adapter.adapter_id, capabilities: adapter.capabilities,
+        ...(adapter.context_window === undefined ? {} : { context_window: adapter.context_window }),
+        async *run(request, options) {
+          check(subscription.revision === generation, 'conflict', 'Subscription account changed');
+          const revision = runtime.providerLimits.begin(admin, key);
+          if (revision === undefined) {
+            yield { type: 'failed', error: { code: 'QUOTA_EXCEEDED', message: 'Subscription quota is waiting for recovery', retryable: true } }; return;
+          }
+          let completed = false; let failed = false;
+          for await (const event of adapter.run(request, options)) {
+            if (subscription.revision === generation) {
+              if (event.type === 'failed') { failed = true; if (event.error.code === 'QUOTA_EXCEEDED') runtime.providerLimits.exceeded(admin, key, event.error.reset_at); }
+              if (event.type === 'completed') completed = true;
+            }
+            yield event;
+          }
+          if (completed && !failed && subscription.revision === generation) runtime.providerLimits.recovered(admin, key, revision);
+        },
+      });
     }
     check(agent.provider === 'ollama', 'conflict', 'Subscription login and capability verification are required');
     const url = this.#url();
@@ -57,4 +91,14 @@ export class ModelGateway {
     check(this.#url() === url, 'conflict', 'Ollama configuration changed during discovery');
     return new OllamaAdapter(url, model, this.#fetch);
   };
+  async #fallback(signal?: AbortSignal): Promise<ModelAdapter> {
+    const admin = this.#runtime.administrator(); const settings = this.#runtime.modelSettings(admin);
+    check(settings.ollamaUrl && settings.fallbackModel, 'conflict', 'A verified fallback model is required');
+    const model = await inspectOllamaModel(settings.ollamaUrl, settings.fallbackModel, this.#fetch);
+    signal?.throwIfAborted();
+    check(model.tools, 'conflict', 'Fallback model must support tools');
+    const current = this.#runtime.modelSettings(admin);
+    check(current.ollamaUrl === settings.ollamaUrl && current.fallbackModel === settings.fallbackModel, 'conflict', 'Fallback settings changed');
+    return new OllamaAdapter(settings.ollamaUrl, model, this.#fetch);
+  }
 }
