@@ -121,4 +121,6 @@ CREATE TABLE procedure_receipts (task_id TEXT NOT NULL,operation_id TEXT NOT NUL
 CREATE TRIGGER invalidate_procedures AFTER UPDATE OF revision ON memory_state BEGIN DELETE FROM procedures; END;
 `, `
 ALTER TABLE task_steps ADD COLUMN rules_revision INTEGER NOT NULL DEFAULT 1;
+`, `
+CREATE INDEX memory_creation_order ON memory_audit(sequence,memory_id) WHERE action='created';
 `];

@@ -159,3 +159,34 @@ test('memory correction history exposes only scoped metadata and retains the lat
   f.runtime.deleteMemory(f.admin, f.child.id, memory.id, 102);
   assert.throws(() => f.runtime.memoryCorrections(f.admin, f.child.id, memory.id), /Memory not found/);
 });
+
+test('memory pages cover all records with stable cursors, literal search and private access', t => {
+  const f = fixture(t); const room = f.runtime.createRoom(f.admin, '人工個別', [f.child.id]);
+  const source = f.runtime.post(f.admin, room.id, '人工出所'); const ids: string[] = [];
+  for (let i = 0; i < 123; i++) ids.push(f.runtime.remember(f.childActor, source.id, i === 5 ? 'Literal %_ Marker' : '人工の記憶' + i).id);
+  const initialVersion = f.runtime.memoryVersion(f.admin, f.child.id);
+  const first = f.runtime.memoryPage(f.admin, f.child.id);
+  assert.equal(first.items.length, 50); assert.equal(first.total, 123); assert.ok(first.next);
+  assert.deepEqual(first.items.map(item => item.id), ids.toReversed().slice(0, 50));
+  const second = f.runtime.memoryPage(f.childActor, f.child.id, '', first.next!);
+  const last = f.runtime.memoryPage(f.admin, f.child.id, '', second.next!);
+  assert.equal(last.items.length, 23); assert.equal(last.next, null);
+  assert.deepEqual([...first.items, ...second.items, ...last.items].map(item => item.id), ids.toReversed());
+  assert.deepEqual(f.runtime.memoryPage(f.admin, f.child.id, '%_').items.map(item => item.id), [ids[5]]);
+  assert.equal(f.runtime.memoryPage(f.admin, f.child.id, 'marker').total, 1);
+  denied(() => f.runtime.memoryPage(f.leaderActor, f.child.id));
+  denied(() => f.runtime.memoryVersion(f.leaderActor, f.child.id));
+  assert.equal(f.runtime.memoryPage(f.admin, f.leader.id).total, 0);
+  for (const cursor of [0, -1, NaN, Infinity, 1.5]) assert.throws(() => f.runtime.memoryPage(f.admin, f.child.id, '', cursor), /Invalid/);
+  assert.throws(() => f.runtime.memoryPage(f.admin, f.child.id, 'x'.repeat(201)), /Invalid/);
+  f.runtime.deleteMemory(f.admin, f.child.id, first.items.at(-1)!.id, 1);
+  assert.ok(f.runtime.memoryVersion(f.admin, f.child.id) > initialVersion);
+  f.runtime.remember(f.childActor, source.id, 'ページ取得後に追加');
+  assert.deepEqual(f.runtime.memoryPage(f.admin, f.child.id, '', first.next!).items.map(item => item.id), second.items.map(item => item.id));
+  const beforeCorrection = f.runtime.memoryVersion(f.admin, f.child.id);
+  f.runtime.correctMemory(f.admin, f.child.id, ids[5]!, 1, '訂正済み');
+  assert.ok(f.runtime.memoryVersion(f.admin, f.child.id) > beforeCorrection);
+  assert.equal(f.runtime.memoryPage(f.admin, f.child.id, '%_').total, 0);
+  const reopened = new Runtime(f.path);
+  try { assert.deepEqual(reopened.memoryPage(reopened.administrator(), f.child.id), f.runtime.memoryPage(f.admin, f.child.id)); } finally { reopened.close(); }
+});

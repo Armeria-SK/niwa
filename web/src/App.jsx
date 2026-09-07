@@ -22,7 +22,6 @@ export function App() {
   const [page, setPage] = useState(readPage);
   const [members, setMembers] = useState([]);
   const [threads, setThreads] = useState([]);
-  const [memories, setMemories] = useState([]);
   const [activities, setActivities] = useState([]);
   const [updates, setUpdates] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
@@ -74,10 +73,7 @@ export function App() {
     const version = ++refreshVersion.current;
     try {
       const [state, modelSettings, savedUpdates, savedArtifacts, savedSchedules] = await Promise.all([api('/state'), api('/model-settings'), api('/updates'), api('/artifacts'), api('/schedules')]);
-      const [roomMessages, botMemories] = await Promise.all([
-        Promise.all(state.rooms.map(room => api(`/rooms/${room.id}/messages`))),
-        Promise.all(state.agents.map(agent => api(`/agents/${agent.id}/memories`))),
-      ]);
+      const roomMessages = await Promise.all(state.rooms.map(room => api(`/rooms/${room.id}/messages`)));
       if (version !== refreshVersion.current) return;
       if (previousTasks.current) for (const task of state.tasks) {
         if (task.state !== 'completed' || previousTasks.current.get(task.id) === 'completed') continue;
@@ -94,7 +90,6 @@ export function App() {
         lastActivity: Date.parse(roomMessages[index].at(-1)?.created_at || room.created_at) || 0,
         time: roomMessages[index].length ? time(roomMessages[index].at(-1).created_at) : '', day: roomMessages[index].length ? new Date(roomMessages[index][0].created_at).toLocaleDateString('ja-JP') : '',
         messages: roomMessages[index].map(message => ({ id: message.id, author: message.author_id === 'administrator' ? 'you' : message.author_id, text: message.body, time: time(message.created_at) })) })));
-      setMemories(botMemories.flatMap((items, index) => items.map(memory => ({ ...memory, member: state.agents[index].id, text: memory.body, kind: '記憶', date: '', revisions: [] }))));
       setActivities(state.tasks.map(task => ({ ...task, member: task.agent_id, thread: task.room_id, title: task.prompt,
         instructions: task.replies.map((reply, index) => ({ id: index, time: time(reply.created_at), text: reply.body })), detail: task.result || task.wait_reason || ({ queued: '順番を待っています', running: '実行中です', waiting_child: '仲間の結果を待っています' })[task.state],
         reason: task.wait_reason, status: task.paused ? 'paused' : ({ completed: 'done', failed: 'failed', cancelled: 'canceled', waiting_child: 'waiting', waiting_user: 'waiting', waiting_provider: 'waiting' })[task.state] || 'running', time: time(task.updated_at), steps: [({ queued: '順番を待っています', running: '実行中', waiting_child: '仲間を待っています', waiting_user: '回答を待っています', waiting_provider: '接続を待っています', completed: '完了', failed: '失敗', cancelled: '取り消し' })[task.state]] })));
@@ -166,13 +161,11 @@ export function App() {
     if (existing) { openThread(existing.id); return; }
     setModal({ type: 'new-thread', member: id, scope: 'private' });
   }
-  function saveMemory(id, text) {
-    const memory = memories.find(item => item.id === id);
-    return mutate(() => api(`/agents/${memory.member}/memories/${id}`, 'PATCH', { revision: memory.revision, body: text }), '記憶を訂正しました');
+  function saveMemory(memory, text) {
+    return mutate(() => api(`/agents/${memory.member}/memories/${memory.id}`, 'PATCH', { revision: memory.revision, body: text }), '記憶を訂正しました');
   }
-  function deleteMemory(id) {
-    const memory = memories.find(item => item.id === id);
-    return mutate(() => api(`/agents/${memory.member}/memories/${id}`, 'DELETE', { revision: memory.revision }), '記憶を削除しました');
+  function deleteMemory(memory) {
+    return mutate(() => api(`/agents/${memory.member}/memories/${memory.id}`, 'DELETE', { revision: memory.revision }), '記憶を削除しました');
   }
   function saveSettings(next) { return mutate(async () => {
     if (next.rules !== settings.rules) await api('/common-rules', 'PUT', { revision: next.rulesRevision, body: next.rules });
@@ -202,7 +195,7 @@ export function App() {
     </aside>
     {page === 'conversation' && !thread ? <main className="conversation" id="main-content"><EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState></main> : null}
     {page === 'conversation' && thread ? <Conversation onThreadAction={organizeThread} thread={thread} tasks={activities.filter(task => task.thread === thread.id)} onWork={() => { setActivityFilter('running'); navigate('activity'); }} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => setMobileDetail(false)} onArtifact={openArtifact} /> : null}
-    {page === 'members' ? <Members onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={selectedMember} onSelect={setSelectedMember} onUpdate={updateMember} memories={memories} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
+    {page === 'members' ? <Members onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={selectedMember} onSelect={setSelectedMember} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
     {page === 'activity' ? <Activity onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '予定を削除しました')} schedules={schedules} threads={threads} onScheduleSave={body => mutate(() => api('/schedules', 'POST', body), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={activityFilter} onFilter={setActivityFilter} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={() => notify('外部操作の承認はまだ利用できません。')} onThread={openThread} onArtifact={openArtifact} /> : null}
     {page === 'settings' ? <Settings onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} onUpdateMembers={setMembers} notify={notify} /> : null}
     <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined} onClick={() => { setPage(id); if (id === 'conversation') setMobileDetail(false); }}><Icon size={23} /><span>{label}</span>{id === 'activity' && pendingCount ? <span className="nav-notice" /> : null}</a>)}</nav>

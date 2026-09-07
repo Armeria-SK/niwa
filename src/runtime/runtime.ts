@@ -577,6 +577,20 @@ export class Runtime {
     return db.prepare(`SELECT m.* FROM memories m JOIN memory_search s ON s.id = m.id
       WHERE s.body LIKE ? ESCAPE '\\' ORDER BY m.rowid`).all(`%${escaped}%`) as unknown as Memory[];
   }
+  memoryVersion(actor: Actor, agentId: string): number {
+    const db = this.#memory(actor, agentId);
+    return Number(db.prepare('SELECT coalesce(max(sequence),0) AS version FROM memory_audit').get()!.version);
+  }
+  memoryPage(actor: Actor, agentId: string, query = '', before = Number.MAX_SAFE_INTEGER): { items: Memory[]; total: number; next: number | null } {
+    const db = this.#memory(actor, agentId);
+    check(typeof query === 'string' && query.length <= 200 && Number.isSafeInteger(before) && before > 0, 'invalid', 'Invalid memory page');
+    const pattern = `%${query.replace(/[\\%_]/g, '\\$&')}%`;
+    const rows = db.prepare(`SELECT m.*,a.sequence AS cursor FROM memories m JOIN memory_audit a ON a.memory_id=m.id AND a.action='created'
+      WHERE a.sequence<? AND m.body LIKE ? ESCAPE '\\' ORDER BY a.sequence DESC LIMIT 51`).all(before, pattern) as unknown as (Memory & { cursor: number })[];
+    return { items: rows.slice(0, 50).map(({ cursor: _cursor, ...item }) => item),
+      total: Number(db.prepare("SELECT count(*) AS total FROM memories WHERE body LIKE ? ESCAPE '\\'").get(pattern)!.total),
+      next: rows.length > 50 ? rows[49]!.cursor : null };
+  }
   correctMemory(actor: Actor, agentId: string, id: string, revision: number, body: string): void {
     const principal = this.#admin(actor);
     text(body);
