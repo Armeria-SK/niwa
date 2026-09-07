@@ -26,6 +26,7 @@ export function App() {
   const [activities, setActivities] = useState([]);
   const [updates, setUpdates] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
+  const [schedules, setSchedules] = useState([]);
   const [activityFilter, setActivityFilter] = useState('recap');
   const seen = Object.fromEntries(updates.filter(item => item.seen).map(item => [item.id, true]));
   const [authenticated, setAuthenticated] = useState(null);
@@ -71,7 +72,7 @@ export function App() {
   async function refresh() {
     const version = ++refreshVersion.current;
     try {
-      const [state, modelSettings, savedUpdates, savedArtifacts] = await Promise.all([api('/state'), api('/model-settings'), api('/updates'), api('/artifacts')]);
+      const [state, modelSettings, savedUpdates, savedArtifacts, savedSchedules] = await Promise.all([api('/state'), api('/model-settings'), api('/updates'), api('/artifacts'), api('/schedules')]);
       const [roomMessages, botMemories] = await Promise.all([
         Promise.all(state.rooms.map(room => api(`/rooms/${room.id}/messages`))),
         Promise.all(state.agents.map(agent => api(`/agents/${agent.id}/memories`))),
@@ -98,6 +99,7 @@ export function App() {
       setUpdates(savedUpdates.map(item => ({ ...item, member: item.author_id, thread: item.room_id, artifact: item.artifact_id, activity: item.task_id, time: new Date(item.created_at).toLocaleString('ja-JP') })));
       setArtifacts(savedArtifacts.map(item => ({ ...item, member: item.author_id, thread: item.room_id, scope: state.rooms.find(room => room.id === item.room_id)?.visibility, updated: new Date(item.created_at).toLocaleString('ja-JP') })));
       setPaused(state.settings.paused);
+      setSchedules(savedSchedules);
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
         concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, ollamaUrl: modelSettings.ollamaUrl || '' }));
       setReady(true);
@@ -194,7 +196,7 @@ export function App() {
     {page === 'conversation' && !thread ? <main className="conversation" id="main-content"><EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState></main> : null}
     {page === 'conversation' && thread ? <Conversation onThreadAction={organizeThread} thread={thread} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => setMobileDetail(false)} onArtifact={openArtifact} /> : null}
     {page === 'members' ? <Members onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={selectedMember} onSelect={setSelectedMember} onUpdate={updateMember} memories={memories} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
-    {page === 'activity' ? <Activity updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={activityFilter} onFilter={setActivityFilter} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={() => notify('外部操作の承認はまだ利用できません。')} onThread={openThread} onArtifact={openArtifact} /> : null}
+    {page === 'activity' ? <Activity schedules={schedules} threads={threads} onScheduleSave={body => mutate(() => api('/schedules', 'POST', body), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={activityFilter} onFilter={setActivityFilter} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={() => notify('外部操作の承認はまだ利用できません。')} onThread={openThread} onArtifact={openArtifact} /> : null}
     {page === 'settings' ? <Settings onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} onUpdateMembers={setMembers} notify={notify} /> : null}
     <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined} onClick={() => { setPage(id); if (id === 'conversation') setMobileDetail(false); }}><Icon size={23} /><span>{label}</span>{id === 'activity' && pendingCount ? <span className="nav-notice" /> : null}</a>)}</nav>
     {modal?.type === 'appearance' ? <Modal title={`${memberMap[modal.member].name}のアイコン`} onClose={() => setModal(null)} className="appearance-modal"><AppearanceEditor member={memberMap[modal.member]} onCancel={() => setModal(null)} onSave={async patch => { if (await updateMember(modal.member, patch)) setModal(null); }} /></Modal> : null}
