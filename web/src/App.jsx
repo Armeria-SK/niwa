@@ -134,7 +134,9 @@ export function App() {
     try { const value = await api(`/artifacts/${id}`); setModal({ type: 'artifact', artifact: { ...artifacts.find(item => item.id === id), ...value } }); } catch (error) { notify(error.message); }
   }
   function controlTask(id, action, body) { return mutate(() => api(`/tasks/${id}/${action}`, 'POST', action === 'instruct' ? { body } : {}), '仕事への操作を保存しました'); }
-  function readUpdates(ids) { return mutate(() => api('/updates/read', 'POST', { ids }), '確認済みにしました'); }
+  function readUpdates(ids) { return mutate(async () => {
+    for (let offset = 0; offset < ids.length; offset += 1000) await api('/updates/read', 'POST', { ids: ids.slice(offset, offset + 1000) });
+  }, '確認済みにしました'); }
   function openMember(id) { setSelectedMember(id); navigate('members'); }
   function togglePause() { return mutate(() => api('/settings', 'PATCH', { paused: !paused }), paused ? '活動を再開しました' : '活動を一時停止しました'); }
   async function sendMessage(text, attachments = [], replyTo, selectedRecipients = []) {
