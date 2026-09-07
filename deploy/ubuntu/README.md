@@ -20,6 +20,8 @@ sh deploy/ubuntu/check-prerequisites.sh
 この診断は読み取りだけを行い、不足があると終了コード1を返す。
 診断の成功はコンテナによる隔離の実証ではない。
 
+2026-09-08の再確認: checkoutは `/home/niwa/niwa`、Node.js 24.20.0 / npm 11.19.0を導入済み。`npm ci` と `npm run check` は成功（219成功・0失敗・Chromium不在による2件skip）。Linuxの実プロセス終了後socket回収試験は成功しました。Podmanとniwa-execは未導入です。systemd定義3件の検査も成功しましたが、サービス登録・起動・実Podmanの隔離は未検証です。
+
 ## 管理者が確認して実行する準備
 
 `prepare-executor.sh` は `/home/niwa/niwa` に直接cloneした、初回設定前の環境用です。専用主体が未作成のx86_64環境を前提とします。ソースやビルド結果を保持し、旧配置のappディレクトリは作りません。
@@ -38,7 +40,7 @@ sh deploy/ubuntu/prepare-executor.sh --check
 検査後、管理者がOS変更を許可した場合に限り `sudo sh deploy/ubuntu/prepare-executor.sh --apply` で準備します。`--apply` でも変更前の検査を繰り返します。本体の `--init` より先に実行してください。
 
 既存インストールや同名実行主体がある場合は停止する。途中失敗後に無条件で再実行せず、作成済みの状態を確認する。
-2026-09-08、修正後の `sh -n` と `python3 tests/prepare-executor.test.py` の11件が成功しました。テストは人工checkoutとOS操作の代替コマンドで、既存ファイルの保持、変更なし検査、拒否条件、変更対象を確認します。実Ubuntuの `--check` は `/usr/bin/node` 不在で停止。実導入・実ACL・隔離の成立は未検証です。
+2026-09-08、修正後の `sh -n` と `python3 tests/prepare-executor.test.py` の11件が成功しました。テストは人工checkoutとOS操作の代替コマンドで、既存ファイルの保持、変更なし検査、拒否条件、変更対象を確認します。Node導入後の実Ubuntuの `--check` は終了コード0。実導入・実ACL・隔離の成立は未検証です。
 
 ## 配置前に用意するもの
 

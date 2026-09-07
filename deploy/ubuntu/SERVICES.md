@@ -2,7 +2,12 @@
 
 テンプレートの準備段階です。OSへの登録・起動はしていません。Node/Podman・専用主体・配置・ディスク境界と実機受入を終えてから、管理者の許可の範囲で登録します。
 
-2026-09-08に対象Ubuntuの一時ファイルでsystemd-analyze verifyを実行。3定義とも/usr/bin/node不在の診断で終了コード1でした。他の設定診断は出ていませんが、検査成功とは扱いません。Node導入後に元のファイル名とsystem/userの正しい管理区分で再検査します。一時ファイルは回収済みです。
+2026-09-08、Node.js 24.20.0導入後、直接clone構成の3定義を以下のコマンドで再検査し、両方とも終了コード0を確認しました（サンドボックス外）。以前のNode不在による失敗は解消しました。登録・起動・実際の専用主体での権限やcgroup検証は未実施です。
+
+```sh
+systemd-analyze verify deploy/ubuntu/systemd/niwa.service deploy/ubuntu/systemd/niwa-workspace.service
+systemd-analyze --user verify deploy/ubuntu/systemd/niwa-executor.service
+```
 
 | 定義 | 管理するsystemd | 実行主体 | 用途 |
 |---|---|---|---|
@@ -30,4 +35,4 @@
 
 仕様参照: [systemdの実行環境設定](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)、[cgroupの委譲](https://systemd.io/CGROUP_DELEGATION/)。
 
-2026-09-08の最新配置は/home/niwa/niwaへ直接cloneする構成です。WorkingDirectoryとExecStartを製品ルート直下へ変更済み。以前のverifyは旧パスの記録で、新しい定義は対象Ubuntuで再検査が必要です。
+2026-09-08の最新配置は/home/niwa/niwaへ直接cloneする構成です。WorkingDirectoryとExecStartを製品ルート直下へ変更済み。直接clone用定義のverify結果は本書冒頭を参照してください。
