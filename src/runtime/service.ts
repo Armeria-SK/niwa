@@ -15,7 +15,7 @@ import { Subscription } from '../auth/subscription.ts';
 import { FileCredentialStore } from '../auth/credential-store.ts';
 import { readSearchKey } from '../auth/search-key.ts';
 import { braveSearch } from '../tools/web/search.ts';
-import { configuredWorkspaceReader, configuredWorkspaceWriter } from '../tools/files/client.ts';
+import { configuredWorkspaceReader, configuredWorkspaceWriter, configuredWorkspaceDownloader } from '../tools/files/client.ts';
 
 /** All paths originate at the product root. Listening is loopback-only for the HTTPS proxy. */
 export async function startService(root: string, resolve?: ResolveAdapter, portOverride?: number) {
@@ -46,7 +46,9 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
         workspaceWrite: configuredWorkspaceWriter(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid),
       } : {}),
     }));
-    server = createApiServer(runtime, auth, models, fileURLToPath(new URL('../client/', import.meta.url)), backups);
+    server = createApiServer(runtime, auth, models, fileURLToPath(new URL('../client/', import.meta.url)), backups,
+      config.workspaceExecutorUid ? { read: configuredWorkspaceReader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid),
+        download: configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid) } : undefined);
     await new Promise<void>((done, reject) => {
       server!.once('error', reject);
       server!.listen(portOverride ?? config.port, '127.0.0.1', () => { server!.removeListener('error', reject); done(); });

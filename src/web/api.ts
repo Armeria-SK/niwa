@@ -9,6 +9,7 @@ import { ModelGateway } from '../providers/gateway.ts';
 import { serveStatic } from './static.ts';
 import { profileSchema } from '../domain/profile.ts';
 import type { Backups } from '../backup/backups.ts';
+import type { WorkspaceRead, WorkspaceDownload } from '../tools/files/client.ts';
 
 const string = Type.String({ minLength: 1, maxLength: 20_000 });
 const id = Type.String({ pattern: '^[0-9a-f-]{36}$' });
@@ -31,10 +32,16 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** This server exposes administrator routes only. Model tools use the separate actor-bound API. */
-export function createApiServer(runtime: Runtime, auth: WebAuth, models = new ModelGateway(runtime), webRoot?: string, backups?: Backups) {
+export function createApiServer(runtime: Runtime, auth: WebAuth, models = new ModelGateway(runtime), webRoot?: string, backups?: Backups,
+  workspace?: { read: WorkspaceRead; download: WorkspaceDownload }) {
   const admin = runtime.administrator();
   type Route = { method: string; path: RegExp; schema?: TSchema; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL) => unknown };
   const routes: Route[] = [
+    { method: 'GET', path: /^\/api\/workspace\/files$/, run: async (_m, _b, url) => workspace
+      ? { available: true, ...await workspace.read('list', url.searchParams.get('path') ?? '') } : { available: false, entries: [], path: '', truncated: false } },
+    { method: 'GET', path: /^\/api\/workspace\/file$/, run: (_m, _b, url) => {
+      if (!workspace) throw new DomainError('conflict', 'Workspace service unavailable');
+      return workspace.download(url.searchParams.get('path') ?? ''); } },
     { method: 'GET', path: /^\/api\/schedules$/, run: () => runtime.schedules.list(admin) },
     { method: 'DELETE', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, run: m => { runtime.schedules.remove(admin, m[1]!); return { ok: true }; } },
     { method: 'POST', path: /^\/api\/schedules$/, schema: object({ id, agent_id: id, room_id: id, prompt: string,

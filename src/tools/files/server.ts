@@ -22,6 +22,7 @@ export function createWorkspaceServer(workspace: Workspace, writes?: WorkspaceWr
       const args = body as Record<string, unknown>;
       if (typeof args.path !== 'string' || Object.keys(args).some(key => !['operation', 'operation_id', 'path', 'content', 'expected_revision'].includes(key))) throw new WorkspaceError('unsupported');
       const result = args.operation === 'list' ? workspace.list(args.path) : args.operation === 'read' ? workspace.read(args.path)
+        : args.operation === 'download' ? workspace.download(args.path)
         : args.operation === 'write' && writes && typeof args.operation_id === 'string' && typeof args.content === 'string' && (typeof args.expected_revision === 'string' || args.expected_revision === null)
           ? writes.write({ operation_id: args.operation_id, path: args.path, content: args.content, expected_revision: args.expected_revision }) : undefined;
       if (!result) throw new WorkspaceError('unsupported');

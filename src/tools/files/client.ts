@@ -10,6 +10,9 @@ import type { WorkspaceWrite } from './write-log.ts';
 
 export type WorkspaceRead = (operation: 'list' | 'read', path: string, signal?: AbortSignal) => Promise<JsonObject>;
 export type WorkspaceWriter = (input: WorkspaceWrite, signal?: AbortSignal) => Promise<JsonObject>;
+export type WorkspaceDownload = (path: string, signal?: AbortSignal) => Promise<JsonObject>;
+const downloadSchema = Type.Object({ path: Type.String(), data: Type.String({ maxLength: 11_184_812 }),
+  revision: Type.String({ pattern: '^[a-f0-9]{64}$' }), shared: Type.Literal(true) }, { additionalProperties: false });
 const writeSchema = Type.Union([
   Type.Object({ path: Type.String(), revision: Type.String({ pattern: '^[a-f0-9]{64}$' }), shared: Type.Literal(true) }, { additionalProperties: false }),
   Type.Object({ error: Type.Union(['invalid_path', 'not_found', 'conflict', 'unsupported', 'outcome_unknown'].map(value => Type.Literal(value))) }, { additionalProperties: false }),
@@ -21,7 +24,7 @@ const listSchema = Type.Object({ path: Type.String(), entries: Type.Array(Type.O
   truncated: Type.Boolean() }, { additionalProperties: false });
 
 /** Transport only. The composition root supplies a protected endpoint and validates its ownership on every call. */
-async function callWorkspace(socketPath: string, verifySocket: () => void, input: JsonObject, signal?: AbortSignal): Promise<unknown> {
+async function callWorkspace(socketPath: string, verifySocket: () => void, input: JsonObject, signal?: AbortSignal, maxResponse = 512 * 1024): Promise<unknown> {
     verifySocket();
     const cancellation = AbortSignal.any([AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]);
     cancellation.throwIfAborted();
@@ -36,7 +39,7 @@ async function callWorkspace(socketPath: string, verifySocket: () => void, input
         const chunks: Buffer[] = []; let size = 0;
         response.on('data', (chunk: Buffer) => {
           size += chunk.length;
-          if (size > 512 * 1024) { response.destroy(new Error('Workspace response too large')); return; }
+          if (size > maxResponse) { response.destroy(new Error('Workspace response too large')); return; }
           chunks.push(chunk);
         });
         response.on('error', reject);
@@ -63,6 +66,17 @@ export function workspaceReader(socketPath: string, verifySocket: () => void): W
   };
 }
 
+export function workspaceDownloader(socketPath: string, verifySocket: () => void): WorkspaceDownload {
+  return async (path, signal) => {
+    if (typeof path !== 'string' || !path || path.length > 512) throw new Error('Invalid workspace request');
+    const output = await callWorkspace(socketPath, verifySocket, { operation: 'download', path }, signal, 12 * 1024 * 1024);
+    if (!Value.Check(downloadSchema, output)) throw new Error('Invalid workspace download');
+    const bytes = Buffer.from(output.data, 'base64');
+    if (output.path !== path || bytes.length > 8 * 1024 * 1024 || bytes.toString('base64') !== output.data ||
+      createHash('sha256').update(bytes).digest('hex') !== output.revision) throw new Error('Workspace download mismatch');
+    return output;
+  };
+}
 export function workspaceWriter(socketPath: string, verifySocket: () => void): WorkspaceWriter {
   return async (input, signal) => {
     const output = await callWorkspace(socketPath, verifySocket, { ...input, operation: 'write' }, signal);
@@ -77,6 +91,9 @@ export function workspaceWriter(socketPath: string, verifySocket: () => void): W
 
 export function configuredWorkspaceReader(socketPath: string, executionUid: number): WorkspaceRead {
   return workspaceReader(socketPath, verifyEndpoint(socketPath, executionUid));
+}
+export function configuredWorkspaceDownloader(socketPath: string, executionUid: number): WorkspaceDownload {
+  return workspaceDownloader(socketPath, verifyEndpoint(socketPath, executionUid));
 }
 export function configuredWorkspaceWriter(socketPath: string, executionUid: number): WorkspaceWriter {
   return workspaceWriter(socketPath, verifyEndpoint(socketPath, executionUid));

@@ -5,8 +5,8 @@ import { join, parse } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Workspace } from '../src/tools/files/workspace.ts';
 import { createWorkspaceServer } from '../src/tools/files/server.ts';
-import { workspaceReader, workspaceWriter, configuredWorkspaceReader } from '../src/tools/files/client.ts';
-import { randomUUID } from 'node:crypto';
+import { workspaceReader, workspaceWriter, workspaceDownloader, configuredWorkspaceReader } from '../src/tools/files/client.ts';
+import { randomUUID, createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { WorkspaceWriteLog } from '../src/tools/files/write-log.ts';
 
@@ -17,6 +17,21 @@ function fixture(t: { after: (fn: () => void | Promise<void>) => void }) {
   t.after(() => { for (const close of cleanup) close(); rmSync(root, { recursive: true, force: true }); });
   return { root, shared, files: new Workspace(shared), cleanup };
 }
+
+test('download client rejects substituted paths, corrupted bytes and noncanonical base64', async t => {
+  const f = fixture(t); const data = Buffer.from('shared');
+  const valid = { path: 'report.txt', data: data.toString('base64'), revision: createHash('sha256').update(data).digest('hex'), shared: true };
+  let output = valid;
+  const server = createServer((request, response) => { request.resume(); response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(output)); });
+  const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\niwa-${randomUUID()}` : join(f.root, 'download.sock');
+  await new Promise<void>(resolve => server.listen(endpoint, resolve));
+  t.after(() => new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }));
+  const download = workspaceDownloader(endpoint, () => {});
+  assert.deepEqual(await download(valid.path), valid);
+  for (const changed of [{ path: 'other.txt' }, { revision: '0'.repeat(64) }, { data: valid.data + '\n' }, { data: Buffer.from('altered').toString('base64') }]) {
+    output = { ...valid, ...changed }; await assert.rejects(download(valid.path), /mismatch/);
+  }
+});
 
 test('workspace writes nested text atomically, detects stale edits and safely repeats a lost response', t => {
   const f = fixture(t);
@@ -84,6 +99,25 @@ test('file broker handles bounded requests without accepting a client-selected r
   assert.equal(escape.status, 400); assert.equal((await escape.text()).includes(f.root), false);
   assert.equal((await request({ operation: 'read', path: 'report.md', root: f.root })).status, 400);
   assert.equal((await fetch(url)).status, 400);
+});
+
+test('workspace downloads preserve binary bytes through IPC and reject oversized or escaped files', async t => {
+  const f = fixture(t); const bytes = Buffer.alloc(128 * 1024); for (let i = 0; i < bytes.length; i++) bytes[i] = i % 256;
+  writeFileSync(join(f.shared, 'binary.bin'), bytes);
+  writeFileSync(join(f.shared, 'too-large.bin'), Buffer.alloc(8 * 1024 * 1024 + 1));
+  writeFileSync(join(f.root, 'private.txt'), 'outside the shared root');
+  assert.throws(() => f.files.read('binary.bin'), /unsupported/);
+  assert.throws(() => f.files.download('too-large.bin'), /unsupported/);
+  assert.throws(() => f.files.download('../private.txt'), /invalid_path/);
+  const server = createWorkspaceServer(f.files);
+  const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\niwa-${randomUUID()}` : join(f.root, 'download.sock');
+  await new Promise<void>(resolve => server.listen(endpoint, resolve));
+  t.after(() => new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }));
+  let verified = 0; const download = workspaceDownloader(endpoint, () => { verified++; });
+  const result = await download('binary.bin');
+  assert.deepEqual(Buffer.from(result.data as string, 'base64'), bytes); assert.equal(verified, 1);
+  await assert.rejects(download('../private.txt'));
+  await assert.rejects(workspaceDownloader(endpoint, () => { throw new Error('Untrusted endpoint'); })('binary.bin'), /Untrusted endpoint/);
 });
 
 test('workspace client reads through a local IPC endpoint, verifies revisions and preserves UTF-8 BOM bytes', async t => {

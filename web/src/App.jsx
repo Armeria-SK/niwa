@@ -31,6 +31,7 @@ export function App() {
   const seen = Object.fromEntries(updates.filter(item => item.seen).map(item => [item.id, true]));
   const [authenticated, setAuthenticated] = useState(null);
   const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const refreshVersion = useRef(0);
   const submission = useRef(null);
   const previousTasks = useRef(null);
@@ -103,7 +104,8 @@ export function App() {
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
         concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, autonomous: state.settings.autonomous, ollamaUrl: modelSettings.ollamaUrl || '', rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
       setReady(true);
-    } catch (error) { if (error.status === 401) { setAuthenticated(false); setReady(false); } else notify(error.message); }
+      setLoadError('');
+    } catch (error) { if (version !== refreshVersion.current) return; if (error.status === 401) { setAuthenticated(false); setReady(false); } else { setLoadError('庭を読み込めませんでした。サーバーの接続とバージョンを確認してください。'); notify(error.message); } }
   }
   async function mutate(work, message = '保存しました') {
     try { await work(); await refresh(); notify(message); return true; } catch (error) { notify(error.message); return false; }
@@ -176,7 +178,7 @@ export function App() {
   }); }
   const visibleThreads = threads.filter(item => (scope === 'archived' ? item.archived : !item.archived) && (scope === 'all' || scope === 'archived' || item.scope === scope) && `${item.title} ${item.messages.map(message => message.text).join(' ')} ${item.members.map(id => memberMap[id]?.name).join(' ')}`.toLowerCase().includes(search.toLowerCase())).sort((a, b) => Number(b.pinned) - Number(a.pinned));
   if (!authenticated) return <Login loading={authenticated === null} onLogin={() => setAuthenticated(true)} />;
-  if (!ready) return <main className="login-page"><p role="status">庭を読み込んでいます…</p></main>;
+  if (!ready) return <main className="login-page">{loadError ? <div><p role="alert">{loadError}</p><button className="button secondary" onClick={() => { setLoadError(''); void refresh(); }}>再試行</button></div> : <p role="status">庭を読み込んでいます…</p>}</main>;
 
   return <div className={`app-shell page-${page} ${mobileDetail ? 'mobile-detail' : ''}`} data-theme={(page === 'settings' ? previewTheme : null) || settings.theme || 'garden'}>
     <a className="skip-link" href="#main-content">メインコンテンツへ</a>

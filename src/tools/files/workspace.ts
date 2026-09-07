@@ -34,20 +34,20 @@ export class Workspace {
     }
     return target;
   }
-  #bytes(path: string): Buffer {
+  #bytes(path: string, limit = MAX_BYTES): Buffer {
     const entry = lstatSync(path);
     if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) throw new WorkspaceError('invalid_path');
     const descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
     try {
       const info = fstatSync(descriptor);
       if (!info.isFile() || info.nlink !== 1 || info.ino !== entry.ino || info.dev !== entry.dev) throw new WorkspaceError('invalid_path');
-      if (info.size > MAX_BYTES) throw new WorkspaceError('unsupported');
-      const buffer = Buffer.alloc(MAX_BYTES + 1); let length = 0;
+      if (info.size > limit) throw new WorkspaceError('unsupported');
+      const buffer = Buffer.alloc(limit + 1); let length = 0;
       while (length < buffer.length) {
         const count = readSync(descriptor, buffer, length, buffer.length - length, null);
         if (!count) break; length += count;
       }
-      if (length > MAX_BYTES) throw new WorkspaceError('unsupported');
+      if (length > limit) throw new WorkspaceError('unsupported');
       return buffer.subarray(0, length);
     } finally { closeSync(descriptor); }
   }
@@ -63,6 +63,10 @@ export class Workspace {
       }
     } finally { directory.closeSync(); }
     return { path: name, entries, truncated };
+  }
+  download(name: string) {
+    const bytes = this.#bytes(this.#path(name), 8 * 1024 * 1024);
+    return { path: name, data: bytes.toString('base64'), revision: digest(bytes), shared: true };
   }
   read(name: string) {
     const bytes = this.#bytes(this.#path(name));
