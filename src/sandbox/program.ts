@@ -27,8 +27,7 @@ export function programArguments(environment: ProgramEnvironment, request: Progr
 }
 
 /** A failed/interrupted attempt has an unknown write outcome; callers must never automatically replay it. */
-export async function executeProgram(environment: ProgramEnvironment, request: ProgramRequest, call: PodmanCall, signal?: AbortSignal): Promise<ProgramOutput> {
-  const name = `niwa-program-${randomUUID()}`;
+export async function executeProgram(environment: ProgramEnvironment, request: ProgramRequest, call: PodmanCall, signal?: AbortSignal, name = `niwa-program-${randomUUID()}`): Promise<ProgramOutput> {
   const args = programArguments(environment, request, name);
   signal?.throwIfAborted();
   try { return await call(args, request.seconds + 10, signal); }
@@ -62,8 +61,8 @@ export function configuredProgramRunner(environment: ProgramEnvironment) {
       else resolve({ code: error?.code as number ?? 0, stdout, stderr });
     });
   });
-  return (request: ProgramRequest, signal?: AbortSignal) => {
+  return (request: ProgramRequest, signal?: AbortSignal, name?: string) => {
     assertDirectoryPath(environment.workspace);
-    return executeProgram(environment, request, call, signal);
+    return executeProgram(environment, request, call, signal, name);
   };
 }
