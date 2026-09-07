@@ -435,21 +435,38 @@ export class Runtime {
   }
 
   /** A directed conversation continues at its recipient without a reporting turn from the sender. */
-  respond(actor: Actor, lease: TaskLease, content: string): void {
+  respond(actor: Actor, lease: TaskLease, content: string, recipientIds?: string[]): void {
     transaction(this.#db, () => {
-    check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
-    const body = content.trim();
-    if (body) this.post(actor, lease.task.room_id, body);
-    const recipients = this.agents(actor).filter(agent => body.startsWith(`@${agent.name}`) &&
-      /^(?:\s|[、,:：]|$)/u.test(body.slice(agent.name.length + 1)));
-    if (recipients.length === 1 && recipients[0]!.id !== lease.task.agent_id) {
-      const recipient = recipients[0]!;
-      if (lease.task.parent_id && recipient.id === lease.task.requester_id && this.tasks.get(actor, lease.task.parent_id).state === 'waiting_child') {
-        this.tasks.finish(actor, lease, body); return;
+      check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
+      const agents = this.agents(actor);
+      let body = content.trim();
+      let recipients: Agent[] = [];
+      if (recipientIds !== undefined) {
+        check(Array.isArray(recipientIds) && recipientIds.length <= 100, 'invalid', 'Invalid recipients');
+        recipients = [...new Set(recipientIds)].map(id => {
+          const agent = agents.find(item => item.id === id);
+          check(agent, 'invalid', 'Unknown conversation recipient');
+          this.#room(this.agentSession(id), lease.task.room_id);
+          return agent;
+        });
+        if (recipients.length) body = `${recipients.map(item => `@${item.name}`).join(' ')} ${body}`;
+      } else {
+        let remaining = body;
+        while (remaining.startsWith('@')) {
+          const matches = agents.filter(agent => remaining.startsWith(`@${agent.name}`) && /^(?:\s|[、,:：？?@]|$)/u.test(remaining.slice(agent.name.length + 1)));
+          if (matches.length !== 1) break;
+          const recipient = matches[0]!;
+          recipients.push(recipient);
+          remaining = remaining.slice(recipient.name.length + 1).replace(/^[\s、,:：]+/u, '');
+        }
       }
-      this.tasks.address(actor, lease, recipient.id, body);
-    }
-    this.tasks.finish(actor, lease, body || '完了');
+      if (body) this.post(actor, lease.task.room_id, body);
+      for (const id of new Set(recipients.map(item => item.id))) {
+        if (id === lease.task.agent_id) continue;
+        if (lease.task.parent_id && id === lease.task.requester_id && this.tasks.get(actor, lease.task.parent_id).state === 'waiting_child') continue;
+        this.tasks.address(actor, lease, id, body);
+      }
+      this.tasks.finish(actor, lease, body || '完了');
     });
   }
 
@@ -470,11 +487,13 @@ export class Runtime {
     });
   }
   /** A browser retry must not post twice or start two jobs. Both records commit together. */
-  submit(actor: Actor, id: string, roomId: string, body: string, agentId?: string): { message: Message; task: Task | null } {
+  submit(actor: Actor, id: string, roomId: string, body: string, agentId?: string | string[]): { message: Message; task: Task | null } {
     this.#admin(actor);
     check(typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id), 'invalid', 'Invalid submission id');
     text(body);
-    const hash = createHash('sha256').update(JSON.stringify([roomId, body, agentId ?? null])).digest('hex');
+    const recipients = Array.isArray(agentId) ? [...new Set(agentId)].sort() : agentId ? [agentId] : [];
+    check(!Array.isArray(agentId) || (agentId.length > 0 && agentId.length <= 100 && agentId.every(value => typeof value === 'string')), 'invalid', 'Invalid recipients');
+    const hash = createHash('sha256').update(JSON.stringify([roomId, body, Array.isArray(agentId) ? recipients : agentId ?? null])).digest('hex');
     return transaction(this.#db, () => {
       const previous = this.#db.prepare('SELECT * FROM submissions WHERE id=?').get(id) as
         { input_hash: string; message_id: string; task_id: string | null } | undefined;
@@ -485,12 +504,16 @@ export class Runtime {
       }
       check(!this.roomPreferences(actor, roomId).archived, 'conflict', 'Restore the archived room before replying');
       const message = this.post(actor, roomId, body);
-      const questions = agentId ? this.tasks.list(actor).filter(task => task.agent_id === agentId && task.room_id === roomId && task.state === 'waiting_user') : [];
       let task: Task | null = null;
-      if (questions.length === 1) {
-        this.tasks.resume(actor, questions[0]!.id, body);
-        task = this.tasks.get(actor, questions[0]!.id);
-      } else if (agentId) task = this.tasks.create(actor, agentId, roomId, body);
+      for (const recipient of recipients) {
+        this.#room(this.agentSession(recipient), roomId);
+        check(this.#agent(recipient).status === 'active', 'forbidden', 'Recipient is dormant');
+        const questions = this.tasks.list(actor).filter(task => task.agent_id === recipient && task.room_id === roomId && task.state === 'waiting_user');
+        if (questions.length === 1) {
+          this.tasks.resume(actor, questions[0]!.id, body);
+          task ??= this.tasks.get(actor, questions[0]!.id);
+        } else { const next = this.tasks.create(actor, recipient, roomId, body); task ??= next; }
+      }
       this.#db.prepare('INSERT INTO submissions VALUES (?,?,?,?)').run(id, hash, message.id, task?.id ?? null);
       return { message, task };
     });

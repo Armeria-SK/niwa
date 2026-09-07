@@ -304,10 +304,12 @@ export class Tasks {
   }
   address(actor: Actor, lease: TaskLease, agentId: string, prompt: string): void {
     const task = this.#owned(actor, lease);
-    const ancestry = this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id) AS (
-      SELECT id,parent_id FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id FROM tasks t JOIN ancestors a ON t.id=a.parent_id
-      WHERE NOT EXISTS(SELECT 1 FROM task_replies r WHERE r.task_id=a.id))
-      SELECT count(*) AS count FROM ancestors`).get(task.id)!;
+    const ancestry = this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id,depth) AS (
+      SELECT id,parent_id,0 FROM tasks WHERE id=? UNION ALL SELECT t.id,t.parent_id,a.depth+1 FROM tasks t JOIN ancestors a ON t.id=a.parent_id
+      WHERE NOT EXISTS(SELECT 1 FROM task_replies r WHERE r.task_id=a.id)),
+      descendants(id) AS (SELECT id FROM ancestors WHERE depth=(SELECT max(depth) FROM ancestors)
+        UNION SELECT t.id FROM tasks t JOIN descendants d ON t.parent_id=d.id)
+      SELECT count(*) AS count FROM descendants`).get(task.id)!;
     if (!this.#access.participant(agentId, task.room_id)) {
       this.#db.prepare(`INSERT INTO updates(room_id,author_id,kind,title,detail,task_id,created_at)
         VALUES (?,?,'question',?,?,?,?)`).run(task.room_id, task.agent_id, '会話の宛先を確認してください', '宛先のBotがこの会話に参加できないため、配送できませんでした。', task.id, Date.now());

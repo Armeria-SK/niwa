@@ -17,6 +17,7 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  conversation_send: { description: '自分の発言を投稿し、recipient_idsの全Botへ応答を渡して今回の発言を終える。相手IDは会話参加者から選ぶ。宛先なしは空配列。本文は名前ラベルや@を付けず平文で書く。@宛先は自動追加。この呼び出しは単独で行う。', schema: object({ body: body(), recipient_ids: Type.Array(short(), { maxItems: 100, uniqueItems: true }) }) },
   task_rest: { description: 'この自発活動を休息として終える。今は役立つ活動や発言がない場合に単独で使う。会話への投稿・完了通知は行わない。起動回数やモデル予算は戻らない。', schema: object({}) },
   ...procedureDefinitions,
   task_summary_save: { description: '現在の仕事の結論・理由・未解決事項・次の手順を出典付きの補助要約として保存する。sourcesにはhistory_readで確認した出所IDとrevisionを指定する。承認や実行記録を置き換えない。', schema: object(summarySchema.properties) },
@@ -75,6 +76,7 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
   try {
     return runtime.tasks.once(actor, lease, operationId, { name: call.name, arguments: call.arguments }, () => {
       switch (call.name) {
+        case 'conversation_send': runtime.respond(actor, lease, args.body!, call.arguments.recipient_ids as string[]); return { sent: true };
         case 'task_rest': runtime.tasks.rest(actor, lease); return { rested: true };
         case 'task_summary_save': return runtime.saveSummary(actor, lease, operationId, call.arguments as WorkSummary);
         case 'task_plan_update': return runtime.tasks.updatePlan(actor, lease, operationId, call.arguments.expected_revision as number, call.arguments.remaining as string[]);

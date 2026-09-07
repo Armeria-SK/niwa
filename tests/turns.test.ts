@@ -82,6 +82,47 @@ test('queued addressed conversations survive restart and can rest or retry witho
   } finally { runtime.close(); }
 });
 
+test('multiple administrator recipients create one message and atomic replay-safe jobs', t => {
+  const f = fixture(t); const child = f.runtime.createAgent(f.actor, '仲間'); const id = randomUUID();
+  f.runtime.submit(f.admin, id, f.room.id, '二人に質問', [f.leader.id, child.id]);
+  f.runtime.submit(f.admin, id, f.room.id, '二人に質問', [child.id, f.leader.id, child.id]);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).length, 1);
+  assert.deepEqual(f.runtime.tasks.list(f.admin).map(item => item.agent_id).sort(), [child.id, f.leader.id].sort());
+  const room = f.runtime.createRoom(f.admin, '個別', [f.leader.id]);
+  assert.throws(() => f.runtime.submit(f.admin, randomUUID(), room.id, '秘密', [f.leader.id, child.id]));
+  assert.equal(f.runtime.messages(f.admin, room.id).length, 0); assert.equal(f.runtime.tasks.list(f.admin).length, 2);
+});
+
+test('structured bot conversation delivers to all recipients once and enforces privacy', async t => {
+  const f = fixture(t); const a = f.runtime.createAgent(f.actor, 'A'); const b = f.runtime.createAgent(f.actor, 'B');
+  const runner = new TurnRunner(f.runtime, async agent => model(request => {
+    assert.match(request.system_instructions, /通常の会話はプレーンテキスト/);
+    return tool('conversation_send', { body: 'どう思いますか？', recipient_ids: agent.id === f.leader.id ? [a.id, b.id] : [] });
+  }));
+  f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '話して'); const first = f.runtime.tasks.claim(f.admin)!;
+  await runner.run(first); await runner.run(first);
+  assert.equal(f.runtime.tasks.list(f.admin).length, 3);
+  assert.equal(f.runtime.messages(f.admin, f.room.id)[0]!.body, '@A @B どう思いますか？');
+  await runner.run(f.runtime.tasks.claim(f.admin)!); await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.tasks.claim(f.admin), undefined); assert.equal(f.runtime.messages(f.admin, f.room.id).length, 3);
+  const room = f.runtime.createRoom(f.admin, '個別', [f.leader.id]); f.runtime.tasks.create(f.admin, f.leader.id, room.id, '秘密');
+  const lease = f.runtime.tasks.claim(f.admin)!;
+  assert.throws(() => f.runtime.respond(f.actor, lease, '秘密', [a.id]));
+  assert.throws(() => f.runtime.respond(f.actor, lease, '秘密', [randomUUID()]));
+  assert.equal(f.runtime.messages(f.admin, room.id).length, 0);
+});
+
+test('branching conversations share the total continuation budget', async t => {
+  const f = fixture(t); const a = f.runtime.createAgent(f.actor, 'A'); const b = f.runtime.createAgent(f.actor, 'B');
+  const ids = [f.leader.id, a.id, b.id];
+  const runner = new TurnRunner(f.runtime, async agent => model(() => tool('conversation_send', { body: '続きは？', recipient_ids: ids.filter(id => id !== agent.id) })));
+  f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '会話');
+  let runs = 0;
+  for (let lease; (lease = f.runtime.tasks.claim(f.admin)); ) { assert.ok(++runs <= 16); await runner.run(lease); }
+  assert.equal(runs, 16); assert.equal(f.runtime.messages(f.admin, f.room.id).length, 16);
+  assert.ok(f.runtime.tasks.list(f.admin).some(item => item.state === 'waiting_user'));
+});
+
 test('common rules reject stale edits, persist, and discard an old rule response before publishing', async t => {
   const f = fixture(t); const initial = f.runtime.commonRules(f.admin);
   assert.throws(() => f.runtime.updateCommonRules(f.actor, initial.revision, 'モデルからの変更'), /Administrator/);
