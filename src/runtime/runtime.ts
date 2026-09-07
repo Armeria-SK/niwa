@@ -34,7 +34,7 @@ import { taskControlSchema } from '../storage/task-control-schema.ts';
 import { productivitySchema } from '../storage/productivity-schema.ts';
 import { deletionSchema } from '../storage/deletion-schema.ts';
 import { assertDirectoryPath } from '../config/paths.ts';
-import { profileSchema } from '../domain/profile.ts';
+import { profileSchema, creationProfileSchema } from '../domain/profile.ts';
 import { Value } from '@sinclair/typebox/value';
 import type { Task, TaskLease } from '../domain/task.ts';
 import { summarySchema, type WorkSummary } from '../domain/summary.ts';
@@ -194,10 +194,11 @@ export class Runtime {
       if (interrupt) this.#interruptTasks(agentId);
     });
   }
-  createAgent(actor: Actor, name: string): Agent {
+  createAgent(actor: Actor, name: string, profile: Record<string, unknown> = {}): Agent {
     this.#leader(actor);
     this.#running(actor);
     text(name, 100);
+    check(Value.Check(creationProfileSchema, profile), 'invalid', 'Invalid initial profile');
     return transaction(this.#db, () => {
       const { count } = this.#db.prepare("SELECT count(*) AS count FROM agents WHERE role = 'member'").get() as { count: number };
       check(count < this.settings(actor).generatedLimit, 'limit', 'Generated agent limit reached');
@@ -205,6 +206,7 @@ export class Runtime {
       const selected = this.generatedModel(actor);
       this.#db.prepare('INSERT INTO agents(id,name,role,status,model,reasoning,provider) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .run(id, name, 'member', 'active', selected.model, selected.reasoning, selected.provider);
+      this.#db.prepare('INSERT INTO agent_profiles(agent_id,profile) VALUES (?,?)').run(id, JSON.stringify(profile));
       return this.#agent(id);
     });
   }

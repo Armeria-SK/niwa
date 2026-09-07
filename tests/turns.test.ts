@@ -521,10 +521,16 @@ test('operation replay does not create duplicate bots or resurrect a deleted mem
   const f = fixture(t);
   const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '操作');
   const lease = f.runtime.tasks.claim(f.admin)!;
-  const call = { name: 'agents_create', tool_call_id: 'call', arguments: { name: '同じBot' } };
+  const profile = { role: '調査', persona: '簡潔で穏やか', shape: 'star', color: '#123456', motion: 'none' };
+  const call = { name: 'agents_create', tool_call_id: 'call', arguments: { name: '同じBot', profile } };
   const first = executeTurnTool(f.runtime, f.actor, lease, call, '0:0');
   const replay = executeTurnTool(f.runtime, f.actor, lease, call, '0:0');
   assert.deepEqual(first, replay);
+  assert.equal(f.runtime.agents(f.admin).length, 2);
+  assert.deepEqual(f.runtime.profile(f.admin, first.id as string), profile);
+  assert.equal(f.runtime.agents(f.admin).find(agent => agent.id === first.id)!.role, 'member');
+  const forged = { ...call, arguments: { name: '権限変更', profile: { ...profile, provider: 'ollama' } } };
+  assert.ok(executeTurnTool(f.runtime, f.actor, lease, forged, '0:1').error);
   assert.equal(f.runtime.agents(f.admin).length, 2);
   const source = f.runtime.post(f.admin, f.room.id, '人工の出所');
   const memory = f.runtime.remember(f.actor, source.id, '消す内容', `${task.id}:memory`);

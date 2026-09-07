@@ -3,22 +3,23 @@ import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
 import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon } from '../icons.jsx';
 import { uid } from '../data.js';
 import { ConversationWork } from '../ConversationWork.jsx';
+import './Conversation.css';
 
-export function Conversation({ thread, tasks, onWork, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
+export function Conversation({ thread, tasks, onWork, onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
   const [showPresence, setShowPresence] = useState(false);
   const visibleMembers = thread.scope === 'private' ? members.filter(item => thread.members.includes(item.id)) : members;
   const presenceProps = { members: visibleMembers, paused, onPause, onAppearance, onMember, isPrivate: thread.scope === 'private' };
   return <>
     <main className="conversation" id="main-content" tabIndex={-1} aria-label={thread.title}>
       <div className="conversation-mobile-tools"><button className="text-button" onClick={onBack}><BackIcon size={20} />スレッド</button><IconButton label="メンバーの様子" onClick={() => setShowPresence(true)}><UsersIcon size={22} /></IconButton></div>
-      <ThreadBody onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} onWork={onWork} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
+      <ThreadBody onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} onWork={onWork} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
     </main>
     <aside className="presence-rail" aria-label="メンバーの様子"><Presence {...presenceProps} /></aside>
     {showPresence ? <Modal title="メンバーの様子" onClose={() => setShowPresence(false)} className="presence-modal"><Presence {...presenceProps} noHeading onMember={id => { setShowPresence(false); onMember(id); }} onAppearance={id => { setShowPresence(false); onAppearance(id); }} /></Modal> : null}
   </>;
 }
 
-function ThreadBody({ thread, tasks, onWork, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
+function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState(null);
   const [attachments, setAttachments] = useState([]);
@@ -36,9 +37,11 @@ function ThreadBody({ thread, tasks, onWork, memberMap, paused, onSend, onMember
     } } finally { setSending(false); }
   }
   return <>
-    <div className="message-scroll" ref={listRef}>
-      <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : 'アーカイブ'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
+    <header className="message-scroll conversation-header" aria-label="会話のヘッダー">
+      <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" onClick={onNewSession}><PlusIcon size={15} />新規セッション</button><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : 'アーカイブ'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
       <Message message={thread.messages[0]} isRoot title={thread.title} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
+    </header>
+    <div className="message-scroll conversation-replies" ref={listRef}>
       <div className="reply-divider"><span>{Math.max(0, thread.messages.length - 1)}件の返信</span><span /></div>
       <div className="replies">{thread.messages.slice(1).map(message => <Message key={message.id} message={message} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />)}</div>
       {thread.messages.length === 1 ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}

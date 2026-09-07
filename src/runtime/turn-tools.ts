@@ -9,6 +9,7 @@ import { procedureDefinitions } from './procedures.ts';
 import { readPublicPage } from '../tools/web/public-page.ts';
 import type { WebSearch } from '../tools/web/search.ts';
 import type { WorkspaceRead, WorkspaceWriter } from '../tools/files/client.ts';
+import { creationProfileSchema } from '../domain/profile.ts';
 
 export interface ExternalTools { readPage?: typeof readPublicPage; search?: WebSearch; workspace?: WorkspaceRead; workspaceWrite?: WorkspaceWriter }
 
@@ -31,7 +32,7 @@ const definitions = {
   artifact_create: { description: '現在の会話の参加者へ渡すテキスト成果物を保存する。内容は会話の公開範囲に従う。', schema: object({ name: short(), kind: short(), description: Type.String({ minLength: 1, maxLength: 1000 }), content: body() }) },
   decision_report: { description: '現在の会話で決まったことを管理者のできごと一覧へ報告する。', schema: object({ title: short(), detail: body() }) },
   profile_update: { description: '会話で決めた自分の名前・性格・話し方を保存する。他Botや権限は変更しない。', schema: object({ name: short(), persona: Type.String({ minLength: 1, maxLength: 10_000 }) }) },
-  agents_create: { description: '新しいBotを1体登録する。リーダーだけが利用できる。', schema: object({ name: short() }) },
+  agents_create: { description: '新しいBotを1体登録する。リーダーだけが利用できる。希望された役割・性格・見た目をprofileへ渡す。roleは説明であり権限ではない。モデルと上限は管理者設定を使う。', schema: object({ name: short(), profile: Type.Optional(creationProfileSchema) }) },
   agents_sleep: { description: 'Botを休眠させる。リーダーだけが利用できる。', schema: object({ agent_id: short() }) },
   agents_recall: { description: '休眠Botを同じ記憶で再招集する。リーダーだけが利用できる。', schema: object({ agent_id: short() }) },
   task_delegate: { description: 'この会話を読める別Botへ仕事を依頼し、結果を待つ。この呼び出しは単独で行う。', schema: object({ agent_id: short(), prompt: body() }) },
@@ -82,7 +83,7 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
         case 'profile_update':
           runtime.updateOwnProfile(actor, args.name!, args.persona!); return { saved: true };
         case 'agents_create': {
-          const agent = runtime.createAgent(actor, args.name!); return { id: agent.id, name: agent.name };
+          const agent = runtime.createAgent(actor, args.name!, call.arguments.profile as Record<string, unknown> | undefined); return { id: agent.id, name: agent.name };
         }
         case 'agents_sleep': case 'agents_recall':
           runtime.setDormant(actor, args.agent_id!, call.name === 'agents_sleep'); return { ok: true };
