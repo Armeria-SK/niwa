@@ -11,7 +11,7 @@ Linux・非rootユーザーniwa・cgroup v2の存在・Windowsドライブの未
 Node.js、Podman、専用ユーザーniwa-execは未導入。
 本番配置やユーザー作成はまだ実施していない。
 製品ルート `/home/niwa/niwa/` は空ディレクトリとして存在することを確認した。
-パッケージ候補はPodman 5.7.0、Node.js 22系。Node.jsは公式の24.16.0バイナリーを製品内へ別途配置する。
+当時のパッケージ候補はPodman 5.7.0、Node.js 22系。Node.jsはユーザー指定に従い、ルートREADMEのNodeSource手順で24.16.0以上25未満をシステムへ導入する。
 
 ```sh
 sh deploy/ubuntu/check-prerequisites.sh
@@ -23,8 +23,9 @@ sh deploy/ubuntu/check-prerequisites.sh
 ## 管理者が確認して実行する準備
 
 `prepare-executor.sh` は未実行。空の製品ルート、未作成の専用主体、x86_64を前提とする。
-Podman・uidmap・fuse-overlayfs・ACL・ダウンロード関連のOSパッケージを導入し、niwa-execとniwa-ipcを作成する。
-Node.js 24.16.0は公式SHA-256と照合して `app/runtime/` へ配置する。システムのNode.jsを置き換えない。
+先にルートREADMEのNode.js導入を済ませ、git clone前の空ルートで実行する。既にapp/sourceを配置した環境にはこの初回準備スクリプトを使わない。
+システムの `/usr/bin/node` が24.16.0以上25未満であることを変更前に検査する。Node本体のダウンロード・製品内配置は行わない。
+Podman・uidmap・fuse-overlayfs・ACLを導入し、niwa-execとniwa-ipcを作成する。
 必要なディレクトリごとに所有者・モードを設定し、niwa-execには `/home/niwa` の通過権限だけを追加する。
 サービス登録・起動、モデル認証、実行イメージ取得、Windowsドライブのマウント変更は行わない。
 
@@ -54,6 +55,8 @@ runtimeは専用ユーザーのOS一時実行領域、socketは製品ルート�
 不合格ならソケットを開かない。未完了の保存済みコンテナを回収しても、仕事を再実行しない。
 本体側は `config/niwa.json` の `programExecutorUid` を設定した場合だけツールを公開する。
 実機検証を完了するまではこの設定を追加しない。
+
+追加機能の準備と検証範囲は [ブラウザー](BROWSER.md)、[承認付き通常フォーム](FORMS.md)、[パッケージ導入](PACKAGES.md)、[共有X接続](X.md) を参照。
 
 ## 有効化前の実機確認
 

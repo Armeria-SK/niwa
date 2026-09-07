@@ -16,10 +16,10 @@
 - 親の公開取得だけで人工ページを表示でき、POST/未知XHR・Fetch・別documentの要求は外部へ到達しない。
 - Botと会話の組合せが違うと同じpage・Cookie・参照を使えない。
 - 取得の中断・サービス停止でcontainerが終了する。強制停止の残存containerにも900秒の上限がある。
-- 本体の3ツールから表示結果を取得でき、再起動後の失効参照には再navigateが必要と分かる。
+- 本体のnavigate/snapshot/followとform_prepareから結果を取得でき、再起動後の失効参照には再navigateが必要と分かる。
 
 現状は公開ページのnavigate/snapshot/followに対応する。主文書の最大100要素・20k文字を返す。
-button・フォーム送信・download・iframe/shadow DOM操作、認証が必要なページ、承認後の外部変更は未対応。
+通常フォームの準備と、承認後の専用経路による送信は [FORMS.md](FORMS.md) を参照。一般のbutton click・download・iframe/shadow DOM操作、認証が必要なページは未対応。
 取得は操作ごとに64要求/8MB、単一resource256KB。大きなページや未知の通信を使うサイトでは表示が欠ける場合がある。
 セッションはBot・会話別で最大16、同時処理6、非使用5分で終了する。資格情報は保存しない。
 Windows上の実Chromeと人工IPCの検証は、UbuntuのOS隔離確認を代替しない。
