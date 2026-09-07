@@ -31,6 +31,15 @@ Ubuntuで「端末」を開き、以下を貼り付けてEnterを押してくだ
 sudo apt-get update && sudo apt-get install -y git curl ca-certificates xz-utils
 ```
 
+このコマンドで入れるものは、次の4つです。
+
+| 名前 | 用途 |
+| --- | --- |
+| git | GitHubからNiwaを取得します。 |
+| curl | Node.jsをダウンロードします。 |
+| ca-certificates | HTTPS接続先の証明書を確認します。 |
+| xz-utils | Node.jsの圧縮ファイルを展開します。 |
+
 続いて、Niwa用のユーザー `niwa` を作ります。途中で新しいパスワードを決めてください。氏名などの欄はEnterで空欄にできます。すでに同名のユーザーがある場合は作成を省略します。
 
 ```bash
@@ -43,11 +52,11 @@ id niwa >/dev/null 2>&1 || sudo adduser niwa
 sudo -iu niwa
 ```
 
-**ここから手順4までは、この端末で続けてください。**
+**ここから手順6までは、この端末で続けてください。**
 
-## 2. Niwaをダウンロードする
+## 2. Node.jsをインストールする
 
-下の枠をまとめてコピーして実行してください。Niwaを動かすNode.jsも一緒に用意します。数分かかることがあります。
+Node.jsはNiwaを動かすためのソフトです。下の枠をまとめてコピーして実行してください。
 
 ```bash
 (
@@ -62,20 +71,38 @@ sudo -iu niwa
     -o node.tar.xz https://nodejs.org/download/release/v24.16.0/node-v24.16.0-linux-x64.tar.xz
   echo 'd804845d34eddc21dc1092b519d643ef40b1f58ec5dec5c22b1f4bd8fabde6c9  node.tar.xz' | sha256sum -c -
   tar -xJf node.tar.xz -C /home/niwa/niwa/app/runtime
-  export PATH="/home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin:$PATH"
-  git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa/app/source
-  cd /home/niwa/niwa/app/source
-  npm ci
-  npm run build
-  printf '\nNiwaのダウンロードと準備が完了しました。\n'
+  printf '\nNode.jsの準備が完了しました。\n'
 )
 ```
 
-最後に「Niwaのダウンロードと準備が完了しました。」と表示されれば次へ進めます。途中でエラーが出た場合は、その表示を確認してから進めてください。
+「Node.jsの準備が完了しました。」と表示されれば次へ進めます。途中でエラーが出た場合は、その表示を確認してから進めてください。
 
 Node.jsは[公式配布元](https://nodejs.org/download/release/v24.16.0/)から取得し、ダウンロードした内容を照合しています。
 
-## 3. 初回の設定を作る
+## 3. Niwaをダウンロードする
+
+GitHubからNiwaを取得します。
+
+```bash
+git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa/app/source
+```
+
+## 4. Niwaを使う準備をする
+
+Niwaに必要な部品を入れ、ブラウザーで使える形にします。数分かかることがあります。
+
+```bash
+(
+  set -eu
+  export PATH="/home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin:$PATH"
+  cd /home/niwa/niwa/app/source
+  npm ci
+  npm run build
+  printf '\nNiwaの準備が完了しました。\n'
+)
+```
+
+## 5. 初回の設定を作る
 
 以下は**最初の1回だけ**実行します。
 
@@ -87,7 +114,7 @@ Node.jsは[公式配布元](https://nodejs.org/download/release/v24.16.0/)から
 
 `Installation configuration created.` と表示されれば完了です。
 
-## 4. 起動する
+## 6. 起動する
 
 ```bash
 /home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin/node \
@@ -99,7 +126,7 @@ Node.jsは[公式配布元](https://nodejs.org/download/release/v24.16.0/)から
 
 ブラウザーで [Niwaを開く](http://127.0.0.1:3210) を押します。アドレスを手入力する場合も `http://127.0.0.1:3210` を使ってください。
 
-## 5. ログインする
+## 7. ログインする
 
 Niwaへのログインには、初回起動時に作られる管理者キーを使います。
 
@@ -111,7 +138,7 @@ sudo -u niwa cat /home/niwa/niwa/secrets/admin-key
 
 表示された長い文字列をコピーし、Niwaのログイン画面に貼り付けます。これはNiwaを操作するためのパスワードに相当するので、ほかの人に送ったり公開したりしないでください。
 
-## 6. AIを接続して、話しかける
+## 8. AIを接続して、話しかける
 
 1. Niwaの「設定」→「モデルと接続」を開きます。
 2. 「ChatGPTで接続（試験対応）」を押し、「ChatGPTのログインを開く」からログインします。Niwaを起動しているPCのブラウザーで進めてください。
@@ -141,8 +168,8 @@ sudo -u niwa /home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin/node \
 | 状況 | 確認すること |
 | --- | --- |
 | 画面が開かない | 起動用の端末が開いていて、`Niwa is running.` と表示されているか確認してください。 |
-| 起動できない | すでに別の端末でNiwaが動いていないか確認してください。初回設定は手順3の1回だけです。 |
-| 管理者キーが分からない | 手順5のコマンドでもう一度表示できます。 |
+| 起動できない | すでに別の端末でNiwaが動いていないか確認してください。初回設定は手順5の1回だけです。 |
+| 管理者キーが分からない | 手順7のコマンドでもう一度表示できます。 |
 | Botが返事をしない | 「設定」→「モデルと接続」で接続状態と選んだモデルを確認してください。仕事が確認待ちになっている場合は、画面の案内を確認してください。 |
 | ダウンロード中に止まった | インターネット接続と、端末のエラー表示を確認してください。すでに作成されたフォルダーを削除してやり直す前に、中に必要なデータがないか確認してください。 |
 

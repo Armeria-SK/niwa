@@ -1,0 +1,5 @@
+.conversation-work { margin: 24px 0 16px; padding: 14px 18px; border-left: 2px solid var(--border); color: var(--text); font-size: 12px; line-height: 1.6; }
+.conversation-work-heading { margin: 0 0 10px; font-weight: 600; }
+.conversation-work > div { margin: 8px 0; }
+.conversation-work > div p { margin: 2px 0 0; opacity: .75; }
+.conversation-work > .text-button { margin-top: 8px; }

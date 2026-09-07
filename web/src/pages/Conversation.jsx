@@ -69,7 +69,7 @@ function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, on
       {history.error ? <p role="alert">{history.error}<button className="text-button" onClick={history.reload}>再読み込み</button></p> : null}
       {history.next !== null ? <button className="text-button" disabled={history.loading} onClick={loadEarlier}>以前の返信を50件読み込む</button> : null}
       <div className="replies">{history.items.map(message => <Message key={message.id} message={message} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />)}</div>
-      {thread.message_count === 1 ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
+      {thread.message_count === 1 && !tasks.some(task => !['done', 'canceled'].includes(task.status)) ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
       <ConversationWork tasks={tasks} members={memberMap} onOpen={onWork} />
     </div>
     <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。返信するには「保管から戻す」を選んでください。</p> : null}
