@@ -148,11 +148,16 @@ test('profile updates persist display choices without granting leader authority 
   const actor = f.runtime.agentSession(f.leader.id);
   const child = f.runtime.createAgent(actor, '人工の子');
   const patch = { name: '新しい名前', role: 'リーダー', persona: '静かに話す', shape: 'cat', color: '#123abc', motion: 'sway' };
-  assert.equal((await f.call(`/api/agents/${child.id}/profile`, 'PATCH', patch)).status, 200);
+  const version = f.runtime.profileVersion(f.admin, child.id);
+  const response = await f.call(`/api/agents/${child.id}/profile`, 'PATCH', { patch, version });
+  assert.equal(response.status, 200);
+  assert.equal((await f.call(`/api/agents/${child.id}/profile`, 'PATCH', { patch: { persona: '古い画面の変更' }, version })).status, 409);
+  assert.equal(f.runtime.profile(f.admin, child.id).persona, '静かに話す');
+  assert.equal((await f.call(`/api/agents/${child.id}/profile`, 'PATCH', patch)).status, 400);
   assert.equal(f.runtime.agents(f.admin).find(agent => agent.id === child.id)?.role, 'member');
   assert.equal(f.runtime.agents(f.admin).find(agent => agent.id === child.id)?.name, '新しい名前');
   assert.equal(f.runtime.profile(f.admin, child.id).shape, 'cat');
   assert.throws(() => f.runtime.profile(actor, child.id), /Private/);
   assert.throws(() => f.runtime.updateProfile(f.runtime.agentSession(child.id), child.id, { name: '勝手な変更' }), /Administrator/);
-  assert.equal((await f.call(`/api/agents/${child.id}/profile`, 'PATCH', { shape: '../secrets' })).status, 400);
+  assert.equal((await f.call(`/api/agents/${child.id}/profile`, 'PATCH', { patch: { shape: '../secrets' }, version: f.runtime.profileVersion(f.admin, child.id) })).status, 400);
 });

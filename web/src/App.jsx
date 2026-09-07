@@ -114,12 +114,14 @@ export function App() {
     const value = !threads.find(item => item.id === id)[field];
     return mutate(() => api(`/rooms/${id}/organization`, 'PATCH', { [field]: value }), field === 'pinned' ? (value ? 'スレッドをピン留めしました' : 'ピン留めを解除しました') : (value ? 'アーカイブしました。会話は残っています。' : 'スレッドを戻しました'));
   }
-  function updateMember(id, patch) {
-    const { model, effort, provider = memberMap[id].provider, ...profile } = patch;
-    return mutate(async () => {
+  async function updateMember(id, patch) {
+    const { model, effort, profile_version, provider = memberMap[id].provider, ...profile } = patch;
+    let version;
+    const ok = await mutate(async () => {
+      ({ version } = await api(`/agents/${id}/profile`, 'PATCH', { patch: profile, version: profile_version }));
       if (model && (model !== memberMap[id].model || provider !== memberMap[id].provider || effort !== memberMap[id].effort)) await api(`/agents/${id}/model`, 'PUT', { provider, model, ...(provider === 'openai_subscription' ? { reasoning: effort } : {}) });
-      await api(`/agents/${id}/profile`, 'PATCH', profile);
     });
+    return ok ? version : false;
   }
   async function addMember(draft) {
     const ok = await createThread({ title: '仲間を迎える相談', text: `新しい仲間を作ってください。希望: ${JSON.stringify(draft)}`, scope: 'shared' });

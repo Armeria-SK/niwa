@@ -177,22 +177,26 @@ export class Runtime {
     const row = this.#db.prepare('SELECT profile FROM agent_profiles WHERE agent_id=?').get(agentId);
     return row ? JSON.parse(row.profile as string) as Record<string, string> : {};
   }
-  updateProfile(actor: Actor, agentId: string, patch: Record<string, unknown>): void {
+  profileVersion(actor: Actor, agentId: string): string {
+    return createHash('sha256').update(JSON.stringify([this.profile(actor, agentId), this.#agent(agentId).name])).digest('hex');
+  }
+  updateProfile(actor: Actor, agentId: string, patch: Record<string, unknown>, expected?: string): void {
     this.#admin(actor); this.#agent(agentId);
     check(Value.Check(profileSchema, patch), 'invalid', 'Invalid profile');
-    this.#writeProfile(actor, agentId, patch, true);
+    this.#writeProfile(actor, agentId, patch, true, expected);
   }
   updateOwnProfile(actor: Actor, name: string, persona: string): void {
     const principal = this.#bot(actor); this.#running(actor);
     this.#writeProfile(actor, principal.id, { name: text(name, 100), persona: text(persona, 10_000) }, false);
   }
-  #writeProfile(actor: Actor, agentId: string, patch: Record<string, unknown>, interrupt: boolean): void {
-    if (interrupt) {
-      // Invalidate before the control write: a failed edit may discard work, but never preserve stale instructions.
-      const memory = this.#memory(actor, agentId);
-      transaction(memory, () => memory.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]';"));
-    }
+  #writeProfile(actor: Actor, agentId: string, patch: Record<string, unknown>, interrupt: boolean, expected?: string): void {
     transaction(this.#db, () => {
+      check(expected === undefined || expected === this.profileVersion(actor, agentId), 'conflict', 'Profile changed; reload before saving');
+      if (interrupt) {
+        // Invalidate before the control write: a failed edit may discard work, but never preserve stale instructions.
+        const memory = this.#memory(actor, agentId);
+        transaction(memory, () => memory.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]';"));
+      }
       const { name, ...details } = patch;
       if (name !== undefined) this.#db.prepare('UPDATE agents SET name=? WHERE id=?').run(text(name, 100), agentId);
       const next = { ...this.profile(actor, agentId), ...details };
