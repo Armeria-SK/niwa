@@ -18,6 +18,10 @@ import { braveSearch } from '../tools/web/search.ts';
 import { configuredWorkspaceReader, configuredWorkspaceWriter, configuredWorkspaceDownloader } from '../tools/files/client.ts';
 import { configuredProgramExecutor } from '../sandbox/client.ts';
 import { configuredBrowserExecutor } from '../tools/browser/client.ts';
+import { XOAuth } from '../auth/x-oauth.ts';
+import { readXClient } from '../auth/x-client.ts';
+import { XApi } from '../tools/x/api.ts';
+import { XPostLog } from '../tools/x/post-log.ts';
 
 /** All paths originate at the product root. Listening is loopback-only for the HTTPS proxy. */
 export async function startService(root: string, resolve?: ResolveAdapter, portOverride?: number) {
@@ -26,10 +30,12 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
   let runtime: Runtime | undefined; let scheduler: Scheduler | undefined; let server: Server | undefined;
   let backups: Backups | undefined;
   let subscription: Subscription | undefined;
+  let xPosts: XPostLog | undefined;
+  let xAuth: XOAuth | undefined;
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {
     const closed = server ? new Promise<void>(done => { server!.close(() => done()); server!.closeAllConnections(); }) : Promise.resolve();
-    await scheduler?.stop(); await subscription?.close(); await backups?.stop(); await closed;
+    xAuth?.close(); await scheduler?.stop(); await xPosts?.close(); await subscription?.close(); await backups?.stop(); await closed;
     runtime?.close(); unlock();
   })();
   try {
@@ -41,7 +47,12 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     const models = new ModelGateway(runtime, fetch, subscription);
     backups = new Backups(runtime, paths, config);
     const searchKey = readSearchKey(paths.secrets);
+    const xClient = config.xAccountId ? readXClient(paths.secrets) : undefined;
+    xAuth = config.xAccountId && xClient ? new XOAuth(new FileCredentialStore(join(paths.secrets, 'x.json')), xClient, config.xAccountId) : undefined;
+    const xApi = xAuth ? new XApi(xAuth) : undefined;
+    if (xAuth && xApi) xPosts = new XPostLog(join(paths.runtime, 'x-posts.db'), xAuth.accountId, (post, signal) => xApi.post(post, signal));
     scheduler = new Scheduler(runtime, new TurnRunner(runtime, resolve ?? models.resolve, {
+      ...(xApi && xPosts ? { x: { api: xApi, posts: xPosts } } : {}),
       ...(config.browserExecutorUid ? { browser: configuredBrowserExecutor(join(paths.runtime, 'sockets', 'browser.sock'), config.browserExecutorUid) } : {}),
       ...(config.programExecutorUid ? { program: configuredProgramExecutor(join(paths.runtime, 'sockets', 'program.sock'), config.programExecutorUid) } : {}),
       ...(searchKey ? { search: braveSearch(searchKey) } : {}),
@@ -52,7 +63,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     }));
     server = createApiServer(runtime, auth, models, fileURLToPath(new URL('../client/', import.meta.url)), backups,
       config.workspaceExecutorUid ? { read: configuredWorkspaceReader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid),
-        download: configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid) } : undefined);
+        download: configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid) } : undefined, xAuth);
     await new Promise<void>((done, reject) => {
       server!.once('error', reject);
       server!.listen(portOverride ?? config.port, '127.0.0.1', () => { server!.removeListener('error', reject); done(); });

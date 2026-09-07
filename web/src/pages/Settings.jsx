@@ -6,6 +6,7 @@ import { SubscriptionConnection } from '../SubscriptionConnection.jsx';
 import { FallbackConnection } from '../FallbackConnection.jsx';
 import { ModelRoutes } from '../ModelRoutes.jsx';
 import { ModelDefaults } from '../ModelDefaults.jsx';
+import { XConnection } from '../XConnection.jsx';
 import { CheckIcon, ClockIcon, InfoIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 
 export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, members, onUpdateMembers, notify }) {
@@ -30,6 +31,7 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
         <div className="form-section-label">Ollamaへの自動切替</div><label className="field"><span>Ollamaの接続先URL</span><input type="url" value={draft.ollamaUrl} onChange={e => change('ollamaUrl', e.target.value)} placeholder="http://…:11434" /></label>
         <FallbackConnection key={settings.ollamaUrl} savedUrl={settings.ollamaUrl} />
         <ModelRoutes />
+        <XConnection />
       </section> : null}
       {tab === 'activity' ? <section className="settings-section"><h2>Botたちの活動</h2><p>人数と同時に活動できる数は、別々に設定できます。</p>
         <div className="pause-setting"><div><strong>{paused ? '活動を一時停止しています' : 'Botたちは活動中です'}</strong><small>一時停止中も、会話や設定を確認できます。</small></div><button className="button secondary" type="button" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? '再開' : '一時停止'}</button></div>

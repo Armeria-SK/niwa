@@ -8,7 +8,8 @@ import { WebAuth } from '../web/auth.ts';
 
 const schema = Type.Object({ version: Type.Literal(1), origin: Type.String({ maxLength: 2048 }),
   port: Type.Integer({ minimum: 1, maximum: 65535 }), workspaceExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
-  programExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })), browserExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })) }, { additionalProperties: false });
+  programExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })), browserExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
+  xAccountId: Type.Optional(Type.String({ pattern: '^[0-9]{1,19}$' })) }, { additionalProperties: false });
 export type Installation = Static<typeof schema>;
 function validate(value: unknown): Installation {
   if (!Value.Check(schema, value)) throw new Error('Invalid config/niwa.json');
