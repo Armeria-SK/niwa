@@ -27,6 +27,44 @@ function model(reply: (request: ModelRequest) => ModelEvent[] | Promise<ModelEve
     async *run(request) { yield* await reply(request); } };
 }
 
+test('autonomous work can choose quiet rest, then act on a later occasion within the same budget', async t => {
+  const f = fixture(t);
+  f.runtime.updateProfile(f.admin, f.leader.id, { persona: '雨音の観察に関心があります。' });
+  const input = { id: randomUUID(), agent_id: f.leader.id, room_id: f.room.id, prompt: '関心を探究してください', autonomous: true,
+    interval_ms: 60_000, next_at: Date.now() + 60_000, max_runs: 3, timeout_ms: 60_000 };
+  f.runtime.schedules.create(f.admin, input); f.runtime.schedules.dispatch(f.admin, input.next_at);
+  let calls = 0;
+  const runner = new TurnRunner(f.runtime, async () => model(request => {
+    assert.match(request.system_instructions, /雨音の観察/); assert.match(request.system_instructions, /自発活動の機会/);
+    assert.equal(request.tools.some(item => item.name === 'task_rest'), true);
+    return ++calls === 1 ? tool('task_rest', {}) : complete('雨音の観察について、次に調べたいことを整理しました');
+  }));
+  await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).length, 0); assert.equal(f.runtime.updates(f.admin).length, 0);
+  assert.equal(f.runtime.tasks.list(f.admin)[0]!.result, '今回は休息しました。');
+  f.runtime.schedules.dispatch(f.admin, input.next_at + 60_000);
+  await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).length, 1);
+  assert.equal(f.runtime.schedules.list(f.admin)[0]!.model_calls, 2);
+  assert.equal(f.runtime.schedules.list(f.admin)[0]!.run_count, 2);
+  const regular = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '通常の依頼');
+  const lease = f.runtime.tasks.claim(f.admin)!;
+  assert.equal(turnTools(true).some(item => item.name === 'task_rest'), false);
+  assert.equal(executeTurnTool(f.runtime, f.actor, lease, { name: 'task_rest', tool_call_id: 'invalid-rest', arguments: {} }, 'invalid-rest').error, 'forbidden');
+  assert.equal(f.runtime.tasks.get(f.admin, regular.id).state, 'running');
+});
+
+test('autonomous work waits without sending when the model cannot choose rest', async t => {
+  const f = fixture(t); let calls = 0;
+  const input = { id: randomUUID(), agent_id: f.leader.id, room_id: f.room.id, prompt: '関心を探究', autonomous: true,
+    interval_ms: 60_000, next_at: Date.now() + 60_000, max_runs: 3, timeout_ms: 60_000 };
+  f.runtime.schedules.create(f.admin, input); f.runtime.schedules.dispatch(f.admin, input.next_at);
+  await new TurnRunner(f.runtime, async () => ({ ...model(() => { calls++; return complete('呼ばれない'); }),
+    capabilities: { ...openAISubscriptionAdapterCapabilities, supports_tool_calls: false } })).run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(calls, 0); assert.equal(f.runtime.schedules.list(f.admin)[0]!.model_calls, 0);
+  assert.equal(f.runtime.tasks.list(f.admin)[0]!.state, 'waiting_provider');
+});
+
 test('shared-change work reads the current conversation and its reply does not trigger itself', async t => {
   const f = fixture(t); let calls = 0;
   const input = { id: randomUUID(), agent_id: f.leader.id, room_id: f.room.id, prompt: '新しい話題を検討', trigger_kind: 'shared_changes' as const,

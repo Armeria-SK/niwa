@@ -157,11 +157,12 @@ test('model reservations share one persistent schedule budget across delegation 
 test('existing schedules migrate with a finite budget and retain creation replay compatibility', t => {
   const f = fixture(t); f.runtime.schedules.create(f.admin, f.input);
   const db = new DatabaseSync(join(f.root, 'control.db'));
-  db.exec('ALTER TABLE schedules DROP COLUMN max_model_calls; ALTER TABLE schedules DROP COLUMN model_calls; ALTER TABLE schedules DROP COLUMN trigger_kind; ALTER TABLE schedules DROP COLUMN source_revision; ALTER TABLE schedules DROP COLUMN deleted; PRAGMA user_version=14;');
+  db.exec('ALTER TABLE schedules DROP COLUMN max_model_calls; ALTER TABLE schedules DROP COLUMN model_calls; ALTER TABLE schedules DROP COLUMN trigger_kind; ALTER TABLE schedules DROP COLUMN source_revision; ALTER TABLE schedules DROP COLUMN deleted; ALTER TABLE schedules DROP COLUMN autonomous; PRAGMA user_version=14;');
   db.close();
   const r = f.reopen(); const admin = r.administrator();
   const schedule = r.schedules.create(admin, f.input);
   assert.equal(schedule.max_model_calls, f.input.max_runs * 24); assert.equal(schedule.model_calls, 0);
+  assert.equal(schedule.autonomous, 0);
 });
 
 test('shared changes trigger once across restart, ignore private rooms and self replies, and detect source corrections', t => {
@@ -169,6 +170,7 @@ test('shared changes trigger once across restart, ignore private rooms and self 
   const actor = r.agentSession(f.leader.id);
   const privateRoom = r.createRoom(admin, '個別の相談', [f.leader.id]);
   assert.throws(() => r.schedules.create(admin, { ...f.input, room_id: privateRoom.id, trigger_kind: 'shared_changes' }), /shared room/);
+  assert.throws(() => r.schedules.create(admin, { ...f.input, room_id: privateRoom.id, autonomous: true }), /shared room/);
   r.post(admin, f.room.id, '登録より前の発言');
   r.schedules.create(admin, { ...f.input, trigger_kind: 'shared_changes' });
   r.schedules.dispatch(admin, f.input.next_at);

@@ -1,5 +1,7 @@
 .schedule-fields { border: 0; margin: 0; min-width: 0; }
 .schedule-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.schedule-autonomy { display: flex; align-items: center; gap: 10px; }
+.schedule-autonomy input { width: auto; }
 .schedule-numbers, .schedule-interval { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .schedule-fields input, .schedule-fields select { min-width: 0; max-width: 100%; }
 .schedule-fields input[type="datetime-local"] { width: 100%; }

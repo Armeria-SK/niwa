@@ -72,12 +72,15 @@ export class TurnRunner {
           role: 'user', content: JSON.stringify({ message_id: message.id, author_id: message.author_id, text: message.body }),
         }));
         const workState = runtime.tasks.workState(actor, lease);
+        if (workState.autonomous && !adapter.capabilities.supports_tool_calls) {
+          runtime.tasks.wait(actor, lease, 'waiting_provider', '自発活動には休息を選べるツール対応モデルが必要です。'); return;
+        }
         const members = runtime.agents(actor).map(member => ({ id: member.id, name: member.name, role: member.role, status: member.status }));
         const makeRequest = (): ModelRequest => ({
-          system_instructions: `${RULES}\nあなた: ${JSON.stringify({ id: agent.id, name: agent.name, role: agent.role, profile: runtime.profile(actor, agent.id) })}\nメンバー: ${JSON.stringify(members)}\n利用できる自分の記憶: ${JSON.stringify(context.memories.slice(-20).map(memory => ({ id: memory.id, body: memory.body })))}`,
+          system_instructions: `${RULES}${workState.autonomous ? '\n今回は自発活動の機会です。自分の関心・人格、最近の会話、過去の成果を確認し、管理者の方針の範囲で役立つ活動を自分で選んでください。毎回の発言や作業は必須ではありません。今は必要がなければtask_restを単独で呼んで休んでください。私的な経験をそのまま共有会話へ公開しないでください。' : ''}\nあなた: ${JSON.stringify({ id: agent.id, name: agent.name, role: agent.role, profile: runtime.profile(actor, agent.id) })}\nメンバー: ${JSON.stringify(members)}\n利用できる自分の記憶: ${JSON.stringify(context.memories.slice(-20).map(memory => ({ id: memory.id, body: memory.body })))}`,
           messages: [...base, { role: 'user', content: `現在の依頼: ${lease.task.prompt}` }, ...history,
             { role: 'user', content: JSON.stringify({ work_state: workState }) }],
-          tools: adapter.capabilities.supports_tool_calls ? turnTools(agent.role === 'leader', this.#external, runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared') : [],
+          tools: adapter.capabilities.supports_tool_calls ? turnTools(agent.role === 'leader', this.#external, runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared', workState.autonomous) : [],
           response_contract: { type: 'text' }, model_options: {},
           budget: { max_output_tokens: 4096, max_total_tokens: 64_000, max_requests: 1, max_tool_calls: 8 },
           ...(adapter.adapter_id === 'openai-subscription' && isReasoningEffort(agent.reasoning) ? { reasoning_effort: agent.reasoning } : {}),
@@ -130,9 +133,9 @@ export class TurnRunner {
         return;
       }
       history.push({ role: 'assistant', content, tool_calls: calls });
-      const mixedWait = calls.length > 1 && calls.some(call => ['task_delegate', 'ask_user'].includes(call.name));
+      const mixedWait = calls.length > 1 && calls.some(call => ['task_delegate', 'ask_user', 'task_rest'].includes(call.name));
       for (const [index, call] of calls.entries()) {
-        const output = mixedWait ? { error: 'task_delegate and ask_user must be called alone.' }
+        const output = mixedWait ? { error: 'task_delegate, ask_user and task_rest must be called alone.' }
           : await executeAsyncTurnTool(runtime, actor, lease, call, `${step.step}:${index}`, signal, this.#external);
         history.push({ role: 'tool', name: call.name, tool_call_id: call.tool_call_id, content: JSON.stringify(output) });
         if (!runtime.tasks.active(actor, lease)) return;

@@ -56,10 +56,10 @@ export class Tasks {
   #event(id: string, kind: string): void {
     this.#db.prepare('INSERT INTO task_events(task_id,kind,created_at) VALUES (?,?,?)').run(id, kind, Date.now());
   }
-  #change(id: string, state: TaskState, result: string | null = null, reason: string | null = null): void {
+  #change(id: string, state: TaskState, result: string | null = null, reason: string | null = null, announce = true): void {
     this.#db.prepare('UPDATE tasks SET state=?,result=?,wait_reason=?,updated_at=? WHERE id=?').run(state, result, reason, Date.now(), id);
     if (isTerminal(state)) this.#db.prepare('UPDATE tasks SET paused=0 WHERE id=?').run(id);
-    if (state === 'completed') {
+    if (state === 'completed' && announce) {
       const task = this.#read(id);
       this.#db.prepare("INSERT INTO updates(room_id,author_id,kind,title,detail,task_id,created_at) VALUES (?,?,'done',?,?,?,?)")
         .run(task.room_id, task.agent_id, task.prompt.slice(0, 200), result || '完了', id, Date.now());
@@ -96,6 +96,16 @@ export class Tasks {
   active(actor: Actor, lease: TaskLease): boolean {
     try { this.#owned(actor, lease); return true; } catch { return false; }
   }
+  #autonomous(taskId: string): boolean {
+    return !!this.#db.prepare('SELECT 1 FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id WHERE r.task_id=? AND s.autonomous=1').get(taskId);
+  }
+  rest(actor: Actor, lease: TaskLease): void {
+    transaction(this.#db, () => {
+      const task = this.#owned(actor, lease); this.#access.room(actor, task.room_id);
+      check(this.#autonomous(task.id), 'forbidden', 'Only autonomous work can choose rest');
+      this.#change(task.id, 'completed', '今回は休息しました。', null, false);
+    });
+  }
   /** Reserve before transport; failures and interruptions conservatively consume the reservation. */
   reserveModelCall(actor: Actor, lease: TaskLease): boolean {
     return transaction(this.#db, () => {
@@ -123,7 +133,7 @@ export class Tasks {
     const memory = this.#access.memory(actor, task.agent_id);
     const plan = memory.prepare('SELECT revision,remaining FROM task_plans WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)').get(task.id);
     return {
-      task: publicTask(task), runtime_paused: this.#paused(),
+      task: publicTask(task), runtime_paused: this.#paused(), autonomous: this.#autonomous(task.id),
       remaining_plan: { revision: plan ? Number(plan.revision) : 0, remaining: plan ? JSON.parse(String(plan.remaining)) as string[] : [] },
       applied_procedures: memory.prepare('SELECT procedure_id,revision,applicability FROM procedure_uses WHERE task_id=? ORDER BY created_at,operation_id').all(task.id),
       administrator_replies: this.#db.prepare('SELECT sequence,body,created_at FROM task_replies WHERE task_id=? ORDER BY sequence').all(task.id),

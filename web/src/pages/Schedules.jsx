@@ -26,6 +26,7 @@ export function Schedules({ schedules, members, threads, onSave, onToggle, onDel
         <div className="activity-row-meta"><span>{members[row.agent_id]?.name}</span><span>{exhausted ? '上限に到達' : row.enabled ? '有効' : '停止中'}</span></div>
         <h2>{row.prompt}</h2><p>{formatInterval(row.interval_ms)}ごと · 起動 {row.run_count} / {row.max_runs}回 · 1回の期限 {row.timeout_ms / 60_000}分</p>
         {row.trigger_kind === 'shared_changes' ? <p>共有会話に変更があったときだけ起動します。</p> : null}
+        {row.autonomous ? <p>関心に応じて活動を選び、必要がなければ休息します。</p> : null}
         <p>モデル呼び出し {row.model_calls} / {row.max_model_calls}回</p>
         {!exhausted ? <p>{row.enabled ? '次回予定' : '再開後の予定'}：<time dateTime={new Date(row.next_at).toISOString()}>{formatTime(row.next_at)}</time></p> : null}
         {row.wait_reason ? <p className="task-reason">{row.wait_reason}</p> : null}
@@ -41,6 +42,7 @@ export function Schedules({ schedules, members, threads, onSave, onToggle, onDel
 function ScheduleForm({ members, threads, onSave, onClose }) {
   const [roomId, setRoomId] = useState(threads[0]?.id || '');
   const [trigger, setTrigger] = useState('interval');
+  const [autonomous, setAutonomous] = useState(false);
   const [agentId, setAgentId] = useState('');
   const [prompt, setPrompt] = useState('');
   const [first, setFirst] = useState(() => localTime(Date.now() + 3600_000));
@@ -53,7 +55,7 @@ function ScheduleForm({ members, threads, onSave, onClose }) {
   const [error, setError] = useState('');
   const submission = useRef(null);
   const room = threads.find(item => item.id === roomId);
-  const selectableRooms = threads.filter(item => trigger === 'interval' || item.scope === 'shared');
+  const selectableRooms = threads.filter(item => (!autonomous && trigger === 'interval') || item.scope === 'shared');
   const eligible = Object.values(members).filter(member => member.status !== 'sleeping' && (room?.scope === 'shared' || room?.members.includes(member.id)));
   const recipient = eligible.some(member => member.id === agentId) ? agentId : eligible[0]?.id || '';
   async function save(event) {
@@ -62,7 +64,7 @@ function ScheduleForm({ members, threads, onSave, onClose }) {
     if (!Number.isSafeInteger(next_at) || next_at <= Date.now()) { setError('初回日時を現在より後にしてください。'); return; }
     const body = { agent_id: recipient, room_id: roomId, prompt: prompt.trim(), next_at,
       interval_ms: Number(interval) * Number(unit) * 60_000, max_runs: Number(runs), timeout_ms: Number(timeout) * 60_000,
-      max_model_calls: Number(modelLimit), trigger_kind: trigger };
+      max_model_calls: Number(modelLimit), trigger_kind: trigger, autonomous };
     const key = JSON.stringify(body);
     if (submission.current?.key !== key) submission.current = { key, id: crypto.randomUUID() };
     setBusy(true); setError('');
@@ -71,10 +73,12 @@ function ScheduleForm({ members, threads, onSave, onClose }) {
   }
   return <Modal title="定期実行を追加" onClose={() => { if (!busy) onClose(); }}><form onSubmit={save}>
     <fieldset className="modal-body form-stack schedule-fields" disabled={busy}>
+      <label className="schedule-autonomy"><input type="checkbox" checked={autonomous} onChange={e => { setAutonomous(e.target.checked); if (e.target.checked && room?.scope !== 'shared') setRoomId(threads.find(item => item.scope === 'shared')?.id || ''); }} />関心から活動を選ぶ</label>
       <label className="field"><span>起動する条件</span><select aria-label="起動する条件" value={trigger} onChange={e => { const value = e.target.value; setTrigger(value); if (value === 'shared_changes' && room?.scope !== 'shared') setRoomId(threads.find(item => item.scope === 'shared')?.id || ''); }}><option value="interval">決めた間隔で実行</option><option value="shared_changes">共有会話に変更があったら実行</option></select></label>
       <label className="field"><span>会話</span><select aria-label="会話" required value={roomId} onChange={e => setRoomId(e.target.value)}>{!selectableRooms.length ? <option value="">共有会話を作成してください</option> : selectableRooms.map(item => <option key={item.id} value={item.id}>{item.title}（{item.scope === 'shared' ? '共有' : '個別'}）</option>)}</select></label>
       <label className="field"><span>担当するBot</span><select aria-label="担当するBot" required value={recipient} onChange={e => setAgentId(e.target.value)}>{!eligible.length ? <option value="">参加できるBotがいません</option> : eligible.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label className="field"><span>繰り返す依頼</span><textarea rows={3} required maxLength={20_000} value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="前回の資料を確認し、新しい情報で更新してください" /></label>
+      <label className="field"><span>{autonomous ? '活動の方針' : '繰り返す依頼'}</span><textarea rows={3} required maxLength={20_000} value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={autonomous ? '自分の関心を掘り下げ、共有して役立つことがあれば会話や資料に残してください' : '前回の資料を確認し、新しい情報で更新してください'} /></label>
+      {autonomous ? <p className="field-hint">共有会話で、担当Botが関心と最近のできごとをもとに活動を選びます。休息を選んだ回も上限に数え、会話や完了通知は増やしません。</p> : null}
       <label className="field"><span>初回日時</span><input type="datetime-local" required value={first} onChange={e => setFirst(e.target.value)} /></label>
       <p className="field-hint">この端末の時間帯：{Intl.DateTimeFormat().resolvedOptions().timeZone}。間隔は経過時間で計算します。</p>
       {trigger === 'shared_changes' ? <p className="field-hint">この間隔で変更を確認します。登録後に追加・訂正・削除された共有発言が対象です。自分自身の発言や、変化のない会話では起動しません。</p> : null}

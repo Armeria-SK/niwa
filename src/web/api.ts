@@ -41,7 +41,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       interval_ms: Type.Integer({ minimum: 60_000, maximum: 365 * 86400_000 }), next_at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }),
       max_runs: Type.Integer({ minimum: 1, maximum: 10_000 }), timeout_ms: Type.Integer({ minimum: 60_000, maximum: 86400_000 }),
       max_model_calls: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
-      trigger_kind: Type.Optional(Type.Union([Type.Literal('interval'), Type.Literal('shared_changes')])) }),
+      trigger_kind: Type.Optional(Type.Union([Type.Literal('interval'), Type.Literal('shared_changes')])), autonomous: Type.Optional(Type.Boolean()) }),
       run: (_m, b) => runtime.schedules.create(admin, b as unknown as import('../runtime/schedules.ts').ScheduleInput) },
     { method: 'PATCH', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, schema: object({ enabled: Type.Boolean() }),
       run: (m, b) => { runtime.schedules.setEnabled(admin, m[1]!, b.enabled as boolean); return { ok: true }; } },

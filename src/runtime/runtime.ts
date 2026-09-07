@@ -13,6 +13,7 @@ import { scheduleSchema } from '../storage/schedule-schema.ts';
 import { scheduleBudgetSchema } from '../storage/schedule-budget-schema.ts';
 import { scheduleTriggerSchema } from '../storage/schedule-trigger-schema.ts';
 import { scheduleDeletionSchema } from '../storage/schedule-deletion-schema.ts';
+import { autonomySchema } from '../storage/autonomy-schema.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
 import { fallbackSchema } from '../storage/fallback-schema.ts';
@@ -49,7 +50,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema]);
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
       room: (actor, id) => this.#room(actor, id),

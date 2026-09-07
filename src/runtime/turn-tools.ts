@@ -16,6 +16,7 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  task_rest: { description: 'この自発活動を休息として終える。今は役立つ活動や発言がない場合に単独で使う。会話への投稿・完了通知は行わない。起動回数やモデル予算は戻らない。', schema: object({}) },
   ...procedureDefinitions,
   task_summary_save: { description: '現在の仕事の結論・理由・未解決事項・次の手順を出典付きの補助要約として保存する。sourcesにはhistory_readで確認した出所IDとrevisionを指定する。承認や実行記録を置き換えない。', schema: object(summarySchema.properties) },
   task_plan_update: { description: '現在の仕事で残っている手順を保存する。expected_revisionはwork_state.remaining_plan.revisionを使う。長い仕事では着手前と進捗後に更新する。メモは承認や実行済み記録にはならない。', schema: object({ expected_revision: Type.Integer({ minimum: 0 }), remaining: Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), { maxItems: 30 }) }) },
@@ -38,8 +39,8 @@ const definitions = {
   memory_remember: { description: '現在の会話で読んだメッセージを出所に、自分の記憶を保存する。', schema: object({ source_message_id: short(), body: body() }) },
   memory_search: { description: '現在の会話へ利用できる自分の記憶だけを検索する。', schema: object({ query: Type.String({ maxLength: 200 }) }) },
 };
-export function turnTools(isLeader: boolean, external: ExternalTools = {}, sharedRoom = false): ModelToolDefinition[] {
-  return Object.entries(definitions).filter(([name]) => (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
+export function turnTools(isLeader: boolean, external: ExternalTools = {}, sharedRoom = false, autonomous = false): ModelToolDefinition[] {
+  return Object.entries(definitions).filter(([name]) => (name !== 'task_rest' || autonomous) && (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
     (!name.startsWith('workspace_') || external.workspace) && (name !== 'workspace_write' || (external.workspaceWrite && sharedRoom))).map(([name, value]) => ({
     name, description: value.description, input_schema: JSON.parse(JSON.stringify(value.schema)) as JsonObject,
   }));
@@ -73,6 +74,7 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
   try {
     return runtime.tasks.once(actor, lease, operationId, { name: call.name, arguments: call.arguments }, () => {
       switch (call.name) {
+        case 'task_rest': runtime.tasks.rest(actor, lease); return { rested: true };
         case 'task_summary_save': return runtime.saveSummary(actor, lease, operationId, call.arguments as WorkSummary);
         case 'task_plan_update': return runtime.tasks.updatePlan(actor, lease, operationId, call.arguments.expected_revision as number, call.arguments.remaining as string[]);
         case 'artifact_create': return { id: runtime.createArtifact(actor, lease.task.room_id, args.name!, args.kind!, args.description!, args.content!, lease.task.id) };
