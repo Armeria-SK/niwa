@@ -6,7 +6,7 @@ import { taskStatus } from '../productivity.js';
 import { Schedules } from './Schedules.jsx';
 
 const openStatuses = ['running', 'waiting', 'paused', 'failed'];
-export function Activity({ activities, members, paused, onPause, onDecide, onThread, onArtifact, onControl, updates, seen, onRead, artifacts, filter, onFilter, schedules, threads, onScheduleSave, onScheduleToggle }) {
+export function Activity({ activities, members, paused, onPause, onDecide, onThread, onArtifact, onControl, updates, seen, onRead, artifacts, filter, onFilter, schedules, threads, onScheduleSave, onScheduleToggle, onScheduleDelete }) {
   const [detail, setDetail] = useState(null);
   const [approval, setApproval] = useState(null);
   const running = activities.filter(item => openStatuses.includes(item.status));
@@ -21,7 +21,7 @@ export function Activity({ activities, members, paused, onPause, onDecide, onThr
     {paused ? <div className="inline-notice"><PauseIcon size={18} /><p>Botの活動を一時停止しています。個別に再開した仕事も、全体を再開するまで待機します。</p></div> : null}
     <Segmented label="活動の表示" className="activity-tabs" options={[{ value: 'recap', label: 'できごと', count: updates.filter(item => !seen[item.id]).length }, { value: 'running', label: '仕事', count: running.length }, { value: 'approval', label: '承認待ち', count: pending.length }, { value: 'history', label: '履歴' }, { value: 'artifacts', label: '成果物', count: artifacts.length }, { value: 'schedules', label: '定期実行' }]} value={filter} onChange={onFilter} />
     <div className="activity-scroll" key={filter}>
-    {filter === 'recap' ? <Recap updates={updates} seen={seen} onRead={onRead} members={members} onThread={onThread} onArtifact={onArtifact} onActivity={openActivity} /> : filter === 'artifacts' ? <ArtifactLibrary artifacts={artifacts} members={members} onOpen={onArtifact} onThread={onThread} /> : filter === 'schedules' ? <Schedules schedules={schedules} members={members} threads={threads} onSave={onScheduleSave} onToggle={onScheduleToggle} onThread={onThread} /> : <>
+    {filter === 'recap' ? <Recap updates={updates} seen={seen} onRead={onRead} members={members} onThread={onThread} onArtifact={onArtifact} onActivity={openActivity} /> : filter === 'artifacts' ? <ArtifactLibrary artifacts={artifacts} members={members} onOpen={onArtifact} onThread={onThread} /> : filter === 'schedules' ? <Schedules schedules={schedules} members={members} threads={threads} onSave={onScheduleSave} onToggle={onScheduleToggle} onDelete={onScheduleDelete} onThread={onThread} /> : <>
       {filter === 'approval' ? <p className="approval-explanation"><ShieldIcon size={18} />外部への公開など、あなたの許可が必要な操作です。</p> : null}
       <div className="activity-list">{visible.length ? visible.map(item => <article className={`activity-row status-${item.status}`} key={item.id}>
         <Avatar member={members[item.member]} size={44} /><div className="activity-row-body"><div className="activity-row-meta"><span>{members[item.member]?.name}</span><time>{item.time}</time></div><h2>{item.title}</h2><p>{item.detail}</p>{item.reason ? <p className="task-reason">{item.reason}</p> : null}<div className="activity-row-bottom"><span className={`activity-status ${item.status}`}><span className="status-dot" />{paused && item.status === 'running' ? '全体の再開待ち' : taskStatus[item.status]}</span>{item.thread ? <button className="text-button" onClick={() => onThread(item.thread)}>会話を見る<ArrowUpRightIcon size={15} /></button> : null}</div></div>

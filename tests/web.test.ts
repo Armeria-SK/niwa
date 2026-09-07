@@ -57,6 +57,11 @@ test('administrator schedules API validates input and persists stop/resume', asy
   const rows = await (await f.call('/api/schedules')).json() as { enabled: number }[];
   assert.equal(rows.length, 1); assert.equal(rows[0]!.enabled, 0);
   assert.equal((await f.call(`/api/schedules/${input.id}`, 'PATCH', { enabled: true })).status, 200);
+  assert.equal((await f.call(`/api/schedules/${input.id}`, 'DELETE')).status, 200);
+  assert.equal((await f.call(`/api/schedules/${input.id}`, 'DELETE')).status, 200);
+  assert.deepEqual(await (await f.call('/api/schedules')).json(), []);
+  assert.equal((await f.call(`/api/schedules/${input.id}`, 'PATCH', { enabled: true })).status, 404);
+  assert.equal((await f.call('/api/schedules', 'POST', input)).status, 409);
 });
 
 test('thread organization persists, preserves messages and requires restoration for new submissions', async t => {

@@ -157,7 +157,7 @@ test('model reservations share one persistent schedule budget across delegation 
 test('existing schedules migrate with a finite budget and retain creation replay compatibility', t => {
   const f = fixture(t); f.runtime.schedules.create(f.admin, f.input);
   const db = new DatabaseSync(join(f.root, 'control.db'));
-  db.exec('ALTER TABLE schedules DROP COLUMN max_model_calls; ALTER TABLE schedules DROP COLUMN model_calls; ALTER TABLE schedules DROP COLUMN trigger_kind; ALTER TABLE schedules DROP COLUMN source_revision; PRAGMA user_version=14;');
+  db.exec('ALTER TABLE schedules DROP COLUMN max_model_calls; ALTER TABLE schedules DROP COLUMN model_calls; ALTER TABLE schedules DROP COLUMN trigger_kind; ALTER TABLE schedules DROP COLUMN source_revision; ALTER TABLE schedules DROP COLUMN deleted; PRAGMA user_version=14;');
   db.close();
   const r = f.reopen(); const admin = r.administrator();
   const schedule = r.schedules.create(admin, f.input);
@@ -211,4 +211,26 @@ test('change checkpoint and task creation roll back together', t => {
     assert.notEqual(r.schedules.list(f.admin)[0]!.source_revision, before);
     assert.equal(r.tasks.list(f.admin).length, 1);
   } finally { db.close(); }
+});
+
+test('deleting a schedule persists, rejects resurrection and keeps existing jobs and their budget', t => {
+  const f = fixture(t); let r = f.runtime; let admin = f.admin;
+  const input = { ...f.input, max_model_calls: 1 };
+  r.schedules.create(admin, input); r.schedules.dispatch(admin, input.next_at);
+  const lease = r.tasks.claim(admin)!; const actor = r.agentSession(f.leader.id);
+  const message = r.post(admin, f.room.id, '保存する会話');
+  assert.throws(() => r.schedules.remove(actor, input.id), /Administrator/);
+  r.schedules.remove(admin, input.id); r.schedules.remove(admin, input.id);
+  assert.equal(r.tasks.active(actor, lease), true);
+  assert.equal(r.tasks.reserveModelCall(actor, lease), true);
+  assert.equal(r.tasks.reserveModelCall(actor, lease), false);
+  r.tasks.finish(actor, lease, '仕事の履歴は残る');
+  assert.equal(r.schedules.list(admin).length, 0);
+  assert.throws(() => r.schedules.create(admin, input), /deleted/);
+  assert.throws(() => r.schedules.setEnabled(admin, input.id, true), /not found/);
+  r = f.reopen(); admin = r.administrator(); r.schedules.dispatch(admin, input.next_at + 60_000);
+  assert.equal(r.schedules.list(admin).length, 0); assert.equal(r.tasks.list(admin).length, 1);
+  assert.equal(r.tasks.get(admin, lease.task.id).result, '仕事の履歴は残る');
+  assert.equal(r.messages(admin, f.room.id).some(item => item.id === message.id), true);
+  assert.equal(r.updates(admin).some(item => item.task_id === lease.task.id), true);
 });

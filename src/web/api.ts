@@ -36,6 +36,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
   type Route = { method: string; path: RegExp; schema?: TSchema; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL) => unknown };
   const routes: Route[] = [
     { method: 'GET', path: /^\/api\/schedules$/, run: () => runtime.schedules.list(admin) },
+    { method: 'DELETE', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, run: m => { runtime.schedules.remove(admin, m[1]!); return { ok: true }; } },
     { method: 'POST', path: /^\/api\/schedules$/, schema: object({ id, agent_id: id, room_id: id, prompt: string,
       interval_ms: Type.Integer({ minimum: 60_000, maximum: 365 * 86400_000 }), next_at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }),
       max_runs: Type.Integer({ minimum: 1, maximum: 10_000 }), timeout_ms: Type.Integer({ minimum: 60_000, maximum: 86400_000 }),

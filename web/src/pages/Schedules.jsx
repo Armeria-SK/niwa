@@ -6,8 +6,9 @@ import './schedules.css';
 const formatTime = value => new Date(value).toLocaleString('ja-JP');
 const formatInterval = value => { const minutes = value / 60_000; const unit = [[10080, '週間'], [1440, '日'], [60, '時間'], [1, '分']].find(([size]) => minutes % size === 0); return `${minutes / unit[0]}${unit[1]}`; };
 const localTime = value => new Date(value - new Date(value).getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-export function Schedules({ schedules, members, threads, onSave, onToggle, onThread }) {
+export function Schedules({ schedules, members, threads, onSave, onToggle, onDelete, onThread }) {
   const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState(null);
   const [busy, setBusy] = useState(null);
   const available = threads.filter(room => !room.archived);
   async function toggle(row) {
@@ -29,9 +30,10 @@ export function Schedules({ schedules, members, threads, onSave, onToggle, onThr
         {!exhausted ? <p>{row.enabled ? '次回予定' : '再開後の予定'}：<time dateTime={new Date(row.next_at).toISOString()}>{formatTime(row.next_at)}</time></p> : null}
         {row.wait_reason ? <p className="task-reason">{row.wait_reason}</p> : null}
         <button className="text-button" onClick={() => onThread(row.room_id)}>{room?.title || '関連する会話'}を見る</button>
-      </div><div className="activity-row-action"><button className="button secondary" disabled={!!busy || exhausted} onClick={() => toggle(row)}>{row.enabled ? '予定を停止' : '予定を再開'}</button></div></article>;
+      </div><div className="activity-row-action schedule-actions"><button className="button secondary" disabled={!!busy || exhausted} onClick={() => toggle(row)}>{row.enabled ? '予定を停止' : '予定を再開'}</button><button className="button subtle" disabled={!!busy} onClick={() => setDeleting(row)}>予定を削除</button></div></article>;
     })}</div> : <EmptyState icon={ActivityIcon} title="定期実行はまだありません">{available.length ? '調査の更新など、繰り返したい仕事の予定を追加できます。' : '先に会話を作成してください。'}</EmptyState>}
     <p className="field-hint">予定の停止は、すでに始まった仕事には影響しません。進行中の仕事は「仕事」から操作できます。予定の内容を変えるときは、停止して新しく作成してください。</p>
+    {deleting ? <Modal title="この予定を削除しますか？" onClose={() => { if (!busy) setDeleting(null); }}><div className="modal-body form-stack"><p>{deleting.prompt}</p><p className="muted">今後の定期実行をやめ、予定一覧から削除します。すでに始まった仕事・会話・過去の履歴は残ります。</p></div><div className="form-actions"><button className="button subtle" disabled={!!busy} onClick={() => setDeleting(null)}>キャンセル</button><button className="button danger" disabled={!!busy} onClick={async () => { if (busy) return; setBusy(deleting.id); try { if (await onDelete(deleting.id)) setDeleting(null); } finally { setBusy(null); } }}>予定を削除</button></div></Modal> : null}
     {adding ? <ScheduleForm members={members} threads={available} onSave={onSave} onClose={() => setAdding(false)} /> : null}
   </section>;
 }

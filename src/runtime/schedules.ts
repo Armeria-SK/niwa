@@ -21,7 +21,7 @@ export class Schedules {
   list(actor: Actor): Schedule[] {
     this.admin(actor);
     return this.db.prepare(`SELECT id,agent_id,room_id,prompt,interval_ms,next_at,max_runs,timeout_ms,
-      enabled,run_count,failure_reset,wait_reason,max_model_calls,model_calls,trigger_kind,source_revision FROM schedules ORDER BY rowid`).all() as unknown as Schedule[];
+      enabled,run_count,failure_reset,wait_reason,max_model_calls,model_calls,trigger_kind,source_revision FROM schedules WHERE deleted=0 ORDER BY rowid`).all() as unknown as Schedule[];
   }
   private sourceRevision(agentId: string, roomId: string): string {
     const messages = this.db.prepare('SELECT id,author_id,body FROM messages WHERE room_id=? AND author_id<>? ORDER BY id').all(roomId, agentId);
@@ -43,7 +43,8 @@ export class Schedules {
       input.interval_ms, input.next_at, input.max_runs, input.timeout_ms,
       ...(input.max_model_calls === undefined ? [] : [input.max_model_calls]), ...(trigger === 'interval' ? [] : [trigger])])).digest('hex');
     return transaction(this.db, () => {
-      const prior = this.db.prepare('SELECT input_hash FROM schedules WHERE id=?').get(input.id);
+      const prior = this.db.prepare('SELECT input_hash,deleted FROM schedules WHERE id=?').get(input.id);
+      check(!prior?.deleted, 'conflict', 'Schedule was deleted');
       if (prior) check(prior.input_hash === hash, 'conflict', 'Schedule id already used with different input');
       else {
         this.recipient(actor, input.agent_id, input.room_id);
@@ -67,6 +68,12 @@ export class Schedules {
       this.recipient(actor, row.agent_id, row.room_id);
     }
     this.db.prepare('UPDATE schedules SET enabled=?,wait_reason=NULL,failure_reset=run_count WHERE id=?').run(Number(enabled), id);
+  }
+  remove(actor: Actor, id: string): void {
+    this.admin(actor); text(id, 100);
+    // Keep identity/budget links for existing jobs and reject late creation retries.
+    const result = this.db.prepare("UPDATE schedules SET deleted=1,enabled=0,prompt='',source_revision='',wait_reason=NULL WHERE id=?").run(id);
+    check(result.changes > 0, 'not_found', 'Schedule not found');
   }
   dispatch(actor: Actor, now = Date.now()): void {
     this.admin(actor);
