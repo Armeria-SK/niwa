@@ -10,6 +10,7 @@ export interface Task {
   paused: number;
   result: string | null;
   wait_reason: string | null;
+  provider_retry_at: number | null;
   attempt: number;
   deadline_at: number;
   created_at: number;

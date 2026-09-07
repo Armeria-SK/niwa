@@ -57,7 +57,7 @@ export class Tasks {
     this.#db.prepare('INSERT INTO task_events(task_id,kind,created_at) VALUES (?,?,?)').run(id, kind, Date.now());
   }
   #change(id: string, state: TaskState, result: string | null = null, reason: string | null = null, announce = true): void {
-    this.#db.prepare('UPDATE tasks SET state=?,result=?,wait_reason=?,updated_at=? WHERE id=?').run(state, result, reason, Date.now(), id);
+    this.#db.prepare('UPDATE tasks SET state=?,result=?,wait_reason=?,updated_at=?,provider_retry_at=NULL WHERE id=?').run(state, result, reason, Date.now(), id);
     if (isTerminal(state)) this.#db.prepare('UPDATE tasks SET paused=0 WHERE id=?').run(id);
     if (state === 'completed' && announce) {
       const task = this.#read(id);
@@ -304,10 +304,29 @@ export class Tasks {
     this.#change(parentId, 'queued');
     this.#db.prepare('UPDATE tasks SET lease_token=NULL WHERE id=?').run(parentId);
   }
-  wait(actor: Actor, lease: TaskLease, state: 'waiting_user' | 'waiting_provider', reason: string): void {
+  wait(actor: Actor, lease: TaskLease, state: 'waiting_user' | 'waiting_provider', reason: string, retryProvider = false): void {
     check(state === 'waiting_user' || state === 'waiting_provider', 'invalid', 'Invalid wait state');
+    check(!retryProvider || state === 'waiting_provider', 'invalid', 'Only provider waits can retry automatically');
     text(reason, 1000);
-    transaction(this.#db, () => { this.#owned(actor, lease); this.#change(lease.task.id, state, null, reason); });
+    transaction(this.#db, () => {
+      this.#owned(actor, lease); this.#change(lease.task.id, state, null, reason);
+      if (retryProvider) this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(Date.now() + 60_000, lease.task.id);
+    });
+  }
+  retryProviders(actor: Actor, now = Date.now()): void {
+    this.#admin(actor);
+    check(Number.isSafeInteger(now) && now >= 0, 'invalid', 'Invalid retry time');
+    if (this.#paused()) return;
+    transaction(this.#db, () => {
+      const due = this.#db.prepare(`SELECT t.id,t.agent_id,t.room_id FROM tasks t
+        WHERE t.state='waiting_provider' AND t.paused=0 AND t.provider_retry_at<=? AND t.deadline_at>?
+        AND NOT EXISTS(SELECT 1 FROM room_preferences p WHERE p.room_id=t.room_id AND p.archived=1)`).all(now, now) as { id: string; agent_id: string; room_id: string }[];
+      for (const task of due) {
+        if (!this.#access.participant(task.agent_id, task.room_id)) continue;
+        this.#change(task.id, 'queued');
+        this.#db.prepare('UPDATE tasks SET lease_token=NULL WHERE id=?').run(task.id);
+      }
+    });
   }
   resume(actor: Actor, id: string, answer?: string): void {
     this.#admin(actor);

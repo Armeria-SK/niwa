@@ -35,7 +35,7 @@ export class TurnRunner {
     let adapter: ModelAdapter;
     try { adapter = await this.#resolve(agent, lease.task.id, signal); }
     catch {
-      if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデル接続の設定・認証・能力確認が必要です。');
+      if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデル接続の設定・認証・能力確認が必要です。1分後に再確認します。', true);
       return;
     }
     let saved = runtime.tasks.steps(actor, lease.task.id);
@@ -51,7 +51,7 @@ export class TurnRunner {
         // Provider-owned opaque continuation may also contain the superseded memory.
         try { adapter = await this.#resolve(agent, lease.task.id, signal); }
         catch {
-          if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_provider', '記憶更新後のモデル接続を再作成できませんでした。');
+          if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_provider', '記憶更新後のモデル接続を再作成できませんでした。1分後に再確認します。', true);
           return;
         }
         if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
@@ -66,7 +66,7 @@ export class TurnRunner {
       if (!step) {
         if (agent.provider === 'openai_subscription' && adapter.adapter_id === 'ollama') {
           try { adapter = await this.#resolve(agent, lease.task.id, signal); }
-          catch { if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_provider', '切替先のモデル接続を確認してください。'); return; }
+          catch { if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_provider', '切替先のモデル接続を確認してください。1分後に再確認します。', true); return; }
           if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
           if (!runtime.isContextCurrent(actor, context.revision)) continue;
         }
@@ -121,7 +121,8 @@ export class TurnRunner {
               if (fallback.adapter_id === 'ollama') { adapter = fallback; continue; }
             } catch { /* Leave a visible provider wait when the configured fallback is unavailable. */ }
           }
-          runtime.tasks.wait(actor, lease, 'waiting_provider', `モデル応答を完了できませんでした (${failure.error.code})。`);
+          const retry = failure.error.code === 'QUOTA_EXCEEDED';
+          runtime.tasks.wait(actor, lease, 'waiting_provider', `モデル応答を完了できませんでした (${failure.error.code})。${retry ? '1分後に接続先を再確認します。' : ''}`, retry);
           return;
         }
         const index = runtime.tasks.saveStep(actor, lease, context.revision, events);

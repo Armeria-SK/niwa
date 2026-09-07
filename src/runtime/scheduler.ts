@@ -23,6 +23,7 @@ export class Scheduler {
     if (this.#stopped) return;
     const tasks = this.#runtime.tasks;
     tasks.expire(this.#admin);
+    tasks.retryProviders(this.#admin);
     this.#runtime.schedules.dispatch(this.#admin);
     for (const job of this.#jobs.values()) {
       if (!tasks.active(job.actor, job.lease)) job.abort.abort();

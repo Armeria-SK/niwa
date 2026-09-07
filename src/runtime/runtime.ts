@@ -16,6 +16,7 @@ import { scheduleDeletionSchema } from '../storage/schedule-deletion-schema.ts';
 import { autonomySchema } from '../storage/autonomy-schema.ts';
 import { providerLimitSchema } from '../storage/provider-limit-schema.ts';
 import { modelRouteSchema } from '../storage/model-route-schema.ts';
+import { providerRetrySchema } from '../storage/provider-retry-schema.ts';
 import { ProviderLimits } from './provider-limits.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
@@ -54,7 +55,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema]);
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),

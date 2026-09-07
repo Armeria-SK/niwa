@@ -14,6 +14,7 @@ import { Subscription } from '../src/auth/subscription.ts';
 import { MemoryCredentialStore } from '../src/auth/credential-store.ts';
 import { credential, response } from './fixtures/model.ts';
 import { TurnRunner } from '../src/runtime/turns.ts';
+import { Scheduler } from '../src/runtime/scheduler.ts';
 import { DatabaseSync } from 'node:sqlite';
 
 test('quota switches to the configured local model and a later successful probe restores the configured subscription', async () => {
@@ -83,11 +84,46 @@ test('ordinary 429 does not select fallback and quota without a selected fallbac
     runtime.tasks.create(admin, leader.id, room.id, '通信制限');
     await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
     assert.match(runtime.tasks.list(admin)[0]!.wait_reason!, /RATE_LIMITED/); assert.equal(localCalls, 0);
+    assert.equal(runtime.tasks.list(admin)[0]!.provider_retry_at, null);
     quota = true; runtime.configureFallback(admin, 'http://127.0.0.1:11434', null);
     runtime.tasks.create(admin, leader.id, room.id, '上限到達');
     await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
     assert.match(runtime.tasks.list(admin).at(-1)!.wait_reason!, /QUOTA_EXCEEDED/); assert.equal(localCalls, 0);
+    assert.ok(runtime.tasks.list(admin).at(-1)!.provider_retry_at! > Date.now());
   } finally { await subscription.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('scheduler continues quota-waiting work after fallback setup without probing a still-limited subscription', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-quota-wake-')); let runtime = new Runtime(root);
+  const store = new MemoryCredentialStore(); await store.write(credential);
+  let primaryCalls = 0; let localCalls = 0; let scheduler: Scheduler | undefined;
+  const transport: typeof fetch = async url => {
+    if (String(url).includes('/models')) return Response.json({ models: [{ slug: 'artificial-model', display_name: 'Artificial', supported_reasoning_levels: [{ effort: 'low' }], visibility: 'list' }] });
+    if (String(url).endsWith('/api/show')) return Response.json({ capabilities: ['completion', 'tools'] });
+    if (String(url).endsWith('/api/chat')) { localCalls++; return Response.json({ done: true, message: { role: 'assistant', content: '待機から継続して完了' } }); }
+    primaryCalls++; return Response.json({ error: { type: 'usage_limit_reached', resets_at: Math.floor(Date.now() / 1000) + 3600 } }, { status: 429 });
+  };
+  const subscription = new Subscription(store, () => {}, { fetch: transport });
+  try {
+    let admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const room = runtime.createRoom(admin, '自動再開');
+    runtime.setAgentModel(admin, leader.id, 'openai_subscription', 'artificial-model', 'low');
+    runtime.configureOllama(admin, 'http://127.0.0.1:11434');
+    const task = runtime.tasks.create(admin, leader.id, room.id, '設定後に同じ仕事を続ける');
+    await new TurnRunner(runtime, new ModelGateway(runtime, transport, subscription).resolve).run(runtime.tasks.claim(admin)!);
+    assert.equal(runtime.tasks.get(admin, task.id).state, 'waiting_provider');
+    runtime.close(); runtime = new Runtime(root); admin = runtime.administrator();
+    runtime.configureFallback(admin, 'http://127.0.0.1:11434', 'artificial-local');
+    const db = new DatabaseSync(join(root, 'control.db')); db.exec('UPDATE tasks SET provider_retry_at=0;'); db.close();
+    scheduler = new Scheduler(runtime, new TurnRunner(runtime, new ModelGateway(runtime, transport, subscription).resolve));
+    scheduler.tick();
+    for (let count = 0; count < 100 && runtime.tasks.get(admin, task.id).state !== 'completed'; count++) await setTimeout(5);
+    assert.equal(runtime.tasks.get(admin, task.id).result, '待機から継続して完了');
+    assert.equal(runtime.tasks.get(admin, task.id).provider_retry_at, null);
+    scheduler.tick(); await setTimeout(5);
+    assert.equal(primaryCalls, 1); assert.equal(localCalls, 1);
+    assert.equal(runtime.messages(admin, room.id).length, 1);
+    assert.equal(runtime.tasks.list(admin).length, 1);
+  } finally { await scheduler?.stop(); await subscription.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test('fallback selection persists independently and rejects remote, incapable and stale models', async () => {
