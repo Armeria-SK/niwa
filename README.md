@@ -56,28 +56,45 @@ sudo -iu niwa
 
 ## 2. Node.jsをインストールする
 
-Node.jsはNiwaを動かすためのソフトです。下の枠をまとめてコピーして実行してください。
+Node.jsはNiwaを動かすためのソフトです。以下の枠を、上から1つずつコピーして実行してください。エラーが出た場合は、次へ進まず表示を確認してください。
+
+まず、保存先のフォルダーを作ります。
 
 ```bash
-(
-  set -eu
-  test "$(id -un)" = niwa
-  test "$(uname -m)" = x86_64
-  mkdir -p /home/niwa/niwa/app/runtime
-  download_dir=$(mktemp -d)
-  trap 'rm -rf -- "$download_dir"' EXIT
-  cd "$download_dir"
-  curl --fail --location --proto '=https' --tlsv1.2 \
-    -o node.tar.xz https://nodejs.org/download/release/v24.16.0/node-v24.16.0-linux-x64.tar.xz
-  echo 'd804845d34eddc21dc1092b519d643ef40b1f58ec5dec5c22b1f4bd8fabde6c9  node.tar.xz' | sha256sum -c -
-  tar -xJf node.tar.xz -C /home/niwa/niwa/app/runtime
-  printf '\nNode.jsの準備が完了しました。\n'
-)
+mkdir -p /home/niwa/niwa/app/runtime
 ```
 
-「Node.jsの準備が完了しました。」と表示されれば次へ進めます。途中でエラーが出た場合は、その表示を確認してから進めてください。
+そのフォルダーへ移動します。
 
-Node.jsは[公式配布元](https://nodejs.org/download/release/v24.16.0/)から取得し、ダウンロードした内容を照合しています。
+```bash
+cd /home/niwa/niwa/app/runtime
+```
+
+[Node.jsの公式配布元](https://nodejs.org/download/release/v24.16.0/)からダウンロードします。
+
+```bash
+curl -fLO https://nodejs.org/download/release/v24.16.0/node-v24.16.0-linux-x64.tar.xz
+```
+
+ダウンロードしたファイルが正しいか確認します。末尾に `OK` と表示されれば次へ進めます。
+
+```bash
+echo 'd804845d34eddc21dc1092b519d643ef40b1f58ec5dec5c22b1f4bd8fabde6c9  node-v24.16.0-linux-x64.tar.xz' | sha256sum -c -
+```
+
+圧縮ファイルを展開します。何も表示されず、入力できる状態に戻れば完了です。
+
+```bash
+tar -xJf node-v24.16.0-linux-x64.tar.xz
+```
+
+最後に、Node.jsが動くことを確認します。
+
+```bash
+/home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin/node --version
+```
+
+`v24.16.0` と表示されれば、Node.jsの準備は完了です。
 
 ## 3. Niwaをダウンロードする
 
@@ -89,18 +106,31 @@ git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa/app/source
 
 ## 4. Niwaを使う準備をする
 
-Niwaに必要な部品を入れ、ブラウザーで使える形にします。数分かかることがあります。
+この端末でNode.jsとnpmを使えるようにします。
 
 ```bash
-(
-  set -eu
-  export PATH="/home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin:$PATH"
-  cd /home/niwa/niwa/app/source
-  npm ci
-  npm run build
-  printf '\nNiwaの準備が完了しました。\n'
-)
+export PATH="/home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin:$PATH"
 ```
+
+Niwaのフォルダーへ移動します。
+
+```bash
+cd /home/niwa/niwa/app/source
+```
+
+Niwaに必要な部品を入れます。数分かかることがあります。
+
+```bash
+npm ci
+```
+
+ブラウザーで使える形に準備します。
+
+```bash
+npm run build
+```
+
+エラーなく完了したら、次へ進んでください。
 
 ## 5. 初回の設定を作る
 
