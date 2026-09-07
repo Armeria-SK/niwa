@@ -58,6 +58,10 @@ runtimeは専用ユーザーのOS一時実行領域、socketは製品ルート�
 
 追加機能の準備と検証範囲は [ブラウザー](BROWSER.md)、[承認付き通常フォーム](FORMS.md)、[パッケージ導入](PACKAGES.md)、[共有X接続](X.md) を参照。
 
+継続起動のsystemd定義は [SERVICES.md](SERVICES.md) を参照。テンプレートは準備済みですが、登録・起動と実機受入は未実施です。
+
+継続起動のsystemd定義は [SERVICES.md](SERVICES.md) を参照。テンプレートは準備済みですが、登録・起動と実機受入は未実施です。
+
 ## 有効化前の実機確認
 
 `verify-program.mjs` は、実際のPodmanで実行する検証スクリプト。明示した `--apply` が必要。
