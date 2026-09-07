@@ -28,25 +28,60 @@ Niwaは、個性の異なるAIの仲間と会話し、一緒に調べものや�
 Ubuntuで「端末」を開き、以下を貼り付けてEnterを押してください。パスワード入力中は文字が表示されませんが、そのまま入力してEnterを押せます。
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git curl ca-certificates xz-utils
+sudo apt-get update && sudo apt-get install -y git curl ca-certificates
 ```
 
-このコマンドで入れるものは、次の4つです。
+このコマンドで入れるものは、次の3つです。
 
 | 名前 | 用途 |
 | --- | --- |
 | git | GitHubからNiwaを取得します。 |
-| curl | Node.jsをダウンロードします。 |
+| curl | Node.jsの配布元を設定するファイルをダウンロードします。 |
 | ca-certificates | HTTPS接続先の証明書を確認します。 |
-| xz-utils | Node.jsの圧縮ファイルを展開します。 |
 
-続いて、Niwa用のユーザー `niwa` を作ります。途中で新しいパスワードを決めてください。氏名などの欄はEnterで空欄にできます。すでに同名のユーザーがある場合は作成を省略します。
+## 2. Node.jsをインストールする
+
+Node.jsはNiwaを動かすためのソフトです。PC全体で使える通常のインストールで構いません。必要なバージョンは **24.16.0以上の24系** です。すでに条件を満たすNode.jsとnpmが使える場合は、この手順を省略できます。
+
+以下の枠を、上から1つずつ実行してください。エラーが出た場合は、次へ進まず表示を確認してください。
+
+[NodeSourceの配布手順](https://github.com/nodesource/distributions)を使い、Node.js 24系の配布元を追加します。
 
 ```bash
-id niwa >/dev/null 2>&1 || sudo adduser niwa
+curl -fsSL https://deb.nodesource.com/setup_24.x -o nodesource_setup.sh
 ```
 
-次のコマンドでNiwa用のユーザーに切り替えます。
+```bash
+sudo -E bash nodesource_setup.sh
+```
+
+Node.jsとnpmをインストールします。
+
+```bash
+sudo apt-get install -y nodejs
+```
+
+バージョンを確認します。
+
+```bash
+node --version
+```
+
+```bash
+npm --version
+```
+
+Node.jsが `v24.16.0` 以上の `v24.x.x`、npmもバージョン番号を表示すれば準備完了です。
+
+## 3. Niwaをダウンロードする
+
+Niwa用のユーザー `niwa` を作ります。途中で新しいパスワードを決めてください。氏名などの欄はEnterで空欄にできます。すでに同名のユーザーがある場合は作成を省略します。
+
+```bash
+sudo adduser niwa
+```
+
+Niwa用のユーザーに切り替えます。
 
 ```bash
 sudo -iu niwa
@@ -54,49 +89,11 @@ sudo -iu niwa
 
 **ここから手順6までは、この端末で続けてください。**
 
-## 2. Node.jsをインストールする
-
-Node.jsはNiwaを動かすためのソフトです。以下の枠を、上から1つずつコピーして実行してください。エラーが出た場合は、次へ進まず表示を確認してください。
-
-まず、保存先のフォルダーを作ります。
+保存先のフォルダーを作ります。
 
 ```bash
-mkdir -p /home/niwa/niwa/app/runtime
+mkdir -p /home/niwa/niwa/app
 ```
-
-そのフォルダーへ移動します。
-
-```bash
-cd /home/niwa/niwa/app/runtime
-```
-
-[Node.jsの公式配布元](https://nodejs.org/download/release/v24.16.0/)からダウンロードします。
-
-```bash
-curl -fLO https://nodejs.org/download/release/v24.16.0/node-v24.16.0-linux-x64.tar.xz
-```
-
-ダウンロードしたファイルが正しいか確認します。末尾に `OK` と表示されれば次へ進めます。
-
-```bash
-echo 'd804845d34eddc21dc1092b519d643ef40b1f58ec5dec5c22b1f4bd8fabde6c9  node-v24.16.0-linux-x64.tar.xz' | sha256sum -c -
-```
-
-圧縮ファイルを展開します。何も表示されず、入力できる状態に戻れば完了です。
-
-```bash
-tar -xJf node-v24.16.0-linux-x64.tar.xz
-```
-
-最後に、Node.jsが動くことを確認します。
-
-```bash
-/home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin/node --version
-```
-
-`v24.16.0` と表示されれば、Node.jsの準備は完了です。
-
-## 3. Niwaをダウンロードする
 
 GitHubからNiwaを取得します。
 
@@ -105,12 +102,6 @@ git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa/app/source
 ```
 
 ## 4. Niwaを使う準備をする
-
-この端末でNode.jsとnpmを使えるようにします。
-
-```bash
-export PATH="/home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin:$PATH"
-```
 
 Niwaのフォルダーへ移動します。
 
@@ -137,7 +128,7 @@ npm run build
 以下は**最初の1回だけ**実行します。
 
 ```bash
-/home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin/node \
+node \
   /home/niwa/niwa/app/source/dist/entrypoints/server.js \
   --root /home/niwa/niwa --init --origin http://127.0.0.1:3210
 ```
@@ -147,7 +138,7 @@ npm run build
 ## 6. 起動する
 
 ```bash
-/home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin/node \
+node \
   /home/niwa/niwa/app/source/dist/entrypoints/server.js \
   --root /home/niwa/niwa
 ```
@@ -186,7 +177,7 @@ ChatGPTとの接続は試験対応です。利用できるモデルや上限は�
 次回は、Ubuntuの端末で以下だけ実行すれば起動できます。初回設定を作り直す必要はありません。
 
 ```bash
-sudo -u niwa /home/niwa/niwa/app/runtime/node-v24.16.0-linux-x64/bin/node \
+sudo -u niwa node \
   /home/niwa/niwa/app/source/dist/entrypoints/server.js \
   --root /home/niwa/niwa
 ```
