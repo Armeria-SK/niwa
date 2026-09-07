@@ -24,12 +24,22 @@ export class ModelGateway {
     return (await listOllamaModels(this.#url(), this.#fetch)).map(model => ({ provider: 'ollama', model }));
   }
   async select(agentId: string, model: string): Promise<Agent> {
+    (await this.#verify('ollama', model, 'native'))();
+    return this.#runtime.setAgentModel(this.#runtime.administrator(), agentId, 'ollama', model, 'native');
+  }
+  async #verify(provider: Agent['provider'], model: string, effort: string): Promise<() => void> {
+    if (provider === 'openai_subscription') {
+      check(this.subscription, 'conflict', 'Subscription service unavailable');
+      const revision = this.subscription.revision;
+      await this.subscription.profile(model, effort);
+      return () => check(this.subscription!.revision === revision, 'conflict', 'Subscription account changed');
+    }
+    check(provider === 'ollama' && effort === 'native', 'invalid', 'Invalid Ollama selection');
     const url = this.#url();
     const installed = await listOllamaModels(url, this.#fetch);
     check(installed.includes(model), 'invalid', 'The model is not installed');
     await inspectOllamaModel(url, model, this.#fetch);
-    check(this.#url() === url, 'conflict', 'Ollama configuration changed during discovery');
-    return this.#runtime.setAgentModel(this.#runtime.administrator(), agentId, 'ollama', model, 'native');
+    return () => check(this.#url() === url, 'conflict', 'Ollama configuration changed during discovery');
   }
   async selectFallback(model: string | null): Promise<ReturnType<Runtime['modelSettings']>> {
     const url = this.#url();
@@ -42,11 +52,14 @@ export class ModelGateway {
     return this.#runtime.modelSettings(this.#runtime.administrator());
   }
   async selectSubscription(agentId: string, model: string, effort: string): Promise<Agent> {
-    check(this.subscription, 'conflict', 'Subscription service unavailable');
-    const revision = this.subscription.revision;
-    await this.subscription.profile(model, effort);
-    check(this.subscription.revision === revision, 'conflict', 'Subscription account changed');
+    (await this.#verify('openai_subscription', model, effort))();
     return this.#runtime.setAgentModel(this.#runtime.administrator(), agentId, 'openai_subscription', model, effort);
+  }
+  async selectGenerated(provider: Agent['provider'], model: string, reasoning: string) {
+    (await this.#verify(provider, model, reasoning))();
+    const admin = this.#runtime.administrator();
+    this.#runtime.configureGeneratedModel(admin, provider, model, reasoning);
+    return this.#runtime.generatedModel(admin);
   }
   resolve: ResolveAdapter = async (agent, _taskId, signal) => {
     signal?.throwIfAborted();

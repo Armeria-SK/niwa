@@ -5,6 +5,7 @@ import { BackupStatus } from '../BackupStatus.jsx';
 import { SubscriptionConnection } from '../SubscriptionConnection.jsx';
 import { FallbackConnection } from '../FallbackConnection.jsx';
 import { ModelRoutes } from '../ModelRoutes.jsx';
+import { ModelDefaults } from '../ModelDefaults.jsx';
 import { CheckIcon, ClockIcon, InfoIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 
 export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, members, onUpdateMembers, notify }) {
@@ -24,8 +25,7 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
       {tab === 'rules' ? <section className="settings-section"><h2>みんなが大切にすること</h2><p>全Botに共通して渡す指示です。保存すると、進行中の応答も新しいルールで取り直します。</p><label className="field"><span>共通の指示</span><textarea rows={9} maxLength={20000} value={draft.rules} onChange={e => change('rules', e.target.value)} /></label><p className="field-hint">別の画面で更新された場合は「変更を戻す」で最新の内容を読み直してください。空欄にすると追加の指示を解除します。</p><div className="inline-note"><ShieldIcon size={20} /><span>停止・権限・予算・記憶の分離は本体が管理します。共通の指示や個別の性格設定では上書きできません。</span></div></section> : null}
       {tab === 'models' ? <section className="settings-section"><h2>モデルと接続先</h2><p>いつものモデルと、利用上限に達したときの切替先を設定します。</p>
         <SubscriptionConnection />
-        <div className="field-pair"><label className="field"><span>リーダーの標準モデル</span><select disabled value={draft.leaderModel} onChange={e => change('leaderModel', e.target.value)}><option>Astra</option><option>Luna</option></select></label><label className="field"><span>推論の強さ</span><select disabled value={draft.leaderEffort} onChange={e => change('leaderEffort', e.target.value)}>{['low', 'medium', 'high', 'max'].map(value => <option key={value}>{value}</option>)}</select></label></div>
-        <div className="field-pair"><label className="field"><span>新しいBotの標準モデル</span><select disabled value={draft.generatedModel} onChange={e => change('generatedModel', e.target.value)}><option>Luna</option><option>Astra</option></select></label><label className="field"><span>推論の強さ</span><select disabled value={draft.generatedEffort} onChange={e => change('generatedEffort', e.target.value)}>{['low', 'medium', 'high', 'max'].map(value => <option key={value}>{value}</option>)}</select></label></div>
+        <ModelDefaults />
         <p className="field-hint">Botごとの変更は、メンバーのプロフィールで行えます。</p>
         <div className="form-section-label">Ollamaへの自動切替</div><label className="field"><span>Ollamaの接続先URL</span><input type="url" value={draft.ollamaUrl} onChange={e => change('ollamaUrl', e.target.value)} placeholder="http://…:11434" /></label>
         <FallbackConnection key={settings.ollamaUrl} savedUrl={settings.ollamaUrl} />

@@ -20,6 +20,7 @@ import { providerRetrySchema } from '../storage/provider-retry-schema.ts';
 import { commonRulesSchema } from '../storage/common-rules-schema.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
+import { generatedModelSchema } from '../storage/generated-model-schema.ts';
 import { ProviderLimits } from './provider-limits.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
@@ -58,7 +59,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema]);
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
@@ -201,8 +202,9 @@ export class Runtime {
       const { count } = this.#db.prepare("SELECT count(*) AS count FROM agents WHERE role = 'member'").get() as { count: number };
       check(count < this.settings(actor).generatedLimit, 'limit', 'Generated agent limit reached');
       const id = randomUUID();
-      this.#db.prepare('INSERT INTO agents(id,name,role,status,model,reasoning) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(id, name, 'member', 'active', 'gpt-5.6-luna', 'max');
+      const selected = this.generatedModel(actor);
+      this.#db.prepare('INSERT INTO agents(id,name,role,status,model,reasoning,provider) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(id, name, 'member', 'active', selected.model, selected.reasoning, selected.provider);
       return this.#agent(id);
     });
   }
@@ -224,6 +226,15 @@ export class Runtime {
     this.#db.prepare(`UPDATE tasks SET state='queued',lease_token=NULL,updated_at=? WHERE ${condition}`).run(Date.now(), ...args);
   }
 
+  generatedModel(actor: Actor): Pick<Agent, 'provider' | 'model' | 'reasoning'> {
+    this.#principal(actor);
+    return this.#db.prepare('SELECT provider,model,reasoning FROM generated_model WHERE id=1').get() as Pick<Agent, 'provider' | 'model' | 'reasoning'>;
+  }
+  configureGeneratedModel(actor: Actor, provider: Agent['provider'], model: string, reasoning: string): void {
+    this.#admin(actor); text(model, 256); text(reasoning, 64);
+    check(provider === 'openai_subscription' || provider === 'ollama', 'invalid', 'Invalid provider');
+    this.#db.prepare('UPDATE generated_model SET provider=?,model=?,reasoning=? WHERE id=1').run(provider, model, reasoning);
+  }
   commonRules(actor: Actor): { revision: number; body: string } {
     this.#principal(actor);
     return this.#db.prepare('SELECT revision,body FROM common_rules WHERE id=1').get() as { revision: number; body: string };

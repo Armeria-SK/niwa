@@ -159,6 +159,40 @@ test('fallback selection persists independently and rejects remote, incapable an
   } finally { runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test('verified generated models persist, apply only to new bots, and cannot be changed by the leader', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-generated-model-')); let runtime = new Runtime(root);
+  const store = new MemoryCredentialStore(); await store.write(credential);
+  let changed = false;
+  const transport: typeof fetch = async url => {
+    if (String(url).includes('/models')) return Response.json({ models: [{ slug: 'artificial-sub', visibility: 'list', supported_reasoning_levels: [{ effort: 'low' }] }] });
+    if (String(url).endsWith('/tags')) return Response.json({ models: [{ name: 'artificial-local' }] });
+    if (changed) runtime.configureOllama(runtime.administrator(), 'http://127.0.0.1:11435');
+    return Response.json({ capabilities: ['completion', 'tools'] });
+  };
+  const subscription = new Subscription(store, () => {}, { fetch: transport });
+  try {
+    let admin = runtime.administrator(); const leader = runtime.bootstrap(admin); let actor = runtime.agentSession(leader.id);
+    const existing = runtime.createAgent(actor, '既存Bot');
+    assert.equal(existing.model, 'gpt-5.6-luna'); assert.equal(existing.reasoning, 'max');
+    assert.throws(() => runtime.configureGeneratedModel(actor, 'ollama', 'forged', 'native'), /Administrator/);
+    runtime.configureOllama(admin, 'http://127.0.0.1:11434'); const gateway = new ModelGateway(runtime, transport, subscription);
+    await assert.rejects(gateway.selectGenerated('ollama', 'missing', 'native'), /not installed/);
+    await assert.rejects(gateway.selectGenerated('ollama', 'artificial-local', 'max'), /Invalid/);
+    changed = true; await assert.rejects(gateway.selectGenerated('ollama', 'artificial-local', 'native'), /changed/); changed = false;
+    assert.equal(runtime.generatedModel(admin).model, existing.model);
+    await gateway.selectGenerated('ollama', 'artificial-local', 'native');
+    const local = runtime.createAgent(actor, 'ローカルBot'); assert.equal(local.provider, 'ollama'); assert.equal(local.model, 'artificial-local');
+    assert.equal(runtime.agents(admin).find(agent => agent.id === existing.id)!.model, existing.model);
+    await assert.rejects(gateway.selectGenerated('openai_subscription', 'artificial-sub', 'max'), /unavailable/);
+    assert.equal(runtime.generatedModel(admin).provider, 'ollama');
+    await gateway.selectGenerated('openai_subscription', 'artificial-sub', 'low');
+    runtime.close(); runtime = new Runtime(root); admin = runtime.administrator(); actor = runtime.agentSession(leader.id);
+    const next = runtime.createAgent(actor, '再起動後のBot');
+    assert.equal(next.provider, 'openai_subscription'); assert.equal(next.model, 'artificial-sub'); assert.equal(next.reasoning, 'low');
+    assert.equal(runtime.agents(admin).find(agent => agent.id === local.id)!.model, 'artificial-local');
+  } finally { await subscription.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test('gateway rejects absent and remote models and configuration changes during selection', async () => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-gateway-')); const runtime = new Runtime(root);
   try {
