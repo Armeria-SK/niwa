@@ -17,6 +17,39 @@ import { TurnRunner } from '../src/runtime/turns.ts';
 import { Scheduler } from '../src/runtime/scheduler.ts';
 import { DatabaseSync } from 'node:sqlite';
 
+test('profile and model save together only after discovery and an unchanged edit version', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-profile-model-')); const runtime = new Runtime(root);
+  const admin = runtime.administrator(); const leader = runtime.bootstrap(admin);
+  runtime.configureOllama(admin, 'http://127.0.0.1:11434');
+  let duringDiscovery = () => {};
+  const gateway = new ModelGateway(runtime, async url => {
+    if (String(url).endsWith('/api/tags')) return Response.json({ models: [{ name: 'artificial-local' }] });
+    duringDiscovery(); return Response.json({ capabilities: ['completion', 'tools'] });
+  });
+  const selection = { provider: 'ollama' as const, model: 'artificial-local', reasoning: 'native' };
+  try {
+    let version = runtime.profileVersion(admin, leader.id);
+    await assert.rejects(gateway.updateProfile(leader.id, { persona: '保存しない' }, version, { ...selection, model: 'missing' }));
+    assert.equal(runtime.profileVersion(admin, leader.id), version);
+    duringDiscovery = () => runtime.updateProfile(admin, leader.id, { persona: '別画面の編集' });
+    await assert.rejects(gateway.updateProfile(leader.id, { persona: '古い編集' }, version, selection), /Profile changed/);
+    assert.equal(runtime.agents(admin)[0]!.model, leader.model);
+    assert.equal(runtime.profile(admin, leader.id).persona, '別画面の編集');
+    duringDiscovery = () => {}; version = runtime.profileVersion(admin, leader.id);
+    const db = new DatabaseSync(join(root, 'control.db'));
+    db.exec("CREATE TRIGGER reject_test_model BEFORE UPDATE OF model ON agents BEGIN SELECT RAISE(ABORT,'synthetic failure'); END");
+    await assert.rejects(gateway.updateProfile(leader.id, { persona: '途中失敗の編集' }, version, selection));
+    assert.equal(runtime.profileVersion(admin, leader.id), version);
+    db.exec('DROP TRIGGER reject_test_model'); db.close();
+    const saved = await gateway.updateProfile(leader.id, { persona: '新しい人格' }, version, selection);
+    assert.notEqual(saved.version, version);
+    assert.equal(runtime.profile(admin, leader.id).persona, '新しい人格');
+    assert.equal(runtime.agents(admin)[0]!.model, selection.model);
+    runtime.setAgentModel(admin, leader.id, 'ollama', 'external-change', 'native');
+    await assert.rejects(gateway.updateProfile(leader.id, { persona: '古いモデルの画面' }, saved.version), /Profile changed/);
+  } finally { runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test('quota switches to the configured local model and a later successful probe restores the configured subscription', async () => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-quota-route-')); let runtime = new Runtime(root);
   const store = new MemoryCredentialStore(); await store.write(credential);

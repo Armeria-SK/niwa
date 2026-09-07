@@ -178,18 +178,23 @@ export class Runtime {
     return row ? JSON.parse(row.profile as string) as Record<string, string> : {};
   }
   profileVersion(actor: Actor, agentId: string): string {
-    return createHash('sha256').update(JSON.stringify([this.profile(actor, agentId), this.#agent(agentId).name])).digest('hex');
+    const { name, provider, model, reasoning } = this.#agent(agentId);
+    return createHash('sha256').update(JSON.stringify([this.profile(actor, agentId), name, provider, model, reasoning])).digest('hex');
   }
-  updateProfile(actor: Actor, agentId: string, patch: Record<string, unknown>, expected?: string): void {
+  updateProfile(actor: Actor, agentId: string, patch: Record<string, unknown>, expected?: string, selection?: Pick<Agent, 'provider' | 'model' | 'reasoning'>): void {
     this.#admin(actor); this.#agent(agentId);
     check(Value.Check(profileSchema, patch), 'invalid', 'Invalid profile');
-    this.#writeProfile(actor, agentId, patch, true, expected);
+    if (selection) {
+      check(selection.provider === 'openai_subscription' || selection.provider === 'ollama', 'invalid', 'Invalid provider');
+      text(selection.model, 256); text(selection.reasoning, 64);
+    }
+    this.#writeProfile(actor, agentId, patch, true, expected, selection);
   }
   updateOwnProfile(actor: Actor, name: string, persona: string): void {
     const principal = this.#bot(actor); this.#running(actor);
     this.#writeProfile(actor, principal.id, { name: text(name, 100), persona: text(persona, 10_000) }, false);
   }
-  #writeProfile(actor: Actor, agentId: string, patch: Record<string, unknown>, interrupt: boolean, expected?: string): void {
+  #writeProfile(actor: Actor, agentId: string, patch: Record<string, unknown>, interrupt: boolean, expected?: string, selection?: Pick<Agent, 'provider' | 'model' | 'reasoning'>): void {
     transaction(this.#db, () => {
       check(expected === undefined || expected === this.profileVersion(actor, agentId), 'conflict', 'Profile changed; reload before saving');
       if (interrupt) {
@@ -201,6 +206,7 @@ export class Runtime {
       if (name !== undefined) this.#db.prepare('UPDATE agents SET name=? WHERE id=?').run(text(name, 100), agentId);
       const next = { ...this.profile(actor, agentId), ...details };
       this.#db.prepare('INSERT INTO agent_profiles VALUES (?,?) ON CONFLICT(agent_id) DO UPDATE SET profile=excluded.profile').run(agentId, JSON.stringify(next));
+      if (selection) this.#db.prepare('UPDATE agents SET provider=?,model=?,reasoning=? WHERE id=?').run(selection.provider, selection.model, selection.reasoning, agentId);
       if (interrupt) this.#interruptTasks(agentId);
     });
   }

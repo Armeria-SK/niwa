@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { Type, type TSchema } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { DomainError } from '../domain/types.ts';
-import type { Settings } from '../domain/types.ts';
+import type { Agent, Settings } from '../domain/types.ts';
 import type { Runtime } from '../runtime/runtime.ts';
 import { WebAuth } from './auth.ts';
 import { ModelGateway } from '../providers/gateway.ts';
@@ -89,7 +89,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       run: (_m, b) => models.selectFallback(b.model as string | null) },
     { method: 'PUT', path: /^\/api\/agents\/([0-9a-f-]{36})\/model$/, schema: object({ provider: Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription')]), model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.Optional(Type.String({ maxLength: 20 })) }),
       run: (m, b) => b.provider === 'ollama' ? models.select(m[1]!, b.model as string) : models.selectSubscription(m[1]!, b.model as string, b.reasoning as string) },
-    { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/profile$/, schema: object({ patch: profileSchema, version: Type.String({ pattern: '^[0-9a-f]{64}$' }) }), run: (m, b) => { runtime.updateProfile(admin, m[1]!, b.patch as Record<string, unknown>, b.version as string); return { version: runtime.profileVersion(admin, m[1]!) }; } },
+    { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/profile$/, schema: object({ patch: profileSchema, version: Type.String({ pattern: '^[0-9a-f]{64}$' }), selection: Type.Optional(object({ provider: Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription')]), model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 20 }) })) }), run: (m, b) => models.updateProfile(m[1]!, b.patch as Record<string, unknown>, b.version as string, b.selection as Pick<Agent, 'provider' | 'model' | 'reasoning'> | undefined) },
     { method: 'GET', path: /^\/api\/state$/, run: () => ({ agents: runtime.agents(admin).map(agent => ({ ...agent, profile: runtime.profile(admin, agent.id), profile_version: runtime.profileVersion(admin, agent.id), memory_version: runtime.memoryVersion(admin, agent.id) })),
       rooms: runtime.rooms(admin).map(room => ({ ...room, ...runtime.roomPreferences(admin, room.id), ...runtime.messageSummary(admin, room.id), participants: runtime.participants(admin, room.id) })), settings: runtime.settings(admin), commonRules: runtime.commonRules(admin), tasks: runtime.tasks.list(admin).map(task => ({ ...task, replies: runtime.tasks.replies(admin, task.id) })) }) },
     { method: 'PATCH', path: /^\/api\/rooms\/([0-9a-f-]{36})\/organization$/, schema: object({ pinned: Type.Optional(Type.Boolean()), archived: Type.Optional(Type.Boolean()) }),

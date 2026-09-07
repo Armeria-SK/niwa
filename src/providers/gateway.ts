@@ -27,6 +27,14 @@ export class ModelGateway {
     (await this.#verify('ollama', model, 'native'))();
     return this.#runtime.setAgentModel(this.#runtime.administrator(), agentId, 'ollama', model, 'native');
   }
+  async updateProfile(agentId: string, patch: Record<string, unknown>, version: string, selection?: Pick<Agent, 'provider' | 'model' | 'reasoning'>) {
+    // Copy before discovery so validation and persistence always use the same input.
+    patch = { ...patch }; selection = selection && { ...selection };
+    if (selection) (await this.#verify(selection.provider, selection.model, selection.reasoning))();
+    const admin = this.#runtime.administrator();
+    this.#runtime.updateProfile(admin, agentId, patch, version, selection);
+    return { version: this.#runtime.profileVersion(admin, agentId) };
+  }
   async #verify(provider: Agent['provider'], model: string, effort: string): Promise<() => void> {
     if (provider === 'openai_subscription') {
       check(this.subscription, 'conflict', 'Subscription service unavailable');
