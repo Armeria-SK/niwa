@@ -139,7 +139,15 @@ sudoのパスワード入力が必要です。自動実行が `interactive authe
 
 既存のruntime/workspaceや同名の専用ユーザー・グループがある場合は停止します。途中で失敗した場合も、既存ファイルを削除してやり直さず、状態を確認してください。
 
-ここではサービスの登録・起動や実行イメージの取得は行いません。プログラム実行の有効化には、[追加の準備と隔離検証](deploy/ubuntu/README.md)および[サービス設定](deploy/ubuntu/SERVICES.md)が必要です。
+準備が完了したら、専用ユーザーの権限を検査し、ログアウト後も使える実行用セッションを準備します。
+
+```bash
+sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor-session.sh --apply
+```
+
+この操作は `niwa-exec` のsystemdユーザー管理機能を起動し、rootless Podman・seccomp・cgroup・保存先を検査します。Niwa本体やコンテナは起動しません。
+
+ここではNiwaのサービス登録・起動や実行イメージの取得は行いません。プログラム実行の有効化には、[追加の準備と隔離検証](deploy/ubuntu/README.md)および[サービス設定](deploy/ubuntu/SERVICES.md)が必要です。
 
 ## 5. 初回の設定を作る
 

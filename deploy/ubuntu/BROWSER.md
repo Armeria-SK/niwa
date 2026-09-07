@@ -23,3 +23,13 @@
 取得は操作ごとに64要求/8MB、単一resource256KB。大きなページや未知の通信を使うサイトでは表示が欠ける場合がある。
 セッションはBot・会話別で最大16、同時処理6、非使用5分で終了する。資格情報は保存しない。
 Windows上の実Chromeと人工IPCの検証は、UbuntuのOS隔離確認を代替しない。
+
+2026-09-08、UbuntuでChrome for Testing 152.0.7977.82を `.local/chrome-testing` に配置し、実ブラウザーの2件を含む全222テストが成功（失敗0・skip0）。sandboxを無効化せず、人工ページと専用pipeの動作を確認しました。これはホスト上の試験で、実Podmanコンテナの隔離受入ではありません。
+
+この検証環境の再実行:
+
+```sh
+NIWA_TEST_CHROMIUM=/home/niwa/niwa/.local/chrome-testing/run-chrome npm run check
+```
+
+`run-chrome` は検証専用のローカル起動スクリプトで、同じ `.local` に展開したNSS/NSPR/ALSAライブラリを指定します。生成物はGit除外で、別環境にcloneした場合は自動では用意されません。製品workerの環境変数制限は変更していません。ログは `.local/ubuntu-check-chrome.log` に保存しています。

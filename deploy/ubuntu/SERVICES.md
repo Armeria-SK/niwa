@@ -31,6 +31,16 @@ systemd-analyze --user verify deploy/ubuntu/systemd/niwa-executor.service
 
 実際の起動はexecutor、workspace、本体の順に行い、停止は逆順にします。本体のAfter指定は同時起動時のworkspaceとの順序を指定するもので、別user managerのexecutor起動を保証するものではありません。各socketを確認し、本体の対応UID設定を有効化してから利用します。
 
+`prepare-executor.sh` の実行と本体ビルド後、次のコマンドで所有権・IPCグループ・専用ユーザーのアクセス権を検査し、lingerとuser managerを準備できます。
+
+```sh
+sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor-session.sh --apply
+```
+
+既存の所有権やアクセス権が想定と違えば、変更前に停止します。通過後は `loginctl enable-linger niwa-exec` と `systemctl start user@<確認したUID>.service` を実行します。専用user manager内の一時サービスへcgroupを委譲し、製品と同じ `validatePodmanInfo` でrootless・seccomp・CPU/memory/pids制御・private保存先を確認します。Podmanの初期メタデータが専用HOME/runtimeへ作られる場合があります。イメージ取得やコンテナ起動は行いません。
+
+2026-09-08、スクリプト構文と人工環境テスト5件が成功。実行はsudo対話認証が必要で未完了です。途中失敗時はエラーを確認してください。所有権を変更せず同じlinger/user managerの状態へ揃える処理ですが、成功してもディスク上限・実イメージ・コンテナ隔離の受入は別途必要です。
+
 受入では、ソケット到達、ソース・ビルド済みコード・configへの書込拒否、秘密への到達拒否、Podmanのcgroup cpu/memory/pids、サービス停止時のcontainer終了、SIGKILL後の再起動、OS再起動後の手動停止状態維持を実際に確認します。systemd-analyze verifyは構文や依存の検査であり、この動作確認の代わりではありません。
 
 仕様参照: [systemdの実行環境設定](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)、[cgroupの委譲](https://systemd.io/CGROUP_DELEGATION/)。
