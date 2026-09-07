@@ -479,6 +479,10 @@ export class Tasks {
       this.expire(actor);
     });
   }
+  history(actor: Actor, id: string): TaskEvent[] {
+    this.get(actor, id);
+    return (this.#db.prepare('SELECT * FROM task_events WHERE task_id=? ORDER BY sequence DESC LIMIT 100').all(id) as unknown as TaskEvent[]).reverse();
+  }
   events(actor: Actor, after = 0): TaskEvent[] {
     check(Number.isSafeInteger(after) && after >= 0, 'invalid', 'Invalid event cursor');
     const allowed = new Set(this.list(actor).map(task => task.id));

@@ -120,6 +120,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       run: m => { runtime.tasks[m[2] as 'pause' | 'retry' | 'complete'](admin, m[1]!); return { ok: true }; } },
     { method: 'POST', path: /^\/api\/tasks\/([0-9a-f-]{36})\/instruct$/, schema: object({ body: string }),
       run: (m, b) => { runtime.tasks.instruct(admin, m[1]!, b.body as string); return { ok: true }; } },
+    { method: 'GET', path: /^\/api\/tasks\/([0-9a-f-]{36})\/history$/, run: m => runtime.tasks.history(admin, m[1]!) },
     { method: 'GET', path: /^\/api\/events$/, run: (_m, _b, url) => runtime.tasks.events(admin, Number(url.searchParams.get('after') ?? '0')) },
   ];
   return createServer({ requestTimeout: 15_000, headersTimeout: 10_000, maxHeaderSize: 16_384 }, async (req, res) => {

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api } from '../api.js';
 import { Avatar, EmptyState, Modal, Segmented } from '../components.jsx';
 import { ActivityIcon, ArrowUpRightIcon, CheckCircleIcon, FileIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 import { Recap, ArtifactLibrary } from './Productivity.jsx';
@@ -6,6 +7,7 @@ import { taskStatus } from '../productivity.js';
 import { Schedules } from './Schedules.jsx';
 
 const openStatuses = ['running', 'waiting', 'paused', 'failed'];
+const eventLabels = { queued: '実行待ち', running: '実行を開始', completed: '完了', failed: '失敗', cancelled: '中止', waiting_child: '仲間の結果を待機', waiting_user: '確認・回答を待機', waiting_provider: '接続・モデルの回復を待機', paused: '一時停止', resumed: '再開', instructed: '追加指示を保存', retried: '再試行' };
 export function Activity({ activities, members, paused, onPause, onDecide, onThread, onArtifact, onControl, updates, seen, onRead, artifacts, filter, onFilter, schedules, threads, onScheduleSave, onScheduleToggle, onScheduleDelete }) {
   const [detail, setDetail] = useState(null);
   const [approval, setApproval] = useState(null);
@@ -36,11 +38,19 @@ export function Activity({ activities, members, paused, onPause, onDecide, onThr
 
 function TaskDetail({ task, member, paused, onClose, onControl, onThread }) {
   const [instruction, setInstruction] = useState('');
+  const [history, setHistory] = useState([]); const [historyError, setHistoryError] = useState('');
+  useEffect(() => {
+    let active = true;
+    api(`/tasks/${task.id}/history`).then(items => { if (active) { setHistory(items); setHistoryError(''); } })
+      .catch(error => { if (active) setHistoryError(error.message); });
+    return () => { active = false; };
+  }, [task.id, task.updated_at, task.instructions?.length]);
   const canAct = openStatuses.includes(task.status);
   return <Modal title={task.title} onClose={onClose} className="task-modal"><div className="modal-body form-stack"><div className="activity-detail-owner"><Avatar member={member} size={40} /><span>{member?.name}</span><span role="status">{paused && task.status === 'running' ? '全体の再開待ち' : taskStatus[task.status]}</span></div><p>{task.detail}</p>{task.reason ? <p className="task-reason">{task.reason}</p> : null}<div><h3 className="small-heading">これまでの進み具合</h3><ol className="task-steps">{task.steps.map((step, i) => <li key={`${i}-${step}`}>{step}</li>)}</ol></div>
     {task.instructions?.length ? <div><h3 className="small-heading">追加した指示</h3><ul className="task-instructions">{task.instructions.map(item => <li key={item.id}><time>{item.time}</time><p>{item.text}</p></li>)}</ul></div> : null}
     {canAct ? <form className="form-stack" onSubmit={async e => { e.preventDefault(); if (instruction.trim() && await onControl(task.id, 'instruct', instruction.trim())) setInstruction(''); }}><label className="field"><span>この仕事への追加指示</span><textarea rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="進め方や、優先してほしいことなど" /></label><button className="button secondary" disabled={!instruction.trim()}>指示を追加</button></form> : null}
-    {task.log?.length ? <div><h3 className="small-heading">操作の履歴</h3><ul className="task-log">{task.log.map(item => <li key={item.id}><time>{item.time}</time> {item.text}</li>)}</ul></div> : null}
+    {historyError ? <p role="alert">履歴を取得できませんでした。{historyError}</p> : null}
+    {history.length ? <div><h3 className="small-heading">操作の履歴（直近100件）</h3><ul className="task-log">{history.map(item => <li key={item.sequence}><time dateTime={new Date(item.created_at).toISOString()}>{new Date(item.created_at).toLocaleString('ja-JP')}</time> {eventLabels[item.kind] || '状態を更新'}</li>)}</ul></div> : null}
     </div><div className="form-actions task-controls">{task.thread ? <button className="button subtle" onClick={() => { onClose(); onThread(task.thread); }}>関連する会話</button> : null}
     {task.status === 'running' ? <><button className="button secondary" onClick={() => onControl(task.id, 'pause')}>この仕事を一時停止</button><button className="button primary" onClick={() => onControl(task.id, 'complete')}>完了にする</button></> : null}
     {['paused', 'waiting'].includes(task.status) && (task.paused || task.state !== 'waiting_child') ? <button className="button primary" onClick={() => onControl(task.id, 'resume')}>この仕事を再開</button> : null}

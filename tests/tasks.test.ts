@@ -366,3 +366,21 @@ test('migration retains v1 leader and settings', t => {
     assert.deepEqual(runtime.tasks.list(admin), []);
   } finally { runtime.close(); }
 });
+
+test('task history is scoped, chronological, bounded and survives restart', t => {
+  const f = fixture(t);
+  const privateRoom = f.runtime.createRoom(f.admin, '履歴の個別会話', [f.leader.id]);
+  const task = f.tasks.create(f.admin, f.leader.id, privateRoom.id, '履歴検証');
+  const other = f.tasks.create(f.admin, f.child.id, f.room.id, '別仕事');
+  f.tasks.pause(f.admin, task.id); f.tasks.resume(f.admin, task.id); f.tasks.instruct(f.admin, task.id, '人工追加指示');
+  assert.deepEqual(f.tasks.history(f.admin, task.id).map(item => item.kind), ['queued', 'paused', 'resumed', 'instructed']);
+  assert.throws(() => f.tasks.history(f.childActor, task.id), /unavailable/);
+  assert.deepEqual(f.tasks.history(f.childActor, other.id).map(item => item.kind), ['queued']);
+  for (let i = 0; i < 60; i++) { f.tasks.pause(f.admin, task.id); f.tasks.resume(f.admin, task.id); }
+  const items = f.tasks.history(f.admin, task.id);
+  assert.equal(items.length, 100); assert.ok(items.every(item => item.task_id === task.id));
+  assert.ok(items.every((item, i) => !i || item.sequence > items[i - 1]!.sequence));
+  assert.equal(items.at(-1)?.kind, 'resumed');
+  const reopened = new Runtime(f.root);
+  try { assert.deepEqual(reopened.tasks.history(reopened.administrator(), task.id), items); } finally { reopened.close(); }
+});
