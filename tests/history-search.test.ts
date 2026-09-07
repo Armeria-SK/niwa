@@ -70,7 +70,7 @@ test('upgrading an existing database indexes saved sources and subsequent task r
     for (const table of ['messages', 'tasks', 'task_replies', 'artifacts']) {
       for (const action of ['insert', 'update', 'delete']) db.exec(`DROP TRIGGER search_${table}_${action}`);
     }
-    db.exec('DROP TABLE history_search; PRAGMA user_version=12;');
+    db.exec('DROP TABLE schedule_runs; DROP TABLE schedules; DROP TABLE history_search; PRAGMA user_version=12;');
   } finally { db.close(); }
   runtime = new Runtime(root); admin = runtime.administrator();
   const actor = runtime.agentSession(leader.id);

@@ -43,6 +43,22 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   return { runtime, admin, leader, call, login, root };
 }
 
+test('administrator schedules API validates input and persists stop/resume', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.call('/api/schedules')).status, 401);
+  await f.login();
+  const room = f.runtime.createRoom(f.admin, '定期の依頼');
+  const input = { id: randomUUID(), agent_id: f.leader.id, room_id: room.id, prompt: '調査を更新',
+    interval_ms: 86400_000, next_at: Date.now() + 60_000, max_runs: 7, timeout_ms: 3600_000 };
+  assert.equal((await f.call('/api/schedules', 'POST', { ...input, max_runs: 0 })).status, 400);
+  assert.equal((await f.call('/api/schedules', 'POST', input)).status, 200);
+  assert.equal((await f.call('/api/schedules', 'POST', input)).status, 200);
+  assert.equal((await f.call(`/api/schedules/${input.id}`, 'PATCH', { enabled: false })).status, 200);
+  const rows = await (await f.call('/api/schedules')).json() as { enabled: number }[];
+  assert.equal(rows.length, 1); assert.equal(rows[0]!.enabled, 0);
+  assert.equal((await f.call(`/api/schedules/${input.id}`, 'PATCH', { enabled: true })).status, 200);
+});
+
 test('thread organization persists, preserves messages and requires restoration for new submissions', async t => {
   const f = await fixture(t); await f.login();
   const room = f.runtime.createRoom(f.admin, '保管する会話');

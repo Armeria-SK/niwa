@@ -35,6 +35,13 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
   const admin = runtime.administrator();
   type Route = { method: string; path: RegExp; schema?: TSchema; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL) => unknown };
   const routes: Route[] = [
+    { method: 'GET', path: /^\/api\/schedules$/, run: () => runtime.schedules.list(admin) },
+    { method: 'POST', path: /^\/api\/schedules$/, schema: object({ id, agent_id: id, room_id: id, prompt: string,
+      interval_ms: Type.Integer({ minimum: 60_000, maximum: 365 * 86400_000 }), next_at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }),
+      max_runs: Type.Integer({ minimum: 1, maximum: 10_000 }), timeout_ms: Type.Integer({ minimum: 60_000, maximum: 86400_000 }) }),
+      run: (_m, b) => runtime.schedules.create(admin, b as unknown as import('../runtime/schedules.ts').ScheduleInput) },
+    { method: 'PATCH', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, schema: object({ enabled: Type.Boolean() }),
+      run: (m, b) => { runtime.schedules.setEnabled(admin, m[1]!, b.enabled as boolean); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/subscription$/, run: async () => models.subscription ? { available: true, ...await models.subscription.status() } : { available: false, connected: false, pending: false, url: null, error: null } },
     { method: 'POST', path: /^\/api\/subscription\/login$/, schema: object({ experimental_opt_in: Type.Literal(true) }), run: async () => {
       if (!models.subscription) throw new DomainError('conflict', 'Subscription service unavailable');

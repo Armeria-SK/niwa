@@ -8,6 +8,8 @@ import { openDatabase, transaction } from '../storage/database.ts';
 import { controlSchema, memoryMigrations } from '../storage/schema.ts';
 import { taskSchema } from '../storage/task-schema.ts';
 import { Tasks } from './tasks.ts';
+import { Schedules } from './schedules.ts';
+import { scheduleSchema } from '../storage/schedule-schema.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
 import { fallbackSchema } from '../storage/fallback-schema.ts';
@@ -35,6 +37,7 @@ type Principal = { kind: 'admin'; id: 'administrator' } | { kind: 'agent'; id: s
 /** Trusted application service. Do not expose this object to generated code or models. */
 export class Runtime {
   readonly tasks: Tasks;
+  readonly schedules: Schedules;
   #db: DatabaseSync;
   #root: string;
   #identities = new WeakMap<Actor, Principal>();
@@ -43,7 +46,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema]);
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
       room: (actor, id) => this.#room(actor, id),
@@ -54,6 +57,12 @@ export class Runtime {
         return agent.status === 'active' && (room?.visibility === 'shared'
           || !!this.#db.prepare('SELECT 1 FROM participants WHERE room_id=? AND agent_id=?').get(roomId, agentId));
       },
+    });
+    this.schedules = new Schedules(this.#db, this.tasks, actor => this.#admin(actor), (actor, agentId, roomId) => {
+      this.#room(actor, roomId);
+      check(!this.roomPreferences(actor, roomId).archived, 'conflict', 'Restore the archived room before scheduling');
+      check(this.#agent(agentId).status === 'active', 'forbidden', 'Agent is dormant');
+      this.#room(this.agentSession(agentId), roomId);
     });
   }
 
