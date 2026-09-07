@@ -53,12 +53,18 @@ test('profile and model save together only after discovery and an unchanged edit
 test('quota switches to the configured local model and a later successful probe restores the configured subscription', async () => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-quota-route-')); let runtime = new Runtime(root);
   const store = new MemoryCredentialStore(); await store.write(credential);
-  let primaryCalls = 0, localCalls = 0, limited = true;
-  const transport: typeof fetch = async url => {
+  let primaryCalls = 0, localCalls = 0, reviewCalls = 0, limited = true;
+  const transport: typeof fetch = async (url, init) => {
     const path = String(url);
+    const input = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+    const review = input.tools?.length === 1 && (input.tools[0].name ?? input.tools[0].function?.name) === 'memory_review';
     if (path.includes('/models')) return Response.json({ models: [{ slug: 'artificial-model', display_name: 'Artificial', supported_reasoning_levels: [{ effort: 'low' }], visibility: 'list' }] });
     if (path.endsWith('/api/show')) return Response.json({ capabilities: ['completion', 'tools'] });
-    if (path.endsWith('/api/chat')) { localCalls++; return Response.json({ done: true, message: { role: 'assistant', content: '指定ローカルで継続' } }); }
+    if (path.endsWith('/api/chat')) {
+      if (review) reviewCalls++; else localCalls++;
+      return Response.json({ done: true, message: { role: 'assistant', content: review ? '{"memories":[]}' : '指定ローカルで継続' } });
+    }
+    if (review && !limited) { reviewCalls++; return response('{"memories":[]}'); }
     primaryCalls++;
     return limited ? Response.json({ error: { type: 'usage_limit_reached', resets_at: Math.floor(Date.now() / 1000) + 3600 } }, { status: 429 }) : response('サブスクへ復帰');
   };
@@ -92,6 +98,7 @@ test('quota switches to the configured local model and a later successful probe 
     await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
     assert.equal(primaryCalls, 2); assert.equal(localCalls, 2);
     assert.equal(runtime.tasks.list(admin).at(-1)!.result, 'サブスクへ復帰');
+    assert.equal(reviewCalls, 2);
     assert.equal(runtime.agents(admin)[0]!.model, 'artificial-model');
     assert.equal(runtime.modelRoutes(admin)[0]!.provider, 'openai_subscription');
     assert.equal(runtime.modelRoutes(admin)[0]!.reason, 'configured');

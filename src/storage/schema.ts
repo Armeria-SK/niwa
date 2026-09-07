@@ -123,4 +123,8 @@ CREATE TRIGGER invalidate_procedures AFTER UPDATE OF revision ON memory_state BE
 ALTER TABLE task_steps ADD COLUMN rules_revision INTEGER NOT NULL DEFAULT 1;
 `, `
 CREATE INDEX memory_creation_order ON memory_audit(sequence,memory_id) WHERE action='created';
+`, `
+CREATE TABLE task_memory_reviews (
+  task_id TEXT PRIMARY KEY, memory_revision INTEGER NOT NULL, rules_revision INTEGER NOT NULL
+) STRICT;
 `];

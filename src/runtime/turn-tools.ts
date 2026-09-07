@@ -11,6 +11,7 @@ import type { WebSearch } from '../tools/web/search.ts';
 import type { WorkspaceRead, WorkspaceWriter } from '../tools/files/client.ts';
 import { creationProfileSchema } from '../domain/profile.ts';
 import type { ProgramExecutor } from '../sandbox/client.ts';
+import { memoryReviewSchema, type MemoryReview } from '../domain/memory-review.ts';
 
 export interface ExternalTools { readPage?: typeof readPublicPage; search?: WebSearch; workspace?: WorkspaceRead; workspaceWrite?: WorkspaceWriter; program?: ProgramExecutor }
 
@@ -43,6 +44,7 @@ const definitions = {
   task_delegate: { description: 'この会話を読める別Botへ仕事を依頼し、結果を待つ。この呼び出しは単独で行う。', schema: object({ agent_id: short(), prompt: body() }) },
   ask_user: { description: '管理者へ質問し、回答を待つ。この呼び出しは単独で行う。', schema: object({ question: body() }) },
   memory_remember: { description: '現在の会話で読んだメッセージを出所に、自分の記憶を保存する。', schema: object({ source_message_id: short(), body: body() }) },
+  memory_review: { description: '会話のうち今後も役立つ好み・合意・経験・関心を出所付きで選び、自分の記憶として保存する。既存記憶と重なる情報や挨拶は省き、保存不要ならmemoriesを空配列にする。', schema: object(memoryReviewSchema.properties) },
   memory_search: { description: '現在の会話へ利用できる自分の記憶だけを検索する。', schema: object({ query: Type.String({ maxLength: 200 }) }) },
 };
 export function turnTools(isLeader: boolean, external: ExternalTools = {}, sharedRoom = false, autonomous = false): ModelToolDefinition[] {
@@ -108,6 +110,7 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
           const memory = runtime.remember(actor, args.source_message_id!, args.body!, `${lease.task.id}:${operationId}`);
           return { id: memory.id };
         }
+        case 'memory_review': return runtime.reviewMemory(actor, lease, call.arguments as MemoryReview);
         default: return { error: 'Unknown tool' };
       }
     });

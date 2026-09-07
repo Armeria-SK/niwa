@@ -24,7 +24,10 @@ const tool = (name: string, args: Record<string, unknown>): ModelEvent[] => [
 ];
 function model(reply: (request: ModelRequest) => ModelEvent[] | Promise<ModelEvent[]>): ModelAdapter {
   return { adapter_id: 'artificial', capabilities: openAISubscriptionAdapterCapabilities,
-    async *run(request) { yield* await reply(request); } };
+    async *run(request) {
+      yield* request.tools.length === 1 && request.tools[0]?.name === 'memory_review'
+        ? tool('memory_review', { memories: [] }) : await reply(request);
+    } };
 }
 
 test('addressed bot replies continue at the recipient without leader echo and respect pause and archive', async t => {
@@ -235,7 +238,7 @@ test('shared-change work reads the current conversation and its reply does not t
   })).run(f.runtime.tasks.claim(f.admin)!);
   f.runtime.schedules.dispatch(f.admin, input.next_at + 60_000);
   assert.equal(f.runtime.tasks.list(f.admin).length, 1); assert.equal(calls, 1);
-  assert.equal(f.runtime.schedules.list(f.admin)[0]!.model_calls, 1);
+  assert.equal(f.runtime.schedules.list(f.admin)[0]!.model_calls, 2); // Memory review also consumes the configured budget.
 });
 
 test('schedule budget prevents another model call after a transport failure and restart', async t => {
@@ -280,7 +283,7 @@ test('long turns compact complete exchanges, recreate the adapter, and preserve 
   await runner.run(f.runtime.tasks.claim(f.admin)!);
   assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'completed');
   assert.equal(requests, 3); assert.equal(reads, 2); assert.equal(resolutions, 2);
-  assert.equal(f.runtime.tasks.steps(f.actor, task.id).length, 3);
+  assert.equal(f.runtime.tasks.steps(f.actor, task.id).length, 4);
 });
 
 test('interruption during compaction rebuilds from stored steps after restart without repeating completed reads', async t => {

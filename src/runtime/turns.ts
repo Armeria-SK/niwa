@@ -7,6 +7,8 @@ import { collectModelEvents } from '../providers/shared/adapter.ts';
 import { isReasoningEffort } from '../providers/shared/catalog.ts';
 import { turnTools, executeAsyncTurnTool, type ExternalTools } from './turn-tools.ts';
 import { ContextLimit, fitContext, type FittedContext } from './context/fit.ts';
+import { Value } from '@sinclair/typebox/value';
+import { memoryReviewSchema } from '../domain/memory-review.ts';
 
 /** Return a fresh adapter each time; calls after memory corrections must discard opaque continuation. */
 export type ResolveAdapter = (agent: Agent, taskId: string, signal?: AbortSignal) => Promise<ModelAdapter>;
@@ -80,6 +82,7 @@ export class TurnRunner {
           role: 'user', content: JSON.stringify({ message_id: message.id, author_id: message.author_id, text: message.body }),
         }));
         const workState = runtime.tasks.workState(actor, lease);
+        const reviewingMemory = base.length > 0 && !runtime.memoryReviewed(actor, lease);
         // Full external results remain in receipts and task_history_read, not duplicated in every request.
         const inputState = { ...workState, external_operations: workState.external_operations.map(({ result: _result, ...operation }) => operation) };
         if (workState.autonomous && !adapter.capabilities.supports_tool_calls) {
@@ -94,20 +97,26 @@ export class TurnRunner {
           system_instructions: `${RULES}${workState.autonomous ? '\n今回は自発活動の機会です。自分の関心・人格、最近の会話、過去の成果を確認し、管理者の方針の範囲で役立つ活動を自分で選んでください。毎回の発言や作業は必須ではありません。今は必要がなければtask_restを単独で呼んで休んでください。私的な経験をそのまま共有会話へ公開しないでください。' : ''}${workState.task.conversation_reply ? '\n今回は別のBotからあなたへの会話です。現在の依頼に応答し、返信相手がいる場合は@名前から始めてください。話題を引き継ぐ必要がなければ短く答えるか休息してください。' : ''}\nあなた: ${JSON.stringify({ id: agent.id, name: agent.name, role: agent.role, profile: runtime.profile(actor, agent.id) })}\nメンバー: ${JSON.stringify(members)}\n利用できる自分の記憶: ${JSON.stringify(context.memories.slice(-20).map(memory => ({ id: memory.id, body: memory.body })))}`,
           messages: [...base, { role: 'user', content: `現在の依頼: ${lease.task.prompt}` }, ...history,
             { role: 'user', content: JSON.stringify({ work_state: inputState }) }],
-          tools: adapter.capabilities.supports_tool_calls ? turnTools(agent.role === 'leader', this.#external, runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared', workState.autonomous) : [],
+          tools: adapter.capabilities.supports_tool_calls ? turnTools(agent.role === 'leader', this.#external, runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared', workState.autonomous)
+            .filter(tool => !reviewingMemory || tool.name === 'memory_review') : [],
           response_contract: { type: 'text' }, model_options: {},
           budget: { max_output_tokens: 4096, max_total_tokens: 64_000, max_requests: 1, max_tool_calls: 8 },
           ...(adapter.adapter_id === 'openai-subscription' && isReasoningEffort(agent.reasoning) ? { reasoning_effort: agent.reasoning } : {}),
         });
+        const requestForPhase = (): ModelRequest => {
+          const request = makeRequest();
+          if (reviewingMemory) request.system_instructions += '\n現在は返答・作業の前の記憶整理です。表示された会話から今後も役立つ好み・合意・経験・継続した関心を最大5件選び、実在するmessage_idをsource_message_idに指定します。推測、挨拶、重複、認証情報、一時的な進捗は保存しません。他Botの発言を自分の経験と混同せず、発言者と不確かさを保ちます。既存記憶と矛盾する場合は勝手に上書きせず省きます。memory_reviewだけを呼んでください。保存不要ならmemoriesは空配列です。ツールがない場合は同じ引数のJSON {"memories":[{"source_message_id":"表示されたID","body":"短い記憶"}]} だけを返してください。通常の会話への返答は次の呼び出しで行います。';
+          return request;
+        };
         let fitted: FittedContext;
         try {
-          fitted = fitContext(makeRequest(), history, adapter.context_window, base);
+          fitted = fitContext(requestForPhase(), history, adapter.context_window, base);
           if (fitted.removed_messages) {
             // The provider's opaque state must not reintroduce exchanges omitted from this input.
             adapter = await this.#resolve(agent, lease.task.id, signal);
             if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
             if (!runtime.isContextCurrent(actor, context.revision)) continue;
-            fitted = fitContext(makeRequest(), history, adapter.context_window, base);
+            fitted = fitContext(requestForPhase(), history, adapter.context_window, base);
           }
         } catch (error) {
           if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_user',
@@ -117,7 +126,7 @@ export class TurnRunner {
         if (!runtime.tasks.reserveModelCall(actor, lease)) {
           runtime.tasks.wait(actor, lease, 'waiting_user', '定期実行のモデル呼び出し上限に達しました。'); return;
         }
-        const events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 600_000, ...(signal ? { signal } : {}) }),
+        let events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 600_000, ...(signal ? { signal } : {}) }),
           { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024 });
         if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
         if (!runtime.isContextCurrent(actor, context.revision)) continue;
@@ -132,6 +141,21 @@ export class TurnRunner {
           const retry = failure.error.code === 'QUOTA_EXCEEDED';
           runtime.tasks.wait(actor, lease, 'waiting_provider', `モデル応答を完了できませんでした (${failure.error.code})。${retry ? '1分後に接続先を再確認します。' : ''}`, retry);
           return;
+        }
+        if (reviewingMemory) {
+          let review = events.filter(event => event.type === 'tool_call');
+          if (!review.length && events.some(event => event.type === 'completed' && event.finish_reason === 'stop')) {
+            try {
+              const args: unknown = JSON.parse(events.filter(event => event.type === 'text_delta').map(event => event.text).join(''));
+              if (Value.Check(memoryReviewSchema, args)) {
+                events = [{ type: 'tool_call', name: 'memory_review', tool_call_id: 'memory-review', arguments: args }, { type: 'completed', finish_reason: 'tool_calls' }];
+                review = events.filter(event => event.type === 'tool_call');
+              }
+            } catch { /* Invalid review output must never become a public reply or another tool operation. */ }
+          }
+          if (review.length !== 1 || review[0]!.name !== 'memory_review' || !Value.Check(memoryReviewSchema, review[0]!.arguments)) {
+            runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデルが記憶整理の形式を返せませんでした。1分後に再確認します。', true); return;
+          }
         }
         const index = runtime.tasks.saveStep(actor, lease, context.revision, events);
         step = { step: index, memory_revision: context.revision, rules_revision: rules.revision, discarded: 0, events: [...events] };

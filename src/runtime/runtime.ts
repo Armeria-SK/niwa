@@ -43,6 +43,7 @@ import { summarySchema, type WorkSummary } from '../domain/summary.ts';
 import { executeProcedure } from './procedures.ts';
 import type { JsonObject } from '../contracts/model.ts';
 import { contentManagementSchema } from '../storage/content-management-schema.ts';
+import { memoryReviewSchema, type MemoryReview } from '../domain/memory-review.ts';
 
 declare const identity: unique symbol;
 /** Opaque in-process capability; never construct this from HTTP or tool arguments. */
@@ -730,6 +731,37 @@ export class Runtime {
     const escaped = query.replace(/[\\%_]/g, '\\$&');
     return db.prepare(`SELECT m.* FROM memories m JOIN memory_search s ON s.id = m.id
       WHERE s.body LIKE ? ESCAPE '\\' ORDER BY m.rowid`).all(`%${escaped}%`) as unknown as Memory[];
+  }
+  memoryReviewed(actor: Actor, lease: TaskLease): boolean {
+    check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
+    return !!this.#memory(actor, this.#bot(actor).id).prepare(`SELECT 1 FROM task_memory_reviews
+      WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1) AND rules_revision=?`)
+      .get(lease.task.id, this.commonRules(actor).revision);
+  }
+  reviewMemory(actor: Actor, lease: TaskLease, review: MemoryReview): JsonObject {
+    check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
+    check(Value.Check(memoryReviewSchema, review), 'invalid', 'Invalid memory review');
+    const principal = this.#bot(actor); const db = this.#memory(actor, principal.id);
+    const sources = new Set(this.messages(actor, lease.task.room_id).map(message => message.id));
+    for (const memory of review.memories) {
+      check(sources.has(memory.source_message_id), 'forbidden', 'Source is outside this conversation');
+      text(memory.body, 2000);
+    }
+    return transaction(db, () => {
+      if (this.memoryReviewed(actor, lease)) return { reviewed: true };
+      for (const memory of review.memories) {
+        // One automatic note per source. Corrections and deletion tombstones win over re-extraction.
+        const operation = `review:${memory.source_message_id}`;
+        const id = createHash('sha256').update(operation).digest('hex');
+        if (db.prepare('SELECT 1 FROM memory_audit WHERE memory_id=?').get(id) ||
+          this.#db.prepare('SELECT 1 FROM deletion_records WHERE agent_id=? AND memory_id=?').get(principal.id, id) ||
+          db.prepare('SELECT 1 FROM memories WHERE source_room_id=? AND body=?').get(lease.task.room_id, memory.body)) continue;
+        this.remember(actor, memory.source_message_id, memory.body, operation);
+      }
+      db.prepare(`INSERT OR REPLACE INTO task_memory_reviews VALUES (?,(SELECT revision FROM memory_state WHERE id=1),?)`)
+        .run(lease.task.id, this.commonRules(actor).revision);
+      return { reviewed: true };
+    });
   }
   memoryVersion(actor: Actor, agentId: string): number {
     const db = this.#memory(actor, agentId);
