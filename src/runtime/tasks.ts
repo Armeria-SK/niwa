@@ -96,6 +96,26 @@ export class Tasks {
   active(actor: Actor, lease: TaskLease): boolean {
     try { this.#owned(actor, lease); return true; } catch { return false; }
   }
+  /** Reserve before transport; failures and interruptions conservatively consume the reservation. */
+  reserveModelCall(actor: Actor, lease: TaskLease): boolean {
+    return transaction(this.#db, () => {
+      const task = this.#owned(actor, lease); this.#access.room(actor, task.room_id);
+      const row = this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id) AS (
+        SELECT id,parent_id FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id FROM tasks t JOIN ancestors a ON t.id=a.parent_id
+      ) SELECT s.* FROM ancestors a JOIN schedule_runs r ON r.task_id=a.id JOIN schedules s ON s.id=r.schedule_id`).get(task.id);
+      if (!row) return true;
+      if (Number(row.model_calls) < Number(row.max_model_calls)) {
+        this.#db.prepare('UPDATE schedules SET model_calls=model_calls+1 WHERE id=?').run(row.id!); return true;
+      }
+      const reason = '定期実行のモデル呼び出し上限に達しました。';
+      if (row.wait_reason !== reason) {
+        this.#db.prepare('UPDATE schedules SET enabled=0,wait_reason=? WHERE id=?').run(reason, row.id!);
+        this.#db.prepare(`INSERT INTO updates(room_id,author_id,kind,title,detail,task_id,created_at)
+          VALUES (?,?,'question',?,?,?,?)`).run(task.room_id, task.agent_id, '定期実行の予算を確認してください', reason, task.id, Date.now());
+      }
+      return false;
+    });
+  }
   /** Fresh task-local facts for model input; never a replacement for lease/approval checks. */
   workState(actor: Actor, lease: TaskLease) {
     const task = this.#owned(actor, lease);

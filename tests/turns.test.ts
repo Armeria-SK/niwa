@@ -27,6 +27,25 @@ function model(reply: (request: ModelRequest) => ModelEvent[] | Promise<ModelEve
     async *run(request) { yield* await reply(request); } };
 }
 
+test('schedule budget prevents another model call after a transport failure and restart', async t => {
+  const f = fixture(t); let calls = 0;
+  const input = { id: randomUUID(), agent_id: f.leader.id, room_id: f.room.id, prompt: '予定の調査',
+    interval_ms: 60_000, next_at: Date.now() + 60_000, max_runs: 3, timeout_ms: 60_000, max_model_calls: 1 };
+  f.runtime.schedules.create(f.admin, input); f.runtime.schedules.dispatch(f.admin, input.next_at);
+  const lease = f.runtime.tasks.claim(f.admin)!;
+  const runner = new TurnRunner(f.runtime, async () => model(() => { calls++; throw new Error('人工接続失敗'); }));
+  await runner.run(lease);
+  assert.equal(calls, 1); assert.equal(f.runtime.tasks.get(f.admin, lease.task.id).state, 'waiting_provider');
+  f.runtime.close(); const reopened = new Runtime(f.root);
+  try {
+    const admin = reopened.administrator(); reopened.tasks.resume(admin, lease.task.id);
+    await new TurnRunner(reopened, async () => model(() => { calls++; return complete('呼ばれない'); })).run(reopened.tasks.claim(admin)!);
+    assert.equal(calls, 1); assert.equal(reopened.schedules.list(admin)[0]!.model_calls, 1);
+    assert.equal(reopened.tasks.get(admin, lease.task.id).state, 'waiting_user');
+    assert.match(reopened.tasks.get(admin, lease.task.id).wait_reason!, /上限/);
+  } finally { reopened.close(); }
+});
+
 test('long turns compact complete exchanges, recreate the adapter, and preserve initial conversation instructions', async t => {
   const f = fixture(t); let resolutions = 0, requests = 0, reads = 0;
   f.runtime.post(f.admin, f.room.id, '最初の重要指示');

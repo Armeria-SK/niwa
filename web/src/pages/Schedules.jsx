@@ -19,11 +19,12 @@ export function Schedules({ schedules, members, threads, onSave, onToggle, onThr
     <div className="section-toolbar"><div><h2>定期実行</h2><p className="muted">同じ依頼を、決めた間隔で繰り返します。</p></div><button className="button primary" onClick={() => setAdding(true)} disabled={!available.length}><PlusIcon size={17} />予定を追加</button></div>
     <p className="field-hint">前回の仕事が終わるまで次は始まりません。全体停止・休眠・会話のアーカイブ中も待機します。過ぎた予定は1回にまとめます。</p>
     {schedules.length ? <div className="activity-list">{schedules.map(row => {
-      const exhausted = row.run_count >= row.max_runs;
+      const exhausted = row.run_count >= row.max_runs || row.model_calls >= row.max_model_calls;
       const room = threads.find(item => item.id === row.room_id);
       return <article className="activity-row" key={row.id}><div className="activity-row-body">
-        <div className="activity-row-meta"><span>{members[row.agent_id]?.name}</span><span>{exhausted ? '予定回数に到達' : row.enabled ? '有効' : '停止中'}</span></div>
+        <div className="activity-row-meta"><span>{members[row.agent_id]?.name}</span><span>{exhausted ? '上限に到達' : row.enabled ? '有効' : '停止中'}</span></div>
         <h2>{row.prompt}</h2><p>{formatInterval(row.interval_ms)}ごと · 起動 {row.run_count} / {row.max_runs}回 · 1回の期限 {row.timeout_ms / 60_000}分</p>
+        <p>モデル呼び出し {row.model_calls} / {row.max_model_calls}回</p>
         {!exhausted ? <p>{row.enabled ? '次回予定' : '再開後の予定'}：<time dateTime={new Date(row.next_at).toISOString()}>{formatTime(row.next_at)}</time></p> : null}
         {row.wait_reason ? <p className="task-reason">{row.wait_reason}</p> : null}
         <button className="text-button" onClick={() => onThread(row.room_id)}>{room?.title || '関連する会話'}を見る</button>
@@ -43,6 +44,7 @@ function ScheduleForm({ members, threads, onSave, onClose }) {
   const [unit, setUnit] = useState('1440');
   const [runs, setRuns] = useState('30');
   const [timeout, setTimeout] = useState('30');
+  const [modelLimit, setModelLimit] = useState('720');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const submission = useRef(null);
@@ -54,7 +56,8 @@ function ScheduleForm({ members, threads, onSave, onClose }) {
     const next_at = new Date(first).getTime();
     if (!Number.isSafeInteger(next_at) || next_at <= Date.now()) { setError('初回日時を現在より後にしてください。'); return; }
     const body = { agent_id: recipient, room_id: roomId, prompt: prompt.trim(), next_at,
-      interval_ms: Number(interval) * Number(unit) * 60_000, max_runs: Number(runs), timeout_ms: Number(timeout) * 60_000 };
+      interval_ms: Number(interval) * Number(unit) * 60_000, max_runs: Number(runs), timeout_ms: Number(timeout) * 60_000,
+      max_model_calls: Number(modelLimit) };
     const key = JSON.stringify(body);
     if (submission.current?.key !== key) submission.current = { key, id: crypto.randomUUID() };
     setBusy(true); setError('');
@@ -72,7 +75,8 @@ function ScheduleForm({ members, threads, onSave, onClose }) {
       <div className="schedule-numbers">
       <label className="field"><span>起動回数の上限</span><input type="number" min="1" max="10000" step="1" required value={runs} onChange={e => setRuns(e.target.value)} /></label>
       <label className="field"><span>1回の期限（分）</span><input type="number" min="1" max="1440" step="1" required value={timeout} onChange={e => setTimeout(e.target.value)} /></label></div>
-      <p className="field-hint">3回続けて完了しなければ、自動で予定を停止します。</p>
+      <label className="field"><span>モデル呼び出しの上限</span><input type="number" min="1" max="1000000" step="1" required value={modelLimit} onChange={e => setModelLimit(e.target.value)} /></label>
+      <p className="field-hint">この予定全体の上限です。委任先の仕事や失敗した試行も含み、再開しても回数は戻りません。3回続けて仕事が完了しない場合も予定を停止します。</p>
       {error ? <p className="field-error" role="alert">{error}</p> : null}
     </fieldset><div className="form-actions"><button type="button" className="button subtle" disabled={busy} onClick={onClose}>キャンセル</button><button className="button primary" disabled={busy || !recipient || !prompt.trim()}>{busy ? '保存中…' : '予定を保存'}</button></div>
   </form></Modal>;

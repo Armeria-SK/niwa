@@ -97,6 +97,9 @@ export class TurnRunner {
             error instanceof ContextLimit ? error.message : '文脈の再構成またはモデル接続の再作成を完了できませんでした。');
           return;
         }
+        if (!runtime.tasks.reserveModelCall(actor, lease)) {
+          runtime.tasks.wait(actor, lease, 'waiting_user', '定期実行のモデル呼び出し上限に達しました。'); return;
+        }
         const events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 120_000, ...(signal ? { signal } : {}) }),
           { ...(signal ? { signal } : {}), timeout_ms: 125_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024 });
         if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;

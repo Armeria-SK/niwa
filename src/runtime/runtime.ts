@@ -10,6 +10,7 @@ import { taskSchema } from '../storage/task-schema.ts';
 import { Tasks } from './tasks.ts';
 import { Schedules } from './schedules.ts';
 import { scheduleSchema } from '../storage/schedule-schema.ts';
+import { scheduleBudgetSchema } from '../storage/schedule-budget-schema.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
 import { fallbackSchema } from '../storage/fallback-schema.ts';
@@ -46,7 +47,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema]);
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
       room: (actor, id) => this.#room(actor, id),

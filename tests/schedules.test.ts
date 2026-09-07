@@ -128,3 +128,38 @@ test('schedule stop is reported once with its source task before the next occurr
   assert.equal(r.updates(admin).length, 1);
   assert.equal(r.schedules.list(admin)[0]!.enabled, 0);
 });
+
+test('model reservations share one persistent schedule budget across delegation and retries', t => {
+  const f = fixture(t); let r = f.runtime; let admin = f.admin;
+  const bot = r.createAgent(r.agentSession(f.leader.id), '委任先');
+  r.schedules.create(admin, { ...f.input, max_model_calls: 2 });
+  r.schedules.dispatch(admin, f.input.next_at);
+  const parent = r.tasks.claim(admin)!; const actor = r.agentSession(f.leader.id);
+  assert.throws(() => r.tasks.reserveModelCall(r.agentSession(bot.id), parent), /another agent/);
+  assert.equal(r.tasks.reserveModelCall(actor, parent), true);
+  r.tasks.delegate(actor, parent, bot.id, '資料を確認');
+  const child = r.tasks.claim(admin)!;
+  assert.equal(r.tasks.reserveModelCall(r.agentSession(bot.id), child), true);
+  r.tasks.interrupt(admin, child);
+  r = f.reopen(); admin = r.administrator();
+  const retried = r.tasks.claim(admin)!;
+  assert.equal(r.tasks.reserveModelCall(r.agentSession(bot.id), retried), false);
+  assert.equal(r.tasks.reserveModelCall(r.agentSession(bot.id), retried), false);
+  assert.equal(r.schedules.list(admin)[0]!.model_calls, 2);
+  assert.equal(r.updates(admin).length, 1);
+  assert.throws(() => r.schedules.setEnabled(admin, f.input.id, true), /model call limit/);
+  r.tasks.cancel(admin, retried.task.id);
+  const resumedParent = r.tasks.claim(admin)!;
+  assert.equal(r.tasks.reserveModelCall(r.agentSession(f.leader.id), resumedParent), false);
+  assert.equal(r.updates(admin).length, 1);
+});
+
+test('existing schedules migrate with a finite budget and retain creation replay compatibility', t => {
+  const f = fixture(t); f.runtime.schedules.create(f.admin, f.input);
+  const db = new DatabaseSync(join(f.root, 'control.db'));
+  db.exec('ALTER TABLE schedules DROP COLUMN max_model_calls; ALTER TABLE schedules DROP COLUMN model_calls; PRAGMA user_version=14;');
+  db.close();
+  const r = f.reopen(); const admin = r.administrator();
+  const schedule = r.schedules.create(admin, f.input);
+  assert.equal(schedule.max_model_calls, f.input.max_runs * 24); assert.equal(schedule.model_calls, 0);
+});

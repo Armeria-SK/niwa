@@ -8,8 +8,9 @@ import type { Tasks } from './tasks.ts';
 export interface ScheduleInput {
   id: string; agent_id: string; room_id: string; prompt: string;
   interval_ms: number; next_at: number; max_runs: number; timeout_ms: number;
+  max_model_calls?: number;
 }
-interface Schedule extends ScheduleInput { enabled: number; run_count: number; failure_reset: number; wait_reason: string | null }
+interface Schedule extends ScheduleInput { max_model_calls: number; model_calls: number; enabled: number; run_count: number; failure_reset: number; wait_reason: string | null }
 
 /** Administrator-owned triggers; each occurrence and its task commit together. */
 export class Schedules {
@@ -19,7 +20,7 @@ export class Schedules {
   list(actor: Actor): Schedule[] {
     this.admin(actor);
     return this.db.prepare(`SELECT id,agent_id,room_id,prompt,interval_ms,next_at,max_runs,timeout_ms,
-      enabled,run_count,failure_reset,wait_reason FROM schedules ORDER BY rowid`).all() as unknown as Schedule[];
+      enabled,run_count,failure_reset,wait_reason,max_model_calls,model_calls FROM schedules ORDER BY rowid`).all() as unknown as Schedule[];
   }
   create(actor: Actor, input: ScheduleInput): Schedule {
     this.admin(actor);
@@ -29,17 +30,20 @@ export class Schedules {
       [input.next_at, 0, 8_000_000_000_000_000], [input.max_runs, 1, 10_000], [input.timeout_ms, 60_000, 86400_000]]) {
       check(Number.isSafeInteger(value) && value! >= min! && value! <= max!, 'invalid', 'Invalid schedule bounds');
     }
+    const maxCalls = input.max_model_calls ?? input.max_runs * 24;
+    check(Number.isSafeInteger(maxCalls) && maxCalls > 0 && maxCalls <= 1_000_000, 'invalid', 'Invalid model call limit');
     const hash = createHash('sha256').update(JSON.stringify([input.agent_id, input.room_id, input.prompt,
-      input.interval_ms, input.next_at, input.max_runs, input.timeout_ms])).digest('hex');
+      input.interval_ms, input.next_at, input.max_runs, input.timeout_ms,
+      ...(input.max_model_calls === undefined ? [] : [input.max_model_calls])])).digest('hex');
     return transaction(this.db, () => {
       const prior = this.db.prepare('SELECT input_hash FROM schedules WHERE id=?').get(input.id);
       if (prior) check(prior.input_hash === hash, 'conflict', 'Schedule id already used with different input');
       else {
         this.recipient(actor, input.agent_id, input.room_id);
         check(input.next_at >= Date.now(), 'invalid', 'First occurrence must be in the future');
-        this.db.prepare(`INSERT INTO schedules(id,agent_id,room_id,prompt,interval_ms,next_at,max_runs,timeout_ms,input_hash)
-          VALUES (?,?,?,?,?,?,?,?,?)`).run(input.id, input.agent_id, input.room_id, input.prompt,
-          input.interval_ms, input.next_at, input.max_runs, input.timeout_ms, hash);
+        this.db.prepare(`INSERT INTO schedules(id,agent_id,room_id,prompt,interval_ms,next_at,max_runs,timeout_ms,input_hash,max_model_calls)
+          VALUES (?,?,?,?,?,?,?,?,?,?)`).run(input.id, input.agent_id, input.room_id, input.prompt,
+          input.interval_ms, input.next_at, input.max_runs, input.timeout_ms, hash, maxCalls);
       }
       return this.list(actor).find(row => row.id === input.id)!;
     });
@@ -50,6 +54,7 @@ export class Schedules {
     check(row, 'not_found', 'Schedule not found');
     if (enabled) {
       check(row.run_count < row.max_runs, 'limit', 'Schedule run limit reached');
+      check(row.model_calls < row.max_model_calls, 'limit', 'Schedule model call limit reached');
       this.recipient(actor, row.agent_id, row.room_id);
     }
     this.db.prepare('UPDATE schedules SET enabled=?,wait_reason=NULL,failure_reset=run_count WHERE id=?').run(Number(enabled), id);
@@ -65,6 +70,7 @@ export class Schedules {
         if (this.db.prepare(`SELECT 1 FROM schedule_runs r JOIN tasks t ON t.id=r.task_id
           WHERE r.schedule_id=? AND t.state NOT IN ('completed','failed','cancelled') LIMIT 1`).get(row.id)) continue;
         let reason: string | null = row.run_count >= row.max_runs ? '起動回数の上限に達しました。' : null;
+        if (row.model_calls >= row.max_model_calls) reason = '定期実行のモデル呼び出し上限に達しました。';
         if (row.run_count - row.failure_reset >= 3 && recent.length === 3 && recent.every(task => task.state !== 'completed'))
           reason = '3回続けて完了しなかったため、定期実行を停止しました。';
         if (reason) {
