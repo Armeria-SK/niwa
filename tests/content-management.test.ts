@@ -53,6 +53,8 @@ test('money work is explicit and approval decisions resume or cancel only pendin
   assert.equal(runtime.businessTasks(admin).length, 1);
   runtime.requestApproval(actor, lease, '人工案の確認', '実際の支払いは行わない');
   assert.equal(runtime.approvals(admin).length, 1);
+  runtime.tasks.recoverCountLimits(admin);
+  assert.equal(runtime.tasks.get(admin, lease.task.id).state, 'waiting_user');
   assert.throws(() => runtime.tasks.resume(admin, lease.task.id), /pending approval/);
   assert.throws(() => runtime.decideApproval(actor, lease.task.id, true, String(runtime.approvals(admin)[0]?.version)), /Administrator/);
   assert.throws(() => runtime.decideApproval(admin, lease.task.id, true, 'stale'), /no longer pending/);

@@ -22,6 +22,7 @@ export class Scheduler {
   tick(): void {
     if (this.#stopped) return;
     const tasks = this.#runtime.tasks;
+    tasks.recoverCountLimits(this.#admin);
     tasks.expire(this.#admin);
     tasks.retryProviders(this.#admin);
     this.#runtime.schedules.dispatch(this.#admin);

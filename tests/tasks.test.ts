@@ -345,12 +345,39 @@ test('restart recovers interrupted model work; user replies and wait states surv
 
 test('deadlines end waits rather than leaving parent tasks waiting forever', t => {
   const f = fixture(t);
-  const parent = f.tasks.create(f.admin, f.leader.id, f.room.id, '期限付き');
+  const parent = f.tasks.create(f.admin, f.leader.id, f.room.id, '期限付き', Date.now() + 60_000);
   const lease = f.tasks.claim(f.admin)!;
   const child = f.tasks.delegate(f.parentActor, lease, f.child.id, '期限までに回答');
   f.tasks.expire(f.admin, parent.deadline_at + 1);
   assert.equal(f.tasks.get(f.admin, parent.id).state, 'failed');
   assert.equal(f.tasks.get(f.admin, child.id).state, 'failed');
+});
+
+test('tasks without an explicit deadline survive a day and only obsolete count waits recover', t => {
+  const f = fixture(t);
+  const reasons = [
+    'この仕事の実行区切りに達しました。続行する場合は、新しい依頼として必要な範囲を指定してください。',
+    '会話の継続が16回の区切りに達しました。続ける場合は仕事の詳細から再開してください。',
+    '色を教えてください',
+  ];
+  const ids = reasons.map(reason => {
+    const task = f.tasks.create(f.admin, f.leader.id, f.room.id, '継続確認');
+    f.tasks.wait(f.parentActor, f.tasks.claim(f.admin)!, 'waiting_user', reason);
+    return task.id;
+  });
+  f.tasks.expire(f.admin, Date.now() + 2 * 24 * 60 * 60_000);
+  f.runtime.updateSettings(f.admin, { paused: true });
+  f.tasks.recoverCountLimits(f.admin);
+  assert.ok(ids.every(id => f.tasks.get(f.admin, id).state === 'waiting_user'));
+  f.runtime.updateSettings(f.admin, { paused: false });
+  f.tasks.pause(f.admin, ids[1]!);
+  f.tasks.recoverCountLimits(f.admin);
+  assert.equal(f.tasks.get(f.admin, ids[0]!).state, 'queued');
+  assert.equal(f.tasks.get(f.admin, ids[1]!).state, 'waiting_user');
+  assert.equal(f.tasks.get(f.admin, ids[2]!).state, 'waiting_user');
+  f.tasks.resume(f.admin, ids[1]!);
+  f.tasks.recoverCountLimits(f.admin);
+  assert.equal(f.tasks.get(f.admin, ids[1]!).state, 'queued');
 });
 
 test('migration retains v1 leader and settings', t => {

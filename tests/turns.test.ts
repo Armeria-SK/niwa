@@ -48,7 +48,7 @@ test('addressed bot replies continue at the recipient without leader echo and re
   assert.deepEqual(f.runtime.messages(f.admin, f.room.id).map(message => message.author_id), visits);
 });
 
-test('directed conversation respects private membership and a bounded continuation', async t => {
+test('directed conversation respects private membership and continues beyond sixteen replies', async t => {
   const f = fixture(t); const child = f.runtime.createAgent(f.actor, '仲間');
   const privateRoom = f.runtime.createRoom(f.admin, '個別', [f.leader.id]);
   const privateTask = f.runtime.tasks.create(f.admin, f.leader.id, privateRoom.id, '非共有');
@@ -56,12 +56,9 @@ test('directed conversation respects private membership and a bounded continuati
   assert.equal(f.runtime.tasks.get(f.admin, privateTask.id).state, 'completed'); assert.equal(f.runtime.tasks.list(f.admin).length, 1);
   const runner = new TurnRunner(f.runtime, async agent => model(() => complete(`@${agent.id === child.id ? f.leader.name : child.name} 続けますか？`)));
   f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '会話');
-  for (let index = 0; index < 16; index++) await runner.run(f.runtime.tasks.claim(f.admin)!);
-  assert.equal(f.runtime.tasks.claim(f.admin), undefined);
-  const last = f.runtime.tasks.list(f.admin).at(-1)!; assert.equal(last.state, 'waiting_user'); assert.match(last.wait_reason!, /16回/);
-  const messages = f.runtime.messages(f.admin, f.room.id).length;
-  f.runtime.tasks.resume(f.admin, last.id); await runner.run(f.runtime.tasks.claim(f.admin)!);
-  assert.equal(f.runtime.messages(f.admin, f.room.id).length, messages + 1);
+  for (let index = 0; index < 20; index++) await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).length, 20);
+  assert.equal(f.runtime.tasks.list(f.admin).some(item => item.state === 'waiting_user'), false);
   assert.ok(f.runtime.tasks.claim(f.admin));
 });
 
@@ -112,15 +109,14 @@ test('structured bot conversation delivers to all recipients once and enforces p
   assert.equal(f.runtime.messages(f.admin, room.id).length, 0);
 });
 
-test('branching conversations share the total continuation budget', async t => {
+test('branching conversations continue beyond the former shared count limit', async t => {
   const f = fixture(t); const a = f.runtime.createAgent(f.actor, 'A'); const b = f.runtime.createAgent(f.actor, 'B');
   const ids = [f.leader.id, a.id, b.id];
   const runner = new TurnRunner(f.runtime, async agent => model(() => tool('conversation_send', { body: '続きは？', recipient_ids: ids.filter(id => id !== agent.id) })));
   f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '会話');
-  let runs = 0;
-  for (let lease; (lease = f.runtime.tasks.claim(f.admin)); ) { assert.ok(++runs <= 16); await runner.run(lease); }
-  assert.equal(runs, 16); assert.equal(f.runtime.messages(f.admin, f.room.id).length, 16);
-  assert.ok(f.runtime.tasks.list(f.admin).some(item => item.state === 'waiting_user'));
+  for (let runs = 0; runs < 20; runs++) await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).length, 20);
+  assert.equal(f.runtime.tasks.list(f.admin).some(item => item.state === 'waiting_user'), false);
 });
 
 test('common rules reject stale edits, persist, and discard an old rule response before publishing', async t => {
@@ -393,19 +389,29 @@ test('task history tool reads saved results without executing the original tool 
   assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'running');
 });
 
-test('oversized pinned input or unknown capacity waits with a reason before calling the model', async t => {
+test('long room history is retained in storage and fitted automatically for known and unknown capacity', async t => {
   const f = fixture(t); let requests = 0;
   for (let n = 0; n < 5; n++) f.runtime.post(f.admin, f.room.id, '大'.repeat(10_000));
-  for (const capacity of [undefined, 8000]) {
-    const runner = new TurnRunner(f.runtime, async () => ({ ...model(() => { requests++; return complete('unexpected'); }),
+  for (const capacity of [undefined, 20000]) {
+    const runner = new TurnRunner(f.runtime, async () => ({ ...model(request => { requests++; assert.match(JSON.stringify(request.messages), /大きな会話/); return complete('完了'); }),
       ...(capacity === undefined ? {} : { context_window: capacity }) }));
     const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '大きな会話');
     await runner.run(f.runtime.tasks.claim(f.admin)!);
     const waiting = f.runtime.tasks.get(f.admin, task.id);
-    assert.equal(waiting.state, 'waiting_user');
-    assert.match(waiting.wait_reason!, capacity === undefined ? /容量が不明/ : /収まりません/);
+    assert.equal(waiting.state, 'completed');
   }
-  assert.equal(requests, 0);
+  assert.equal(requests, 2);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).filter(message => message.body === '大'.repeat(10_000)).length, 5);
+});
+
+test('a single task completes more than twenty-four model steps without administrator continuation', async t => {
+  const f = fixture(t); let requests = 0;
+  const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '長い作業');
+  const runner = new TurnRunner(f.runtime, async () => model(() => ++requests <= 30
+    ? tool('history_search', { query: `資料${requests}` }) : complete('完了')));
+  await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(requests, 31);
+  assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'completed');
 });
 
 test('public page tool stores a read receipt, rejects other bots and does not publish after interruption', async t => {

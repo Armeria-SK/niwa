@@ -16,6 +16,8 @@ interface Access {
 type RecordWithLease = Task & { lease_token: string | null };
 const publicTask = ({ lease_token: _token, ...task }: RecordWithLease): Task => task;
 const CONVERSATION_LIMIT_REASON = '会話の継続が16回の区切りに達しました。続ける場合は仕事の詳細から再開してください。';
+const TURN_LIMIT_REASON = 'この仕事の実行区切りに達しました。続行する場合は、新しい依頼として必要な範囲を指定してください。';
+const NO_DEADLINE = 8_640_000_000_000_000;
 
 export class Tasks {
   #db: DatabaseSync;
@@ -38,7 +40,7 @@ export class Tasks {
     const records = this.#db.prepare('SELECT * FROM tasks ORDER BY created_at, rowid').all() as unknown as RecordWithLease[];
     return records.filter(task => { try { this.#access.room(actor, task.room_id); return true; } catch { return false; } }).map(publicTask);
   }
-  create(actor: Actor, agentId: string, roomId: string, prompt: string, deadlineAt = Date.now() + 24 * 60 * 60_000): Task {
+  create(actor: Actor, agentId: string, roomId: string, prompt: string, deadlineAt = NO_DEADLINE): Task {
     const principal = this.#access.principal(actor);
     this.#access.room(actor, roomId);
     check(this.#access.participant(agentId, roomId), 'forbidden', 'Recipient cannot access this conversation');
@@ -304,12 +306,6 @@ export class Tasks {
   }
   address(actor: Actor, lease: TaskLease, agentId: string, prompt: string): void {
     const task = this.#owned(actor, lease);
-    const ancestry = this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id,depth) AS (
-      SELECT id,parent_id,0 FROM tasks WHERE id=? UNION ALL SELECT t.id,t.parent_id,a.depth+1 FROM tasks t JOIN ancestors a ON t.id=a.parent_id
-      WHERE NOT EXISTS(SELECT 1 FROM task_replies r WHERE r.task_id=a.id)),
-      descendants(id) AS (SELECT id FROM ancestors WHERE depth=(SELECT max(depth) FROM ancestors)
-        UNION SELECT t.id FROM tasks t JOIN descendants d ON t.parent_id=d.id)
-      SELECT count(*) AS count FROM descendants`).get(task.id)!;
     if (!this.#access.participant(agentId, task.room_id)) {
       this.#db.prepare(`INSERT INTO updates(room_id,author_id,kind,title,detail,task_id,created_at)
         VALUES (?,?,'question',?,?,?,?)`).run(task.room_id, task.agent_id, '会話の宛先を確認してください', '宛先のBotがこの会話に参加できないため、配送できませんでした。', task.id, Date.now());
@@ -317,7 +313,6 @@ export class Tasks {
     }
     const next = this.create(actor, agentId, task.room_id, prompt, task.deadline_at);
     this.#db.prepare('UPDATE tasks SET parent_id=?,conversation_reply=1 WHERE id=?').run(task.id, next.id);
-    if (Number(ancestry.count) >= 16) this.#change(next.id, 'waiting_user', null, CONVERSATION_LIMIT_REASON);
   }
   finish(actor: Actor, lease: TaskLease, result: string, state: 'completed' | 'failed' = 'completed'): Task {
     text(result);
@@ -364,6 +359,23 @@ export class Tasks {
       }
     });
   }
+  /** Recover only obsolete automatic count stops; real questions and approvals stay pending. */
+  recoverCountLimits(actor: Actor): void {
+    this.#admin(actor);
+    if (this.#paused()) return;
+    transaction(this.#db, () => {
+      const tasks = this.#db.prepare(`SELECT id,agent_id,room_id FROM tasks t WHERE state='waiting_user' AND paused=0
+        AND wait_reason IN (?,?) AND deadline_at>?
+        AND NOT EXISTS(SELECT 1 FROM approval_requests a WHERE a.task_id=t.id AND a.status='pending')
+        AND NOT EXISTS(SELECT 1 FROM room_preferences p WHERE p.room_id=t.room_id AND p.archived=1)`)
+        .all(CONVERSATION_LIMIT_REASON, TURN_LIMIT_REASON, Date.now()) as { id: string; agent_id: string; room_id: string }[];
+      for (const task of tasks) {
+        if (!this.#access.participant(task.agent_id, task.room_id)) continue;
+        this.#change(task.id, 'queued');
+        this.#db.prepare('UPDATE tasks SET lease_token=NULL WHERE id=?').run(task.id);
+      }
+    });
+  }
   resume(actor: Actor, id: string, answer?: string): void {
     this.#admin(actor);
     check(!this.#db.prepare("SELECT 1 FROM approval_requests WHERE task_id=? AND status='pending'").get(id), 'conflict', 'Decide the pending approval first');
@@ -376,7 +388,6 @@ export class Tasks {
         return;
       }
       check(task.state === 'waiting_user' || task.state === 'waiting_provider', 'conflict', 'Task cannot be resumed');
-      if (task.conversation_reply === 1 && task.wait_reason === CONVERSATION_LIMIT_REASON && answer === undefined) answer = '会話を続けてください。';
       if (answer !== undefined) {
         this.#db.prepare('INSERT INTO task_replies(task_id,body,created_at) VALUES (?,?,?)').run(id, text(answer), Date.now());
         this.#access.memory(actor, task.agent_id).prepare('DELETE FROM task_plans WHERE task_id=?').run(id);
@@ -421,7 +432,7 @@ export class Tasks {
       check(!this.#db.prepare('SELECT 1 FROM deleted_agents WHERE id=?').get(task.agent_id), 'not_found', 'Agent not found');
       check(['failed', 'cancelled'].includes(task.state), 'conflict', 'Task cannot be retried');
       check(task.conversation_reply === 1 || !task.parent_id || this.#read(task.parent_id).state === 'waiting_child', 'conflict', 'Parent has already continued; submit a new request');
-      this.#db.prepare('UPDATE tasks SET paused=0,lease_token=NULL,deadline_at=? WHERE id=?').run(Date.now() + 24 * 60 * 60_000, id);
+      this.#db.prepare('UPDATE tasks SET paused=0,lease_token=NULL,deadline_at=? WHERE id=?').run(NO_DEADLINE, id);
       this.#change(id, 'queued');
       this.#event(id, 'retried');
     });
