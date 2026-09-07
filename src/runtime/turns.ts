@@ -116,8 +116,8 @@ export class TurnRunner {
         if (!runtime.tasks.reserveModelCall(actor, lease)) {
           runtime.tasks.wait(actor, lease, 'waiting_user', '定期実行のモデル呼び出し上限に達しました。'); return;
         }
-        const events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 120_000, ...(signal ? { signal } : {}) }),
-          { ...(signal ? { signal } : {}), timeout_ms: 125_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024 });
+        const events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 600_000, ...(signal ? { signal } : {}) }),
+          { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024 });
         if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
         if (!runtime.isContextCurrent(actor, context.revision)) { discarded++; continue; }
         const failure = events.find(event => event.type === 'failed');
