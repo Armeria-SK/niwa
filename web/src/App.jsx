@@ -140,6 +140,7 @@ export function App() {
   function openMember(id) { if (memberMap[id]?.deleted) { notify('このBotは削除されています。会話と成果物は引き続き確認できます。'); return; } setSelectedMember(id); navigate('members'); }
   function togglePause() { return mutate(() => api('/settings', 'PATCH', { paused: !paused }), paused ? '活動を再開しました' : '活動を一時停止しました'); }
   async function sendMessage(text, attachments = [], replyTo, selectedRecipients = []) {
+    if (selectedRecipients.some(id => memberMap[id]?.deleted)) { notify('指定したBotは削除されています。依頼先を選び直してください。'); return false; }
     if (attachments.length) { notify('添付ファイルの保存はまだ利用できません。'); return false; }
     const body = replyTo ? `「${replyTo.text}」への返信\n${text}` : text;
     const fallback = thread.scope === 'private' ? thread.members[0] : members.find(item => item.authority === 'leader')?.id;
