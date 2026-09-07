@@ -1,0 +1,155 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { gunzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
+import { Runtime } from '../src/runtime/runtime.ts';
+import { initializeInstallation, adminKey, readInstallation } from '../src/config/installation.ts';
+import { Backups } from '../src/backup/backups.ts';
+import { prepareRestore, restoreInstallation } from '../src/backup/restore.ts';
+import { acquireProcessLock } from '../src/runtime/process-lock.ts';
+
+test('backup captures a consistent set of databases, excludes secrets, and compresses after writes resume', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-backup-'));
+  const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
+  const paths = initializeInstallation(root, installation);
+  const runtime = new Runtime(paths.state); const admin = runtime.administrator();
+  const leader = runtime.bootstrap(admin); const actor = runtime.agentSession(leader.id);
+  const room = runtime.createRoom(admin, '保存前の会話'); const source = runtime.post(admin, room.id, '記憶の出所');
+  const memory = runtime.remember(actor, source.id, '保存前の記憶');
+  runtime.updateProfile(admin, leader.id, { persona: '保存する人格' });
+  runtime.updateSettings(admin, { paused: true });
+  writeFileSync(join(paths.secrets, 'artificial-secret'), 'DO_NOT_BACK_UP');
+  const backups = new Backups(runtime, paths, installation);
+  const original = runtime.snapshot.bind(runtime);
+  runtime.snapshot = (actor, directory) => {
+    const names = original(actor, directory);
+    runtime.post(admin, room.id, '保存後に活動を続ける');
+    runtime.correctMemory(admin, leader.id, memory.id, 1, '保存後の記憶');
+    return names;
+  };
+  try {
+    assert.throws(() => runtime.snapshot(actor, join(paths.runtime, 'forbidden')), /Administrator/);
+    const pending = backups.create(); assert.equal(backups.create(), pending);
+    const manifest = await pending;
+    assert.equal(manifest.files.length, 2);
+    const restored = join(root, 'verification');
+    for (const file of manifest.files) {
+      assert.match(file.path, /^(control\.db|agents\/[0-9a-f-]{36}\/memory\.db)\.gz$/);
+      const bytes = readFileSync(join(paths.backups, manifest.id, file.path));
+      assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256);
+      const target = join(restored, file.path.slice(0, -3)); mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, gunzipSync(bytes));
+    }
+    const saved = new Runtime(restored);
+    try {
+      const administrator = saved.administrator();
+      assert.equal(saved.messages(administrator, room.id).length, 1);
+      assert.equal(saved.memories(administrator, leader.id)[0]?.body, '保存前の記憶');
+      assert.equal(saved.profile(administrator, leader.id).persona, '保存する人格');
+      assert.equal(saved.settings(administrator).paused, true);
+    } finally { saved.close(); }
+    assert.equal(runtime.messages(admin, room.id).length, 2);
+    assert.equal(runtime.memories(admin, leader.id)[0]?.body, '保存後の記憶');
+    assert.equal((await backups.list())[0]?.id, manifest.id);
+    assert.deepEqual(readdirSync(join(paths.runtime, 'backup-staging')), []);
+  } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('retention removes expired complete backups and a failed snapshot leaves no partial backup', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-retention-'));
+  const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
+  const paths = initializeInstallation(root, installation); const runtime = new Runtime(paths.state);
+  runtime.bootstrap(runtime.administrator()); const backups = new Backups(runtime, paths, installation);
+  try {
+    const old = await backups.create(); old.created_at -= 15 * 86_400_000;
+    writeFileSync(join(paths.backups, old.id, 'manifest.json'), JSON.stringify(old));
+    const current = await backups.create();
+    assert.deepEqual((await backups.list()).map(item => item.id), [current.id]);
+    const snapshot = runtime.snapshot.bind(runtime);
+    runtime.snapshot = (actor, directory) => { snapshot(actor, directory); throw new Error('Artificial storage failure'); };
+    await assert.rejects(backups.create(), /Artificial storage failure/);
+    assert.deepEqual((await backups.list()).map(item => item.id), [current.id]);
+    assert.deepEqual(readdirSync(join(paths.runtime, 'backup-staging')), []);
+    assert.match(backups.error!, /保存できません/);
+  } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('restore validates the snapshot, reapplies later deletions and starts paused without changing current state', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-restore-'));
+  const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
+  const paths = initializeInstallation(root, installation); const runtime = new Runtime(paths.state);
+  const admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const actor = runtime.agentSession(leader.id);
+  const room = runtime.createRoom(admin, '復元する会話'); const source = runtime.post(admin, room.id, '出所');
+  const memory = runtime.remember(actor, source.id, 'あとで削除する記憶');
+  const task = runtime.tasks.create(admin, leader.id, room.id, '派生情報の復元を確認');
+  const lease = runtime.tasks.claim(admin)!;
+  runtime.tasks.updatePlan(actor, lease, 'plan', 0, ['削除前の派生手順']);
+  runtime.saveSummary(actor, lease, 'summary', { conclusion: '削除前の派生要約', reason: '記憶を参照した', unresolved: [], next_steps: [],
+    sources: [{ kind: 'memory', source_id: memory.id, revision: runtime.readHistory(actor, room.id, 'memory', memory.id).revision }] });
+  const backups = new Backups(runtime, paths, installation);
+  try {
+    const manifest = await backups.create();
+    runtime.deleteMemory(admin, leader.id, memory.id, memory.revision);
+    const later = runtime.remember(actor, source.id, 'バックアップ後に作って削除した記憶', 'future-memory');
+    runtime.deleteMemory(admin, leader.id, later.id, later.revision);
+    runtime.post(admin, room.id, 'バックアップ以後の会話');
+    const directory = join(paths.backups, manifest.id); const target = join(root, 'restored');
+    await prepareRestore(directory, target, runtime.deletionRecords(admin));
+    const restored = new Runtime(target);
+    try {
+      const administrator = restored.administrator();
+      assert.equal(restored.memories(administrator, leader.id).length, 0);
+      assert.equal(restored.settings(administrator).paused, true);
+      assert.equal(restored.messages(administrator, room.id).length, 1);
+      assert.equal(restored.deletionRecords(administrator).some(record => record.memory_id === memory.id), true);
+      restored.updateSettings(administrator, { paused: false });
+      const restoredActor = restored.agentSession(leader.id);
+      assert.equal(restored.searchHistory(restoredActor, room.id, '削除前の派生要約').length, 0);
+      assert.throws(() => restored.readHistory(restoredActor, room.id, 'summary', task.id), /unavailable/);
+      restored.tasks.recover(administrator);
+      assert.deepEqual(restored.tasks.workState(restoredActor, restored.tasks.claim(administrator)!).remaining_plan, { revision: 0, remaining: [] });
+      assert.throws(() => restored.remember(restored.agentSession(leader.id), source.id, '再送による復活', 'future-memory'), /deleted/);
+    } finally { restored.close(); }
+    assert.equal(runtime.messages(admin, room.id).length, 2);
+    await assert.rejects(prepareRestore(directory, target, []), /EEXIST/);
+    assert.equal(existsSync(join(target, 'control.db')), true);
+    manifest.files[0]!.sha256 = '0'.repeat(64);
+    writeFileSync(join(directory, 'manifest.json'), JSON.stringify(manifest));
+    const invalid = join(root, 'invalid');
+    await assert.rejects(prepareRestore(directory, invalid, []), /checksum/);
+    assert.equal(existsSync(invalid), false);
+    manifest.files[0]!.path = '../../escape.db.gz';
+    writeFileSync(join(directory, 'manifest.json'), JSON.stringify(manifest));
+    await assert.rejects(prepareRestore(directory, invalid, []), /Invalid backup file/);
+    assert.equal(existsSync(invalid), false);
+  } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('installation restore refuses a running source, preserves it, and creates a separate paused installation with fresh authentication', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'niwa-restore-installation-'));
+  const root = join(base, 'source'); const destination = join(base, 'restored');
+  const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
+  const paths = initializeInstallation(root, installation); const key = adminKey(paths);
+  const runtime = new Runtime(paths.state); const admin = runtime.administrator(); runtime.bootstrap(admin);
+  const backups = new Backups(runtime, paths, installation);
+  try {
+    const manifest = await backups.create(); await backups.stop(); runtime.close();
+    const unlock = acquireProcessLock(join(paths.runtime, 'sockets', 'service-lock.db'));
+    try { await assert.rejects(restoreInstallation(root, manifest.id, destination), /already/); }
+    finally { unlock(); }
+    assert.equal(existsSync(destination), false);
+    const restoredPaths = await restoreInstallation(root, manifest.id, destination);
+    assert.deepEqual(readInstallation(destination), installation);
+    assert.deepEqual(readdirSync(restoredPaths.secrets), []);
+    assert.notEqual(adminKey(restoredPaths), key);
+    assert.equal(adminKey(paths), key);
+    const restored = new Runtime(restoredPaths.state);
+    try { assert.equal(restored.settings(restored.administrator()).paused, true); }
+    finally { restored.close(); }
+    await assert.rejects(restoreInstallation(root, manifest.id, destination), /EEXIST/);
+    assert.equal(existsSync(join(restoredPaths.state, 'control.db')), true);
+  } finally { await backups.stop(); runtime.close(); rmSync(base, { recursive: true, force: true }); }
+});

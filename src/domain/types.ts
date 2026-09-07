@@ -6,6 +6,7 @@ export interface Agent {
   status: AgentStatus;
   model: string;
   reasoning: string;
+  provider: 'openai_subscription' | 'ollama';
 }
 export interface Room {
   id: string;

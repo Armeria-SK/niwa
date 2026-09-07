@@ -1,0 +1,37 @@
+@layer themes {
+  .app-shell { --rail: #f4f6ef; --on-accent: #ffffff; background: var(--canvas); color: var(--text); }
+  .app-shell[data-theme='sand'] { --canvas: #f5eee4; --paper: #fff9f0; --rail: #eee2d3; --surface: #f0e3d4; --border: #d9c7b6; --text: #47352b; --muted: #796352; --green: #96583c; --green-hover: #79422a; --selected: #ead8c6; --danger: #a7403c; }
+  .app-shell[data-theme='mist'] { --canvas: #edf3f6; --paper: #f8fcff; --rail: #e2ecf2; --surface: #dfeaf1; --border: #c1d3de; --text: #293f4c; --muted: #577181; --green: #3f6e87; --green-hover: #2e566e; --selected: #d4e3ec; --danger: #a74656; }
+  .app-shell[data-theme='lilac'] { --canvas: #f3eef7; --paper: #fffbff; --rail: #ece3f2; --surface: #eae0f0; --border: #d5c5e0; --text: #45384f; --muted: #776582; --green: #79538a; --green-hover: #603d70; --selected: #e5d9ed; --danger: #a44263; }
+  .app-shell[data-theme='night'] { color-scheme: dark; --canvas: #18242e; --paper: #20313e; --rail: #14202a; --surface: #293e4c; --border: #385161; --text: #e1eaf0; --muted: #a6bac7; --green: #94ccb8; --green-hover: #b0dfcf; --selected: #293e4c; --danger: #f0a39a; --on-accent: #152c26; }
+  .theme-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+  .theme-option { position: relative; display: flex; flex-direction: column; text-align: left; gap: 8px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--paper); color: var(--text); }
+  .theme-option:hover { border-color: var(--green); }
+  .theme-option.selected { border-color: var(--green); box-shadow: 0 0 0 1px var(--green); }
+  .theme-option strong { font-size: 14px; font-weight: 500; }
+  .theme-option small { font-size: 12px; color: var(--muted); }
+  .theme-option > svg { position: absolute; right: 15px; bottom: 17px; color: var(--green); }
+  .theme-colors { display: flex; height: 38px; overflow: hidden; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 4px; }
+  .theme-colors span { flex: 1; }
+  .theme-colors span:first-child { flex: 2; }
+  .app-shell:not([data-theme='garden']) :is(.sidebar, .presence-rail, .mobile-nav) { background: var(--rail); }
+  .app-shell:not([data-theme='garden']) :is(.composer, .modal, input, select, textarea, .avatar-edit-hint, .presence-summary .icon-button) { background: var(--paper); color: var(--text); border-color: var(--border); }
+  .app-shell:not([data-theme='garden']) :is(.nav-link.active, .thread-item.selected, .member-list-row.selected, .shape-option.selected, .segmented button.selected, .mobile-nav a.active) { background: var(--selected); color: var(--text); border-color: var(--green); }
+  .app-shell:not([data-theme='garden']) :is(.nav-link:hover, .thread-item:hover, .member-list-row:hover, .shape-option:hover, .icon-button:hover, .segmented button:hover, .interest-tags span, .pause-setting, .backup-status, .inline-notice) { background: var(--surface); color: var(--text); }
+  .app-shell:not([data-theme='garden']) :is(h1, h2, h3, strong, p, .nav-link, .segmented button, .icon-button, .text-button, .field, .field-label, .form-section-label, .message-content p, .message-meta strong, .presence-member-info strong, .presence-summary, .file-link, .human-avatar, .button.secondary, .button.subtle) { color: var(--text); }
+  .app-shell:not([data-theme='garden']) :is(.muted, .eyebrow, .page-heading p, .quiet-count, small, time, .thread-date, .thread-item-bottom > span:first-child, .reply-divider, .reply-count, .status-label, .muted-status, .composer-hint, .preview-label, .field-hint, .inline-note, .activity-status, .activity-row p, .memory-count, .memory-item-meta, .privacy-note p, .appearance-editor legend, .avatar-preview div span, .shape-option > span:last-child:not(.bot-avatar), .demo-footnote, .settings-section > p:first-of-type, .connection-state, .role-label, .mobile-nav a) { color: var(--muted); }
+  .app-shell:not([data-theme='garden']) :is(.sidebar, .presence-rail, .main-nav, .sidebar-bottom, .search-field, .member-detail, .detail-tabs, .settings-tabs, .activity-tabs, .form-section-label, .settings-save, .activity-row, .memory-item, .presence-member.sleeping, .mobile-nav, .button.secondary, .button.subtle, .connection-row, .swatch.selected, .color-custom) { border-color: var(--border); }
+  .app-shell:not([data-theme='garden']) :is(.button.primary, .switch-row input:checked + .switch-track, .unread-count) { background: var(--green); border-color: var(--green); color: var(--on-accent); }
+  .app-shell:not([data-theme='garden']) .button.primary:hover { background: var(--green-hover); }
+  .app-shell:not([data-theme='garden']) :is(.button.secondary, .sidebar-section-heading .icon-button) { background: var(--paper); }
+  .app-shell:not([data-theme='garden']) .button.subtle { background: transparent; }
+  .app-shell:not([data-theme='garden']) .button.danger { background: var(--danger); color: var(--canvas); }
+  .app-shell:not([data-theme='garden']) :is(.reply-preview, .attachment-previews > span, .delete-preview, button.file-link:hover) { background: var(--surface); color: var(--text); border-color: var(--border); }
+  .app-shell:not([data-theme='garden']) .toast { background: var(--text); color: var(--canvas); border-color: var(--border); }
+  .app-shell:not([data-theme='garden']) .toast .icon-button { color: var(--canvas); }
+  .app-shell:not([data-theme='garden']) .button.primary:disabled { opacity: .5; }
+  .app-shell:not([data-theme='garden']) :is(.reply-divider > span:last-child, .replies .message:not(:last-child)::after) { background: var(--border); }
+  .app-shell:not([data-theme='garden']) input::placeholder, .app-shell:not([data-theme='garden']) textarea::placeholder { color: var(--muted); }
+  .app-shell:not([data-theme='garden']) :focus-visible { outline-color: var(--green); }
+  .app-shell:not([data-theme='garden']) * { scrollbar-color: var(--muted) var(--canvas); }
+}

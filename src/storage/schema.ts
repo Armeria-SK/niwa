@@ -70,3 +70,40 @@ CREATE TABLE memory_state (
 ) STRICT;
 INSERT INTO memory_state VALUES (1, 0);
 `;
+
+// Model transcripts can contain private memory. They stay in the owning bot's DB.
+export const memoryMigrations = [memorySchema, `
+CREATE TABLE task_steps (
+  task_id TEXT NOT NULL,
+  step INTEGER NOT NULL,
+  memory_revision INTEGER NOT NULL,
+  events TEXT NOT NULL,
+  discarded INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(task_id, step)
+) STRICT;
+`, `
+CREATE TABLE task_plans (
+  task_id TEXT PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision>0), memory_revision INTEGER NOT NULL,
+  remaining TEXT NOT NULL, operation_id TEXT NOT NULL, input_hash TEXT NOT NULL
+) STRICT;
+CREATE TRIGGER invalidate_task_plans AFTER UPDATE OF revision ON memory_state BEGIN
+  DELETE FROM task_plans;
+END;
+`, `
+CREATE TABLE task_summaries (
+  id TEXT PRIMARY KEY, room_id TEXT NOT NULL, purpose TEXT NOT NULL, body TEXT NOT NULL,
+  revision INTEGER NOT NULL, memory_revision INTEGER NOT NULL, operation_id TEXT NOT NULL, input_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+CREATE VIRTUAL TABLE summary_search USING fts5(id UNINDEXED,body,tokenize='trigram');
+CREATE TRIGGER summary_insert AFTER INSERT ON task_summaries BEGIN
+  INSERT INTO summary_search VALUES(new.id,new.purpose || char(10) || new.body); END;
+CREATE TRIGGER summary_update AFTER UPDATE ON task_summaries BEGIN
+  DELETE FROM summary_search WHERE id=old.id;
+  INSERT INTO summary_search VALUES(new.id,new.purpose || char(10) || new.body); END;
+CREATE TRIGGER summary_delete AFTER DELETE ON task_summaries BEGIN
+  DELETE FROM summary_search WHERE id=old.id; END;
+CREATE TRIGGER invalidate_task_summaries AFTER UPDATE OF revision ON memory_state BEGIN
+  DELETE FROM task_summaries;
+END;
+`];
