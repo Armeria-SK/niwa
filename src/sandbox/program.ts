@@ -61,8 +61,12 @@ export function configuredProgramRunner(environment: ProgramEnvironment) {
       else resolve({ code: error?.code as number ?? 0, stdout, stderr });
     });
   });
-  return (request: ProgramRequest, signal?: AbortSignal, name?: string) => {
+  const run = (request: ProgramRequest, signal?: AbortSignal, name?: string) => {
     assertDirectoryPath(environment.workspace);
     return executeProgram(environment, request, call, signal, name);
   };
+  return Object.assign(run, { cleanup: async (name: string) => {
+    if (!/^niwa-program-[a-f0-9-]{36}$/.test(name)) throw new Error('Invalid saved container');
+    if ((await call(['rm', '--force', '--ignore', name], 15)).code !== 0) throw new Error('Container recovery failed');
+  } });
 }
