@@ -97,7 +97,7 @@ test('structured bot conversation delivers to all recipients once and enforces p
   const f = fixture(t); const a = f.runtime.createAgent(f.actor, 'A'); const b = f.runtime.createAgent(f.actor, 'B');
   const runner = new TurnRunner(f.runtime, async agent => model(request => {
     assert.match(request.system_instructions, /通常の会話はプレーンテキスト/);
-    return tool('conversation_send', { body: 'どう思いますか？', recipient_ids: agent.id === f.leader.id ? [a.id, b.id] : [] });
+    return tool('conversation_send', { body: agent.id === f.leader.id ? '@A ＠A @B どう思いますか？' : 'どう思いますか？', recipient_ids: agent.id === f.leader.id ? [a.id, b.id] : [] });
   }));
   f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '話して'); const first = f.runtime.tasks.claim(f.admin)!;
   await runner.run(first); await runner.run(first);

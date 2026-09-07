@@ -3,6 +3,7 @@ import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
 import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon } from '../icons.jsx';
 import { uid } from '../data.js';
 import { ConversationWork } from '../ConversationWork.jsx';
+import { MentionText } from '../MentionText.jsx';
 import './Conversation.css';
 
 export function Conversation({ thread, tasks, onWork, onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
@@ -87,7 +88,7 @@ function Message({ message, isRoot = false, title, memberMap, onMember, onReply,
     <div className="message-content"><div className="message-meta"><strong>{member?.name || 'あなた'}</strong><time>{message.time}</time><IconButton label={`${member?.name || 'あなた'}のメッセージに返信`} className="message-reply" onClick={() => onReply(message)}><ReplyIcon size={18} /></IconButton></div>
       {isRoot ? <h1>{title}</h1> : null}
       {message.replyTo ? <blockquote><span>{memberMap[message.replyTo.author]?.name || 'あなた'}</span>{message.replyTo.text}</blockquote> : null}
-      {message.text ? <p>{message.text}</p> : null}
+      {message.text ? <p><MentionText text={message.text} members={memberMap} /></p> : null}
       {message.artifact ? <button className="file-link" onClick={onArtifact}><FileIcon size={19} />雨音の調査メモ.md</button> : null}
       {message.attachments?.map((file, index) => <span className="file-link local-attachment" key={`${file.name}-${index}`}><FileIcon size={18} />{file.name}<small>{Math.max(1, Math.round(file.size / 1024))} KB · 添付の表示例</small></span>)}
     </div>

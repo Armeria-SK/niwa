@@ -5,3 +5,4 @@
 .mention-picker button[aria-selected="true"], .mention-picker button:hover { background: var(--selected); }
 .mention-recipients { flex-wrap: wrap; }
 .mention-recipients > span { display: inline-flex; align-items: center; gap: 6px; }
+.message-mention, .mention-recipients > span { background: color-mix(in srgb, var(--green) 18%, var(--paper)); color: var(--text); border-radius: 4px; padding: 1px 4px; font-weight: 700; box-decoration-break: clone; -webkit-box-decoration-break: clone; }

@@ -452,7 +452,14 @@ export class Runtime {
           this.#room(this.agentSession(id), lease.task.room_id);
           return agent;
         });
-        if (recipients.length) body = `${recipients.map(item => `@${item.name}`).join(' ')} ${body}`;
+        if (recipients.length) {
+          while (true) {
+            const existing = recipients.find(item => (body.startsWith(`@${item.name}`) || body.startsWith(`＠${item.name}`)) && /^(?:\s|[、,:：？?@＠]|$)/u.test(body.slice(item.name.length + 1)));
+            if (!existing) break;
+            body = body.slice(existing.name.length + 1).replace(/^[\s、,:：]+/u, '');
+          }
+          body = `${[...new Set(recipients.map(item => `@${item.name}`))].join(' ')} ${body}`.trim();
+        }
       } else {
         let remaining = body;
         while (remaining.startsWith('@')) {
