@@ -31,6 +31,12 @@ test('quota switches to the configured local model and a later successful probe 
   const subscription = new Subscription(store, () => {}, { fetch: transport });
   try {
     let admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const room = runtime.createRoom(admin, '切替確認');
+    assert.equal(runtime.modelRoutes(admin)[0]!.attempted_at, null);
+    assert.throws(() => runtime.modelRoutes(runtime.agentSession(leader.id)), /Administrator/);
+    assert.throws(() => runtime.recordModelRoute(runtime.agentSession(leader.id), leader.id, 'ollama', 'forged', 'quota'), /Administrator/);
+    assert.equal(runtime.modelRoutes(admin)[0]!.attempted_at, null);
+    assert.throws(() => runtime.modelRoutes(runtime.agentSession(leader.id)), /Administrator/);
+    assert.throws(() => runtime.recordModelRoute(runtime.agentSession(leader.id), leader.id, 'ollama', 'forged', 'quota'), /Administrator/);
     runtime.configureOllama(admin, 'http://127.0.0.1:11434'); runtime.configureFallback(admin, 'http://127.0.0.1:11434', 'artificial-local');
     runtime.setAgentModel(admin, leader.id, 'openai_subscription', 'artificial-model', 'low');
     let gateway = new ModelGateway(runtime, transport, subscription);
@@ -38,7 +44,11 @@ test('quota switches to the configured local model and a later successful probe 
     await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
     assert.equal(runtime.tasks.list(admin)[0]!.result, '指定ローカルで継続');
     assert.equal(primaryCalls, 1); assert.equal(localCalls, 1);
+    assert.equal(runtime.modelRoutes(admin)[0]!.reason, 'quota');
+    assert.equal(runtime.modelRoutes(admin)[0]!.model, 'artificial-local');
+    assert.equal(runtime.modelRoutes(admin)[0]!.configured_model, 'artificial-model');
     runtime.close(); runtime = new Runtime(root); admin = runtime.administrator(); gateway = new ModelGateway(runtime, transport, subscription);
+    assert.equal(runtime.modelRoutes(admin)[0]!.model, 'artificial-local');
     runtime.tasks.create(admin, leader.id, room.id, '再起動後の続き');
     await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
     assert.equal(primaryCalls, 1); assert.equal(localCalls, 2);
@@ -49,6 +59,9 @@ test('quota switches to the configured local model and a later successful probe 
     assert.equal(primaryCalls, 2); assert.equal(localCalls, 2);
     assert.equal(runtime.tasks.list(admin).at(-1)!.result, 'サブスクへ復帰');
     assert.equal(runtime.agents(admin)[0]!.model, 'artificial-model');
+    assert.equal(runtime.modelRoutes(admin)[0]!.provider, 'openai_subscription');
+    assert.equal(runtime.modelRoutes(admin)[0]!.reason, 'configured');
+    assert.equal(runtime.modelRoutes(admin)[0]!.model, 'artificial-model');
   } finally { await subscription.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
 

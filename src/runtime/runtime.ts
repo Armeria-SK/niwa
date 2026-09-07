@@ -15,6 +15,7 @@ import { scheduleTriggerSchema } from '../storage/schedule-trigger-schema.ts';
 import { scheduleDeletionSchema } from '../storage/schedule-deletion-schema.ts';
 import { autonomySchema } from '../storage/autonomy-schema.ts';
 import { providerLimitSchema } from '../storage/provider-limit-schema.ts';
+import { modelRouteSchema } from '../storage/model-route-schema.ts';
 import { ProviderLimits } from './provider-limits.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
@@ -53,7 +54,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema]);
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
@@ -219,6 +220,19 @@ export class Runtime {
     this.#db.prepare(`UPDATE tasks SET state='queued',lease_token=NULL,updated_at=? WHERE ${condition}`).run(Date.now(), ...args);
   }
 
+  modelRoutes(actor: Actor) {
+    this.#admin(actor);
+    return this.#db.prepare(`SELECT a.id,a.name,a.provider AS configured_provider,a.model AS configured_model,
+      r.provider,r.model,r.reason,r.attempted_at FROM agents a LEFT JOIN model_routes r ON r.agent_id=a.id ORDER BY a.id`).all();
+  }
+  recordModelRoute(actor: Actor, agentId: string, provider: Agent['provider'], model: string, reason: 'configured' | 'quota'): void {
+    this.#admin(actor); this.#agent(agentId); text(model, 256);
+    check(provider === 'ollama' || provider === 'openai_subscription', 'invalid', 'Invalid provider');
+    check(reason === 'configured' || reason === 'quota', 'invalid', 'Invalid route reason');
+    this.#db.prepare(`INSERT INTO model_routes(agent_id,provider,model,reason,attempted_at) VALUES(?,?,?,?,?)
+      ON CONFLICT(agent_id) DO UPDATE SET provider=excluded.provider,model=excluded.model,reason=excluded.reason,attempted_at=excluded.attempted_at`)
+      .run(agentId, provider, model, reason, Date.now());
+  }
   modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null } {
     this.#admin(actor);
     const row = this.#db.prepare('SELECT ollama_url,fallback_model FROM model_settings WHERE id=1').get()!;

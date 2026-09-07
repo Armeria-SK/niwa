@@ -69,6 +69,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       participants: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })), agent_id: Type.Optional(id) }),
       run: (_m, b) => runtime.createConversation(admin, b.id as string, b.title as string, b.body as string, b.participants as string[] | undefined, b.agent_id as string | undefined) },
     { method: 'GET', path: /^\/api\/model-settings$/, run: () => runtime.modelSettings(admin) },
+    { method: 'GET', path: /^\/api\/model-routes$/, run: () => runtime.modelRoutes(admin) },
     { method: 'PATCH', path: /^\/api\/model-settings$/, schema: object({ ollamaUrl: Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 2048 })]) }),
       run: (_m, b) => { runtime.configureOllama(admin, b.ollamaUrl as string | null); return runtime.modelSettings(admin); } },
     { method: 'GET', path: /^\/api\/models$/, run: () => models.catalog() },

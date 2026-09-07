@@ -3,6 +3,8 @@ import { Avatar, Switch, Segmented } from '../components.jsx';
 import { THEMES } from '../data.js';
 import { BackupStatus } from '../BackupStatus.jsx';
 import { SubscriptionConnection } from '../SubscriptionConnection.jsx';
+import { FallbackConnection } from '../FallbackConnection.jsx';
+import { ModelRoutes } from '../ModelRoutes.jsx';
 import { CheckIcon, ClockIcon, InfoIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 
 export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, members, onUpdateMembers, notify }) {
@@ -25,9 +27,8 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
         <div className="field-pair"><label className="field"><span>新しいBotの標準モデル</span><select disabled value={draft.generatedModel} onChange={e => change('generatedModel', e.target.value)}><option>Luna</option><option>Astra</option></select></label><label className="field"><span>推論の強さ</span><select disabled value={draft.generatedEffort} onChange={e => change('generatedEffort', e.target.value)}>{['low', 'medium', 'high', 'max'].map(value => <option key={value}>{value}</option>)}</select></label></div>
         <p className="field-hint">Botごとの変更は、メンバーのプロフィールで行えます。</p>
         <div className="form-section-label">Ollamaへの自動切替</div><label className="field"><span>Ollamaの接続先URL</span><input type="url" value={draft.ollamaUrl} onChange={e => change('ollamaUrl', e.target.value)} placeholder="http://…:11434" /></label>
-        <label className="field"><span>上限時に使うローカルモデル</span><select disabled value={draft.fallback} onChange={e => change('fallback', e.target.value)}><option value="">未設定（上限時は待機）</option></select></label>
-        <Switch disabled checked={draft.autoReturn} onChange={value => change('autoReturn', value)} label="利用枠が回復したら元のモデルに戻す" description="実行中の処理が一区切りした時点で切り替えます。" />
-        <p className="inline-note"><InfoIcon size={18} />Ollama URLを保存後、メンバー画面で導入済みモデルを選択できます。自動切替は準備中です。</p>
+        <FallbackConnection key={settings.ollamaUrl} savedUrl={settings.ollamaUrl} />
+        <ModelRoutes />
       </section> : null}
       {tab === 'activity' ? <section className="settings-section"><h2>Botたちの活動</h2><p>人数と同時に活動できる数は、別々に設定できます。</p>
         <div className="pause-setting"><div><strong>{paused ? '活動を一時停止しています' : 'Botたちは活動中です'}</strong><small>一時停止中も、会話や設定を確認できます。</small></div><button className="button secondary" type="button" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? '再開' : '一時停止'}</button></div>
