@@ -4,12 +4,57 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSyn
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { gunzipSync } from 'node:zlib';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Runtime } from '../src/runtime/runtime.ts';
 import { initializeInstallation, adminKey, readInstallation } from '../src/config/installation.ts';
 import { Backups } from '../src/backup/backups.ts';
 import { prepareRestore, restoreInstallation } from '../src/backup/restore.ts';
 import { acquireProcessLock } from '../src/runtime/process-lock.ts';
+
+test('deleted Bots lose execution and private files and cannot return from older backups', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-agent-deletion-'));
+  const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
+  const paths = initializeInstallation(root, installation); const runtime = new Runtime(paths.state); const admin = runtime.administrator();
+  const leader = runtime.bootstrap(admin); const actor = runtime.agentSession(leader.id);
+  runtime.updateSettings(admin, { generatedLimit: 1 });
+  const child = runtime.createAgent(actor, '削除対象'); const childActor = runtime.agentSession(child.id);
+  const room = runtime.createRoom(admin, '残す会話'); const source = runtime.post(admin, room.id, '人工の出所');
+  runtime.remember(childActor, source.id, '消す私的記憶');
+  runtime.updateProfile(admin, child.id, { persona: '消す人格' });
+  const task = runtime.tasks.create(admin, child.id, room.id, '止める仕事'); const lease = runtime.tasks.claim(admin)!;
+  runtime.schedules.create(admin, { id: randomUUID(), agent_id: child.id, room_id: room.id, prompt: '消す定期活動', interval_ms: 60_000, next_at: Date.now() + 60_000, max_runs: 2, timeout_ms: 60_000 });
+  const backups = new Backups(runtime, paths, installation);
+  try {
+    const before = await backups.create();
+    assert.throws(() => runtime.deleteAgent(actor, child.id), /Administrator/);
+    assert.throws(() => runtime.deleteAgent(admin, leader.id), /Leader/);
+    runtime.deleteAgent(admin, child.id);
+    assert.equal(runtime.tasks.active(childActor, lease), false);
+    assert.equal(runtime.tasks.get(admin, task.id).state, 'cancelled');
+    assert.equal(runtime.schedules.list(admin).length, 0);
+    assert.throws(() => runtime.tasks.retry(admin, task.id), /Agent not found/);
+    assert.throws(() => runtime.agentSession(child.id), /Agent not found/);
+    assert.throws(() => runtime.setDormant(admin, child.id, false), /Agent not found/);
+    assert.throws(() => runtime.profile(admin, child.id), /Agent not found/);
+    assert.equal(existsSync(join(paths.state, 'agents', child.id)), false);
+    assert.equal(runtime.messages(admin, room.id).length, 1);
+    runtime.deleteAgent(admin, child.id); // Idempotent retry never recreates the private store.
+    const target = join(paths.runtime, 'restored-before-delete');
+    await prepareRestore(join(paths.backups, before.id), target, runtime.deletionRecords(admin), runtime.deletedAgents(admin));
+    const restored = new Runtime(target);
+    try {
+      assert.equal(restored.agents(restored.administrator()).length, 1);
+      assert.throws(() => restored.agentSession(child.id), /Agent not found/);
+      assert.equal(existsSync(join(target, 'agents', child.id)), false);
+    } finally { restored.close(); }
+    const after = await backups.create();
+    assert.equal(after.files.some(file => file.path.includes(child.id)), false);
+    runtime.createAgent(actor, '空いた枠の仲間');
+    const orphan = join(paths.state, 'agents', child.id); mkdirSync(orphan); writeFileSync(join(orphan, 'synthetic-leftover'), '消去途中の人工データ');
+    const reopened = new Runtime(paths.state);
+    try { assert.equal(existsSync(orphan), false); } finally { reopened.close(); }
+  } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
 
 test('daily backups use the saved Japan time and avoid duplicates after restarts or schedule changes', async () => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-backup-time-'));

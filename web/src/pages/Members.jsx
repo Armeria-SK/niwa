@@ -1,3 +1,4 @@
+import { DeleteMember } from '../DeleteMember.jsx';
 import { useState } from 'react';
 import { api } from '../api.js';
 import { SHAPES } from '../data.js';
@@ -6,9 +7,10 @@ import { useMemoryPage } from '../useMemoryPage.js';
 import { Avatar, AppearanceEditor, MotionPicker, EmptyState, IconButton, Modal, Segmented, StatusLabel } from '../components.jsx';
 import { ChatIcon, ChevronRightIcon, EditIcon, LockIcon, MemoryIcon, SearchIcon, TrashIcon, CloseIcon, CheckIcon, PlusIcon } from '../icons.jsx';
 
-export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, onDeleteMemory, onDM, paused, onAdd, maxMembers }) {
+export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, onDeleteMemory, onDM, paused, onAdd, maxMembers, onDelete }) {
   const [tab, setTab] = useState('profile');
   const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState(null);
   const atLimit = members.filter(item => item.authority !== 'leader').length >= maxMembers;
   const member = members.find(item => item.id === selected) || members[0];
   return <main className="work-area members-page" id="main-content" tabIndex={-1}>
@@ -20,9 +22,11 @@ export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, o
         {tab === 'profile' ? <Profile key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
         {tab === 'memory' ? <MemoryList key={member.id} member={member} onSave={onSaveMemory} onDelete={onDeleteMemory} /> : null}
         {tab === 'appearance' ? <AppearanceEditor key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
+        {tab === 'profile' && member.authority !== 'leader' ? <button className="button subtle" onClick={() => setDeleting(member)}>このBotを削除</button> : null}
         </div>
       </section>
     </div>
+    {deleting ? <DeleteMember member={deleting} onClose={() => setDeleting(null)} onDelete={onDelete} /> : null}
     {adding ? <AddMemberModal atLimit={atLimit} maxMembers={maxMembers} onClose={() => setAdding(false)} onAdd={async draft => { const error = await onAdd(draft); if (!error) { setAdding(false); setTab('profile'); } return error; }} /> : null}
   </main>;
 }

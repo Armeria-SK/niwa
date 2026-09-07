@@ -22,6 +22,7 @@ function readPage() { const id = window.location.hash.slice(1); return navItems.
 export function App() {
   const [page, setPage] = useState(readPage);
   const [members, setMembers] = useState([]);
+  const [deletedMembers, setDeletedMembers] = useState([]);
   const [threads, setThreads] = useState([]);
   const [activities, setActivities] = useState([]);
   const [updates, setUpdates] = useState([]);
@@ -56,7 +57,7 @@ export function App() {
   const toastTimer = useRef(null);
   const thread = threads.find(item => item.id === selectedThread) || threads[0];
   const animatedMembers = members.map(member => ({ ...member, runtimeMotion: member.status === 'sleeping' || paused ? 'none' : celebrating[member.id] ? 'celebrate' : member.runtimeMotion, activity: paused ? '一時停止中' : member.activity }));
-  const memberMap = Object.fromEntries(animatedMembers.map(item => [item.id, item]));
+  const memberMap = Object.fromEntries([...deletedMembers, ...animatedMembers].map(item => [item.id, item]));
   const pendingCount = activities.filter(item => item.status === 'approval').length;
 
   useEffect(() => { const onHash = () => setPage(readPage()); window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash); }, []);
@@ -84,6 +85,7 @@ export function App() {
       }
       previousTasks.current = new Map(state.tasks.map(task => [task.id, task.state]));
       const time = value => new Date(value).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+      setDeletedMembers((state.deletedAgents || []).map(agent => ({ id: agent.id, name: '削除したBot', deleted: true, shape: 'pebble', color: '#9a9a91', status: 'sleeping', motion: 'none' })));
       setMembers(state.agents.map(agent => ({ ...agent, authority: agent.role, role: agent.profile.role || (agent.role === 'leader' ? 'リーダー' : '仲間'),
         shape: 'pebble', color: '#61B8A5', persona: '', interests: [], ...agent.profile, effort: agent.reasoning,
         runtimeMotion: state.tasks.some(task => task.agent_id === agent.id && task.state === 'running') ? 'sway' : 'none', status: agent.status === 'dormant' ? 'sleeping' : 'active', activity: state.tasks.some(task => task.agent_id === agent.id && task.state === 'running') ? '仕事を進めています' : '待機しています' })));
@@ -135,7 +137,7 @@ export function App() {
   function readUpdates(ids) { return mutate(async () => {
     for (let offset = 0; offset < ids.length; offset += 1000) await api('/updates/read', 'POST', { ids: ids.slice(offset, offset + 1000) });
   }, '確認済みにしました'); }
-  function openMember(id) { setSelectedMember(id); navigate('members'); }
+  function openMember(id) { if (memberMap[id]?.deleted) { notify('このBotは削除されています。会話と成果物は引き続き確認できます。'); return; } setSelectedMember(id); navigate('members'); }
   function togglePause() { return mutate(() => api('/settings', 'PATCH', { paused: !paused }), paused ? '活動を再開しました' : '活動を一時停止しました'); }
   async function sendMessage(text, attachments = [], replyTo, selectedRecipients = []) {
     if (attachments.length) { notify('添付ファイルの保存はまだ利用できません。'); return false; }
@@ -198,7 +200,7 @@ export function App() {
     </aside>
     {page === 'conversation' && !thread ? <main className="conversation" id="main-content"><EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState></main> : null}
     {page === 'conversation' && thread ? <Conversation onThreadAction={organizeThread} thread={thread} tasks={activities.filter(task => task.thread === thread.id)} onWork={() => { setActivityFilter('running'); navigate('activity'); }} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => setMobileDetail(false)} onArtifact={openArtifact} /> : null}
-    {page === 'members' ? <Members onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={selectedMember} onSelect={setSelectedMember} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
+    {page === 'members' ? <Members onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), 'Botを削除しました。会話と成果物は残っています。')} onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={selectedMember} onSelect={setSelectedMember} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
     {page === 'activity' ? <Activity onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '予定を削除しました')} schedules={schedules} threads={threads} onScheduleSave={body => mutate(() => api('/schedules', 'POST', body), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={activityFilter} onFilter={setActivityFilter} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={() => notify('外部操作の承認はまだ利用できません。')} onThread={openThread} onArtifact={openArtifact} /> : null}
     {page === 'settings' ? <Settings onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} onUpdateMembers={setMembers} notify={notify} /> : null}
     <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined} onClick={() => { setPage(id); if (id === 'conversation') setMobileDetail(false); }}><Icon size={23} /><span>{label}</span>{id === 'activity' && pendingCount ? <span className="nav-notice" /> : null}</a>)}</nav>

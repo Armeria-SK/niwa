@@ -368,6 +368,7 @@ export class Tasks {
     this.#admin(actor);
     transaction(this.#db, () => {
       const task = this.#read(id);
+      check(!this.#db.prepare('SELECT 1 FROM deleted_agents WHERE id=?').get(task.agent_id), 'not_found', 'Agent not found');
       if (task.paused) {
         this.#db.prepare('UPDATE tasks SET paused=0,updated_at=? WHERE id=?').run(Date.now(), id);
         this.#event(id, 'resumed');
@@ -416,6 +417,7 @@ export class Tasks {
     this.#admin(actor);
     transaction(this.#db, () => {
       const task = this.#read(id);
+      check(!this.#db.prepare('SELECT 1 FROM deleted_agents WHERE id=?').get(task.agent_id), 'not_found', 'Agent not found');
       check(['failed', 'cancelled'].includes(task.state), 'conflict', 'Task cannot be retried');
       check(task.conversation_reply === 1 || !task.parent_id || this.#read(task.parent_id).state === 'waiting_child', 'conflict', 'Parent has already continued; submit a new request');
       this.#db.prepare('UPDATE tasks SET paused=0,lease_token=NULL,deadline_at=? WHERE id=?').run(Date.now() + 24 * 60 * 60_000, id);

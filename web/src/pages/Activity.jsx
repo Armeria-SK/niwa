@@ -45,7 +45,7 @@ function TaskDetail({ task, member, paused, onClose, onControl, onThread }) {
       .catch(error => { if (active) setHistoryError(error.message); });
     return () => { active = false; };
   }, [task.id, task.updated_at, task.instructions?.length]);
-  const canAct = openStatuses.includes(task.status);
+  const canAct = !member?.deleted && openStatuses.includes(task.status);
   return <Modal title={task.title} onClose={onClose} className="task-modal"><div className="modal-body form-stack"><div className="activity-detail-owner"><Avatar member={member} size={40} /><span>{member?.name}</span><span role="status">{paused && task.status === 'running' ? '全体の再開待ち' : taskStatus[task.status]}</span></div><p>{task.detail}</p>{task.reason ? <p className="task-reason">{task.reason}</p> : null}<div><h3 className="small-heading">これまでの進み具合</h3><ol className="task-steps">{task.steps.map((step, i) => <li key={`${i}-${step}`}>{step}</li>)}</ol></div>
     {task.instructions?.length ? <div><h3 className="small-heading">追加した指示</h3><ul className="task-instructions">{task.instructions.map(item => <li key={item.id}><time>{item.time}</time><p>{item.text}</p></li>)}</ul></div> : null}
     {canAct ? <form className="form-stack" onSubmit={async e => { e.preventDefault(); if (instruction.trim() && await onControl(task.id, 'instruct', instruction.trim())) setInstruction(''); }}><label className="field"><span>この仕事への追加指示</span><textarea rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="進め方や、優先してほしいことなど" /></label><button className="button secondary" disabled={!instruction.trim()}>指示を追加</button></form> : null}
@@ -55,7 +55,7 @@ function TaskDetail({ task, member, paused, onClose, onControl, onThread }) {
     {['running', 'waiting'].includes(task.status) ? <button className="button secondary" onClick={() => onControl(task.id, 'pause')}>この仕事を一時停止</button> : null}
     {task.status === 'running' ? <button className="button primary" onClick={() => onControl(task.id, 'complete')}>完了にする</button> : null}
     {['paused', 'waiting'].includes(task.status) && (task.paused || task.state !== 'waiting_child') ? <button className="button primary" onClick={() => onControl(task.id, 'resume')}>この仕事を再開</button> : null}
-    {['failed', 'canceled'].includes(task.status) ? <button className="button primary" onClick={() => onControl(task.id, 'retry')}>再試行</button> : null}
+    {!member?.deleted && ['failed', 'canceled'].includes(task.status) ? <button className="button primary" onClick={() => onControl(task.id, 'retry')}>再試行</button> : null}
     {canAct ? <button className="button subtle" onClick={() => onControl(task.id, 'cancel')}>この仕事を中止</button> : null}
     </div></Modal>;
 }

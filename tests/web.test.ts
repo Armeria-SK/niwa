@@ -161,3 +161,20 @@ test('profile updates persist display choices without granting leader authority 
   assert.throws(() => f.runtime.updateProfile(f.runtime.agentSession(child.id), child.id, { name: '勝手な変更' }), /Administrator/);
   assert.equal((await f.call(`/api/agents/${child.id}/profile`, 'PATCH', { patch: { shape: '../secrets' }, version: f.runtime.profileVersion(f.admin, child.id) })).status, 400);
 });
+
+test('administrator deletion requires the displayed Bot version and retains history attribution', async t => {
+  const f = await fixture(t); await f.login();
+  const child = f.runtime.createAgent(f.runtime.agentSession(f.leader.id), '削除する人工Bot');
+  const version = f.runtime.profileVersion(f.admin, child.id);
+  f.runtime.updateProfile(f.admin, child.id, { name: '変更後の人工Bot' });
+  assert.equal((await f.call(`/api/agents/${child.id}`, 'DELETE', { version })).status, 409);
+  assert.equal((await f.call(`/api/agents/${child.id}`, 'DELETE', {})).status, 400);
+  assert.equal((await f.call(`/api/agents/${f.leader.id}`, 'DELETE', { version: f.runtime.profileVersion(f.admin, f.leader.id) })).status, 403);
+  const body = { version: f.runtime.profileVersion(f.admin, child.id) };
+  assert.equal((await f.call(`/api/agents/${child.id}`, 'DELETE', body)).status, 200);
+  assert.equal((await f.call(`/api/agents/${child.id}`, 'DELETE', body)).status, 200);
+  const state = await (await f.call('/api/state')).json();
+  assert.equal(state.agents.some((agent: { id: string }) => agent.id === child.id), false);
+  assert.equal(state.deletedAgents.some((agent: { id: string }) => agent.id === child.id), true);
+  assert.equal((await f.call(`/api/agents/${child.id}/profile`, 'PATCH', { patch: { name: '復活' }, version: body.version })).status, 404);
+});

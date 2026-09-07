@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, mkdirSync, openSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, rmSync } from 'node:fs';
+import { agentDeletionSchema } from '../storage/agent-deletion-schema.ts';
 import { resolve, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { check, text, DomainError } from '../domain/types.ts';
@@ -60,7 +61,9 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema]);
+    try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
+    catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
@@ -136,7 +139,7 @@ export class Runtime {
   }
   #agent(id: string): Agent {
     check(typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id), 'forbidden', 'Invalid agent identity');
-    const agent = this.#db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as unknown as Agent | undefined;
+    const agent = this.#db.prepare('SELECT * FROM agents WHERE id = ? AND id NOT IN (SELECT id FROM deleted_agents)').get(id) as unknown as Agent | undefined;
     check(agent, 'not_found', 'Agent not found');
     return agent;
   }
@@ -165,7 +168,43 @@ export class Runtime {
   }
   agents(actor: Actor): Agent[] {
     this.#principal(actor);
-    return this.#db.prepare('SELECT * FROM agents ORDER BY rowid').all() as unknown as Agent[];
+    return this.#db.prepare('SELECT * FROM agents WHERE id NOT IN (SELECT id FROM deleted_agents) ORDER BY rowid').all() as unknown as Agent[];
+  }
+  deletedAgents(actor: Actor): { id: string; deleted_at: number }[] {
+    this.#admin(actor);
+    return this.#db.prepare('SELECT id,deleted_at FROM deleted_agents').all() as { id: string; deleted_at: number }[];
+  }
+  deleteAgent(actor: Actor, agentId: string, expected?: string): void {
+    this.#admin(actor);
+    if (!this.#db.prepare('SELECT 1 FROM deleted_agents WHERE id=?').get(agentId)) {
+      check(this.#agent(agentId).role !== 'leader', 'forbidden', 'Leader cannot be deleted');
+      check(expected === undefined || expected === this.profileVersion(actor, agentId), 'conflict', 'Profile changed; reload before deleting');
+      this.applyAgentDeletions(actor, [{ id: agentId, deleted_at: Date.now() }]);
+    } else this.#purgeAgent(agentId);
+  }
+  /** Retain deletion identities even when restoring a snapshot older than the Bot. */
+  applyAgentDeletions(actor: Actor, records: ReturnType<Runtime['deletedAgents']>): void {
+    this.#admin(actor);
+    for (const record of records) {
+      check(/^[0-9a-f-]{36}$/.test(record.id) && Number.isSafeInteger(record.deleted_at) && record.deleted_at >= 0, 'invalid', 'Invalid Bot deletion');
+      check(this.#db.prepare('SELECT role FROM agents WHERE id=?').get(record.id)?.role !== 'leader', 'forbidden', 'Leader cannot be deleted');
+      transaction(this.#db, () => {
+        for (const task of this.tasks.list(actor)) if (task.agent_id === record.id && !['completed', 'failed', 'cancelled'].includes(task.state)) this.tasks.cancel(actor, task.id);
+        this.#db.prepare("UPDATE schedules SET deleted=1,enabled=0,prompt='',source_revision='',wait_reason=NULL WHERE agent_id=?").run(record.id);
+        this.#db.prepare('DELETE FROM agent_profiles WHERE agent_id=?').run(record.id);
+        this.#db.prepare('DELETE FROM tool_receipts WHERE task_id IN (SELECT id FROM tasks WHERE agent_id=?)').run(record.id);
+        this.#db.prepare("UPDATE agents SET name='削除したBot',status='dormant' WHERE id=?").run(record.id);
+        this.#db.prepare('INSERT OR IGNORE INTO deleted_agents VALUES (?,?)').run(record.id, record.deleted_at);
+      });
+      this.#purgeAgent(record.id);
+    }
+  }
+  #purgeAgent(agentId: string): void {
+    check(/^[0-9a-f-]{36}$/.test(agentId), 'invalid', 'Invalid Bot deletion');
+    this.#memories.get(agentId)?.close(); this.#memories.delete(agentId);
+    const directory = join(this.#root, 'agents', agentId);
+    assertDirectoryPath(directory);
+    rmSync(directory, { recursive: true, force: true });
   }
   invalidateProvider(actor: Actor, provider: Agent['provider']): void {
     this.#admin(actor);
@@ -216,7 +255,7 @@ export class Runtime {
     text(name, 100);
     check(Value.Check(creationProfileSchema, profile), 'invalid', 'Invalid initial profile');
     return transaction(this.#db, () => {
-      const { count } = this.#db.prepare("SELECT count(*) AS count FROM agents WHERE role = 'member'").get() as { count: number };
+      const { count } = this.#db.prepare("SELECT count(*) AS count FROM agents WHERE role = 'member' AND id NOT IN (SELECT id FROM deleted_agents)").get() as { count: number };
       check(count < this.settings(actor).generatedLimit, 'limit', 'Generated agent limit reached');
       const id = randomUUID();
       const selected = this.generatedModel(actor);
