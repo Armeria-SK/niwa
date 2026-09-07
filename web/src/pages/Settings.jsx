@@ -11,6 +11,7 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
   const [tab, setTab] = useState('theme');
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
+  useEffect(() => { setDraft(current => current.rules === settings.rules ? { ...current, rulesRevision: settings.rulesRevision } : current); }, [settings.rules, settings.rulesRevision]);
   useEffect(() => { onPreviewTheme(draft.theme); return () => onPreviewTheme(null); }, [draft.theme, onPreviewTheme]);
   const change = (key, value) => { setDraft(current => ({ ...current, [key]: value })); setSaved(false); };
   async function submit(e) { e.preventDefault(); setSaved(await onSave(draft)); }
@@ -20,7 +21,7 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
     <div className="settings-scroll" key={tab}>
     <form className="settings-form" onSubmit={submit}>
       {tab === 'theme' ? <section className="settings-section"><h2>Niwaの色を選ぶ</h2><p>気分に合う配色で、心地よい場所に。</p><div className="theme-picker" role="group" aria-label="配色テーマ">{THEMES.map(theme => <button type="button" key={theme.id} className={`theme-option ${draft.theme === theme.id ? 'selected' : ''}`} aria-pressed={draft.theme === theme.id} onClick={() => change('theme', theme.id)}><span className="theme-colors" aria-hidden="true">{theme.colors.map(color => <span key={color} style={{ backgroundColor: color }} />)}</span><strong>{theme.name}</strong><small>{theme.description}</small>{draft.theme === theme.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">選ぶとすぐに全画面でプレビューできます。「設定を保存」で次回もこの配色を使います。保存せずに設定画面を離れると元に戻ります。</p></section> : null}
-      {tab === 'rules' ? <section className="settings-section"><h2>みんなが大切にすること</h2><p>共通ルールの編集機能は準備中です。現在は本体に定めたルールで動作します。</p><label className="field"><span>共通の指示</span><textarea readOnly rows={9} value={draft.rules} onChange={e => change('rules', e.target.value)} /></label><div className="inline-note"><ShieldIcon size={20} /><span>個別の性格設定で、共通ルールや権限を上書きすることはできません。</span></div></section> : null}
+      {tab === 'rules' ? <section className="settings-section"><h2>みんなが大切にすること</h2><p>全Botに共通して渡す指示です。保存すると、進行中の応答も新しいルールで取り直します。</p><label className="field"><span>共通の指示</span><textarea rows={9} maxLength={20000} value={draft.rules} onChange={e => change('rules', e.target.value)} /></label><p className="field-hint">別の画面で更新された場合は「変更を戻す」で最新の内容を読み直してください。空欄にすると追加の指示を解除します。</p><div className="inline-note"><ShieldIcon size={20} /><span>停止・権限・予算・記憶の分離は本体が管理します。共通の指示や個別の性格設定では上書きできません。</span></div></section> : null}
       {tab === 'models' ? <section className="settings-section"><h2>モデルと接続先</h2><p>いつものモデルと、利用上限に達したときの切替先を設定します。</p>
         <SubscriptionConnection />
         <div className="field-pair"><label className="field"><span>リーダーの標準モデル</span><select disabled value={draft.leaderModel} onChange={e => change('leaderModel', e.target.value)}><option>Astra</option><option>Luna</option></select></label><label className="field"><span>推論の強さ</span><select disabled value={draft.leaderEffort} onChange={e => change('leaderEffort', e.target.value)}>{['low', 'medium', 'high', 'max'].map(value => <option key={value}>{value}</option>)}</select></label></div>

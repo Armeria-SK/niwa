@@ -226,10 +226,10 @@ export class Tasks {
       return output;
     });
   }
-  steps(actor: Actor, id: string): { step: number; memory_revision: number; discarded: number; events: ModelEvent[] }[] {
+  steps(actor: Actor, id: string): { step: number; memory_revision: number; rules_revision: number; discarded: number; events: ModelEvent[] }[] {
     const task = this.get(actor, id);
     const db = this.#access.memory(actor, task.agent_id);
-    const rows = db.prepare('SELECT step,memory_revision,discarded,events FROM task_steps WHERE task_id=? ORDER BY step').all(id) as { step: number; memory_revision: number; discarded: number; events: string }[];
+    const rows = db.prepare('SELECT step,memory_revision,rules_revision,discarded,events FROM task_steps WHERE task_id=? ORDER BY step').all(id) as { step: number; memory_revision: number; rules_revision: number; discarded: number; events: string }[];
     return rows.map(row => ({ ...row, events: JSON.parse(row.events) as ModelEvent[] }));
   }
   /** Read the current task's private transcript, never another task or a superseded memory revision. */
@@ -264,7 +264,8 @@ export class Tasks {
     const db = this.#access.memory(actor, task.agent_id);
     return transaction(db, () => {
       const { next } = db.prepare('SELECT coalesce(max(step),-1)+1 AS next FROM task_steps WHERE task_id=?').get(lease.task.id) as { next: number };
-      db.prepare('INSERT INTO task_steps(task_id,step,memory_revision,events) VALUES (?,?,?,?)').run(lease.task.id, next, memoryRevision, JSON.stringify(events));
+      const rules = this.#db.prepare('SELECT revision FROM common_rules WHERE id=1').get()!;
+      db.prepare('INSERT INTO task_steps(task_id,step,memory_revision,events,rules_revision) VALUES (?,?,?,?,?)').run(lease.task.id, next, memoryRevision, JSON.stringify(events), rules.revision!);
       return next;
     });
   }

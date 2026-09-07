@@ -17,6 +17,7 @@ import { autonomySchema } from '../storage/autonomy-schema.ts';
 import { providerLimitSchema } from '../storage/provider-limit-schema.ts';
 import { modelRouteSchema } from '../storage/model-route-schema.ts';
 import { providerRetrySchema } from '../storage/provider-retry-schema.ts';
+import { commonRulesSchema } from '../storage/common-rules-schema.ts';
 import { ProviderLimits } from './provider-limits.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
@@ -55,7 +56,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema]);
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
@@ -221,6 +222,22 @@ export class Runtime {
     this.#db.prepare(`UPDATE tasks SET state='queued',lease_token=NULL,updated_at=? WHERE ${condition}`).run(Date.now(), ...args);
   }
 
+  commonRules(actor: Actor): { revision: number; body: string } {
+    this.#principal(actor);
+    return this.#db.prepare('SELECT revision,body FROM common_rules WHERE id=1').get() as { revision: number; body: string };
+  }
+  updateCommonRules(actor: Actor, revision: number, body: string): void {
+    this.#admin(actor);
+    check(Number.isSafeInteger(revision) && revision >= 1, 'invalid', 'Invalid rule revision');
+    check(typeof body === 'string' && body.length <= 20_000, 'invalid', 'Rules are too long');
+    transaction(this.#db, () => {
+      const current = this.commonRules(actor);
+      check(current.revision === revision, 'conflict', 'Rules changed; reload before saving');
+      if (current.body === body) return;
+      this.#db.prepare('UPDATE common_rules SET revision=revision+1,body=? WHERE id=1').run(body);
+      this.#interruptTasks();
+    });
+  }
   modelRoutes(actor: Actor) {
     this.#admin(actor);
     return this.#db.prepare(`SELECT a.id,a.name,a.provider AS configured_provider,a.model AS configured_model,

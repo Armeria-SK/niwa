@@ -119,4 +119,6 @@ CREATE TABLE procedure_uses (
 ) STRICT;
 CREATE TABLE procedure_receipts (task_id TEXT NOT NULL,operation_id TEXT NOT NULL,input_hash TEXT NOT NULL,output TEXT NOT NULL,PRIMARY KEY(task_id,operation_id)) STRICT;
 CREATE TRIGGER invalidate_procedures AFTER UPDATE OF revision ON memory_state BEGIN DELETE FROM procedures; END;
+`, `
+ALTER TABLE task_steps ADD COLUMN rules_revision INTEGER NOT NULL DEFAULT 1;
 `];

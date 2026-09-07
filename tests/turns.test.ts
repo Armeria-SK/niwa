@@ -27,6 +27,49 @@ function model(reply: (request: ModelRequest) => ModelEvent[] | Promise<ModelEve
     async *run(request) { yield* await reply(request); } };
 }
 
+test('common rules reject stale edits, persist, and discard an old rule response before publishing', async t => {
+  const f = fixture(t); const initial = f.runtime.commonRules(f.admin);
+  assert.throws(() => f.runtime.updateCommonRules(f.actor, initial.revision, 'モデルからの変更'), /Administrator/);
+  f.runtime.updateCommonRules(f.admin, initial.revision, '旧ルールの目印');
+  assert.throws(() => f.runtime.updateCommonRules(f.admin, initial.revision, '古い画面の変更'), /Rules changed/);
+  const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '共通ルールを使う');
+  let calls = 0;
+  const runner = new TurnRunner(f.runtime, async () => model(request => {
+    if (++calls === 1) {
+      assert.match(request.system_instructions, /旧ルールの目印/);
+      f.runtime.updateCommonRules(f.admin, f.runtime.commonRules(f.admin).revision, '新ルールの目印');
+      return complete('古い応答を公開しない');
+    }
+    assert.match(request.system_instructions, /新ルールの目印/); assert.doesNotMatch(request.system_instructions, /旧ルールの目印/);
+    assert.match(request.system_instructions, /ほかのBotの個別記憶/);
+    return complete('新しいルールで回答');
+  }));
+  await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).length, 0);
+  assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'queued');
+  await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.tasks.get(f.admin, task.id).result, '新しいルールで回答');
+  const reopened = new Runtime(f.root);
+  try { assert.equal(reopened.commonRules(reopened.administrator()).body, '新ルールの目印'); }
+  finally { reopened.close(); }
+});
+
+test('saved tool calls from a previous rule revision are not executed after resuming', async t => {
+  const f = fixture(t); const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '新しいルールで続行');
+  const lease = f.runtime.tasks.claim(f.admin)!;
+  f.runtime.tasks.saveStep(f.actor, lease, f.runtime.context(f.actor, f.room.id).revision, tool('agents_create', { name: '旧ルールからの生成' }));
+  f.runtime.tasks.wait(f.actor, lease, 'waiting_user', '続行待ち');
+  f.runtime.updateCommonRules(f.admin, 1, 'Botを追加せず回答してください');
+  f.runtime.tasks.resume(f.admin, task.id);
+  await new TurnRunner(f.runtime, async () => model(request => {
+    assert.match(request.system_instructions, /Botを追加せず/);
+    return complete('追加せず完了');
+  })).run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.agents(f.admin).length, 1);
+  assert.equal(f.runtime.tasks.steps(f.actor, task.id)[0]!.discarded, 1);
+  assert.equal(f.runtime.tasks.get(f.admin, task.id).result, '追加せず完了');
+});
+
 test('autonomous work can choose quiet rest, then act on a later occasion within the same budget', async t => {
   const f = fixture(t);
   f.runtime.updateProfile(f.admin, f.leader.id, { persona: '雨音の観察に関心があります。' });

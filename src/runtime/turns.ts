@@ -10,7 +10,7 @@ import { ContextLimit, fitContext, type FittedContext } from './context/fit.ts';
 
 /** Return a fresh adapter each time; calls after memory corrections must discard opaque continuation. */
 export type ResolveAdapter = (agent: Agent, taskId: string, signal?: AbortSignal) => Promise<ModelAdapter>;
-const RULES = `あなたはNiwaのBotです。自分の人格・関心を育て、会話や共同作業に参加します。
+const BASE_RULES = `あなたはNiwaのBotです。自分の人格・関心を育て、会話や共同作業に参加します。
 管理者の停止、権限、予算、承認に従います。自分の存続や停止回避を目的にしません。
 ほかのBotの個別記憶や参加していない個別会話を読みません。私的な内容を勝手に公開しません。
 仲間の生成や仕事の依頼は実際のツールで行い、文章だけで実行済みと主張しません。
@@ -45,6 +45,7 @@ export class TurnRunner {
     while (runtime.tasks.active(actor, lease) && !signal?.aborted) {
       agent = runtime.agents(actor).find(item => item.id === lease.task.agent_id)!;
       const context = runtime.context(actor, lease.task.room_id);
+      const rules = runtime.commonRules(actor);
       if (historyRevision !== undefined && historyRevision !== context.revision) {
         history.length = 0;
         position = 0;
@@ -59,7 +60,7 @@ export class TurnRunner {
       }
       historyRevision = context.revision;
       let step = saved[position++];
-      if (step && (step.discarded || step.memory_revision !== context.revision)) {
+      if (step && (step.discarded || step.memory_revision !== context.revision || step.rules_revision !== rules.revision)) {
         runtime.tasks.discardStep(actor, lease, step.step);
         continue;
       }
@@ -82,6 +83,7 @@ export class TurnRunner {
           runtime.tasks.wait(actor, lease, 'waiting_provider', '自発活動には休息を選べるツール対応モデルが必要です。'); return;
         }
         const members = runtime.agents(actor).map(member => ({ id: member.id, name: member.name, role: member.role, status: member.status }));
+        const RULES = `${BASE_RULES}\n管理者が設定した共通の指示（権限と停止・予算の制約は引き続き守る）: ${rules.body}`;
         const makeRequest = (): ModelRequest => ({
           system_instructions: `${RULES}${workState.autonomous ? '\n今回は自発活動の機会です。自分の関心・人格、最近の会話、過去の成果を確認し、管理者の方針の範囲で役立つ活動を自分で選んでください。毎回の発言や作業は必須ではありません。今は必要がなければtask_restを単独で呼んで休んでください。私的な経験をそのまま共有会話へ公開しないでください。' : ''}\nあなた: ${JSON.stringify({ id: agent.id, name: agent.name, role: agent.role, profile: runtime.profile(actor, agent.id) })}\nメンバー: ${JSON.stringify(members)}\n利用できる自分の記憶: ${JSON.stringify(context.memories.slice(-20).map(memory => ({ id: memory.id, body: memory.body })))}`,
           messages: [...base, { role: 'user', content: `現在の依頼: ${lease.task.prompt}` }, ...history,
@@ -126,7 +128,7 @@ export class TurnRunner {
           return;
         }
         const index = runtime.tasks.saveStep(actor, lease, context.revision, events);
-        step = { step: index, memory_revision: context.revision, discarded: 0, events: [...events] };
+        step = { step: index, memory_revision: context.revision, rules_revision: rules.revision, discarded: 0, events: [...events] };
         saved.push(step);
       }
       const calls: ModelToolCall[] = step.events.filter((event): event is Extract<ModelEvent, { type: 'tool_call' }> => event.type === 'tool_call')

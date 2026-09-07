@@ -101,7 +101,7 @@ export function App() {
       setPaused(state.settings.paused);
       setSchedules(savedSchedules);
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
-        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, ollamaUrl: modelSettings.ollamaUrl || '' }));
+        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, ollamaUrl: modelSettings.ollamaUrl || '', rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
       setReady(true);
     } catch (error) { if (error.status === 401) { setAuthenticated(false); setReady(false); } else notify(error.message); }
   }
@@ -169,6 +169,7 @@ export function App() {
     return mutate(() => api(`/agents/${memory.member}/memories/${id}`, 'DELETE', { revision: memory.revision }), '記憶を削除しました');
   }
   function saveSettings(next) { return mutate(async () => {
+    if (next.rules !== settings.rules) await api('/common-rules', 'PUT', { revision: next.rulesRevision, body: next.rules });
     await api('/settings', 'PATCH', { generatedLimit: Number(next.maxMembers), concurrencyLimit: next.unlimited ? null : Number(next.concurrent), backupDays: Number(next.backupDays) });
     if (next.ollamaUrl !== settings.ollamaUrl) await api('/model-settings', 'PATCH', { ollamaUrl: next.ollamaUrl || null });
     setSettings(current => ({ ...current, theme: next.theme }));
