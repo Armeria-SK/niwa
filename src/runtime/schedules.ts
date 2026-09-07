@@ -9,8 +9,9 @@ export interface ScheduleInput {
   id: string; agent_id: string; room_id: string; prompt: string;
   interval_ms: number; next_at: number; max_runs: number; timeout_ms: number;
   max_model_calls?: number;
+  trigger_kind?: 'interval' | 'shared_changes';
 }
-interface Schedule extends ScheduleInput { max_model_calls: number; model_calls: number; enabled: number; run_count: number; failure_reset: number; wait_reason: string | null }
+interface Schedule extends ScheduleInput { source_revision: string; max_model_calls: number; model_calls: number; enabled: number; run_count: number; failure_reset: number; wait_reason: string | null }
 
 /** Administrator-owned triggers; each occurrence and its task commit together. */
 export class Schedules {
@@ -20,7 +21,11 @@ export class Schedules {
   list(actor: Actor): Schedule[] {
     this.admin(actor);
     return this.db.prepare(`SELECT id,agent_id,room_id,prompt,interval_ms,next_at,max_runs,timeout_ms,
-      enabled,run_count,failure_reset,wait_reason,max_model_calls,model_calls FROM schedules ORDER BY rowid`).all() as unknown as Schedule[];
+      enabled,run_count,failure_reset,wait_reason,max_model_calls,model_calls,trigger_kind,source_revision FROM schedules ORDER BY rowid`).all() as unknown as Schedule[];
+  }
+  private sourceRevision(agentId: string, roomId: string): string {
+    const messages = this.db.prepare('SELECT id,author_id,body FROM messages WHERE room_id=? AND author_id<>? ORDER BY id').all(roomId, agentId);
+    return createHash('sha256').update(JSON.stringify(messages)).digest('hex');
   }
   create(actor: Actor, input: ScheduleInput): Schedule {
     this.admin(actor);
@@ -31,19 +36,23 @@ export class Schedules {
       check(Number.isSafeInteger(value) && value! >= min! && value! <= max!, 'invalid', 'Invalid schedule bounds');
     }
     const maxCalls = input.max_model_calls ?? input.max_runs * 24;
+    const trigger = input.trigger_kind ?? 'interval';
+    check(trigger === 'interval' || trigger === 'shared_changes', 'invalid', 'Invalid schedule trigger');
     check(Number.isSafeInteger(maxCalls) && maxCalls > 0 && maxCalls <= 1_000_000, 'invalid', 'Invalid model call limit');
     const hash = createHash('sha256').update(JSON.stringify([input.agent_id, input.room_id, input.prompt,
       input.interval_ms, input.next_at, input.max_runs, input.timeout_ms,
-      ...(input.max_model_calls === undefined ? [] : [input.max_model_calls])])).digest('hex');
+      ...(input.max_model_calls === undefined ? [] : [input.max_model_calls]), ...(trigger === 'interval' ? [] : [trigger])])).digest('hex');
     return transaction(this.db, () => {
       const prior = this.db.prepare('SELECT input_hash FROM schedules WHERE id=?').get(input.id);
       if (prior) check(prior.input_hash === hash, 'conflict', 'Schedule id already used with different input');
       else {
         this.recipient(actor, input.agent_id, input.room_id);
+        if (trigger === 'shared_changes') check(this.db.prepare('SELECT visibility FROM rooms WHERE id=?').get(input.room_id)!.visibility === 'shared', 'forbidden', 'Change triggers require a shared room');
         check(input.next_at >= Date.now(), 'invalid', 'First occurrence must be in the future');
-        this.db.prepare(`INSERT INTO schedules(id,agent_id,room_id,prompt,interval_ms,next_at,max_runs,timeout_ms,input_hash,max_model_calls)
-          VALUES (?,?,?,?,?,?,?,?,?,?)`).run(input.id, input.agent_id, input.room_id, input.prompt,
-          input.interval_ms, input.next_at, input.max_runs, input.timeout_ms, hash, maxCalls);
+        this.db.prepare(`INSERT INTO schedules(id,agent_id,room_id,prompt,interval_ms,next_at,max_runs,timeout_ms,input_hash,max_model_calls,trigger_kind,source_revision)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(input.id, input.agent_id, input.room_id, input.prompt,
+          input.interval_ms, input.next_at, input.max_runs, input.timeout_ms, hash, maxCalls, trigger,
+          trigger === 'shared_changes' ? this.sourceRevision(input.agent_id, input.room_id) : '');
       }
       return this.list(actor).find(row => row.id === input.id)!;
     });
@@ -83,10 +92,18 @@ export class Schedules {
         if (row.next_at > now) continue;
         // Dormancy or revoked room access leaves the occurrence pending without creating a task.
         try { this.recipient(actor, row.agent_id, row.room_id); } catch { continue; }
+        const next = row.next_at + (Math.floor((now - row.next_at) / row.interval_ms) + 1) * row.interval_ms;
+        let revision = row.source_revision;
+        if (row.trigger_kind === 'shared_changes') {
+          if (this.db.prepare('SELECT visibility FROM rooms WHERE id=?').get(row.room_id)!.visibility !== 'shared') continue;
+          revision = this.sourceRevision(row.agent_id, row.room_id);
+          if (revision === row.source_revision) {
+            this.db.prepare('UPDATE schedules SET next_at=? WHERE id=?').run(next, row.id); continue;
+          }
+        }
         const task = this.tasks.create(actor, row.agent_id, row.room_id, row.prompt, Date.now() + row.timeout_ms);
         this.db.prepare('INSERT INTO schedule_runs VALUES (?,?,?)').run(row.id, row.next_at, task.id);
-        const next = row.next_at + (Math.floor((now - row.next_at) / row.interval_ms) + 1) * row.interval_ms;
-        this.db.prepare('UPDATE schedules SET next_at=?,run_count=run_count+1 WHERE id=?').run(next, row.id);
+        this.db.prepare('UPDATE schedules SET next_at=?,run_count=run_count+1,source_revision=? WHERE id=?').run(next, revision, row.id);
       }
     });
   }

@@ -157,9 +157,58 @@ test('model reservations share one persistent schedule budget across delegation 
 test('existing schedules migrate with a finite budget and retain creation replay compatibility', t => {
   const f = fixture(t); f.runtime.schedules.create(f.admin, f.input);
   const db = new DatabaseSync(join(f.root, 'control.db'));
-  db.exec('ALTER TABLE schedules DROP COLUMN max_model_calls; ALTER TABLE schedules DROP COLUMN model_calls; PRAGMA user_version=14;');
+  db.exec('ALTER TABLE schedules DROP COLUMN max_model_calls; ALTER TABLE schedules DROP COLUMN model_calls; ALTER TABLE schedules DROP COLUMN trigger_kind; ALTER TABLE schedules DROP COLUMN source_revision; PRAGMA user_version=14;');
   db.close();
   const r = f.reopen(); const admin = r.administrator();
   const schedule = r.schedules.create(admin, f.input);
   assert.equal(schedule.max_model_calls, f.input.max_runs * 24); assert.equal(schedule.model_calls, 0);
+});
+
+test('shared changes trigger once across restart, ignore private rooms and self replies, and detect source corrections', t => {
+  const f = fixture(t); let r = f.runtime; let admin = f.admin;
+  const actor = r.agentSession(f.leader.id);
+  const privateRoom = r.createRoom(admin, '個別の相談', [f.leader.id]);
+  assert.throws(() => r.schedules.create(admin, { ...f.input, room_id: privateRoom.id, trigger_kind: 'shared_changes' }), /shared room/);
+  r.post(admin, f.room.id, '登録より前の発言');
+  r.schedules.create(admin, { ...f.input, trigger_kind: 'shared_changes' });
+  r.schedules.dispatch(admin, f.input.next_at);
+  r.post(actor, f.room.id, '自分の返答'); r.post(admin, privateRoom.id, '私的な発言');
+  r.schedules.dispatch(admin, f.input.next_at + 60_000);
+  assert.equal(r.tasks.list(admin).length, 0); assert.equal(r.schedules.list(admin)[0]!.model_calls, 0);
+  const source = r.post(admin, f.room.id, '共有会話の変更');
+  r.updateSettings(admin, { paused: true }); r.schedules.dispatch(admin, f.input.next_at + 120_000);
+  assert.equal(r.tasks.list(admin).length, 0);
+  r = f.reopen(); admin = r.administrator(); r.updateSettings(admin, { paused: false });
+  r.schedules.dispatch(admin, f.input.next_at + 120_000);
+  r.schedules.dispatch(admin, f.input.next_at + 120_000);
+  assert.equal(r.tasks.list(admin).length, 1);
+  r.tasks.cancel(admin, r.tasks.list(admin)[0]!.id);
+  const db = new DatabaseSync(join(f.root, 'control.db'));
+  try {
+    db.prepare('UPDATE messages SET body=? WHERE id=?').run('訂正された発言', source.id);
+    r.schedules.dispatch(admin, f.input.next_at + 180_000);
+    assert.equal(r.tasks.list(admin).length, 2);
+    r.tasks.cancel(admin, r.tasks.list(admin)[1]!.id);
+    db.prepare('DELETE FROM messages WHERE id=?').run(source.id);
+    r.schedules.dispatch(admin, f.input.next_at + 240_000);
+    assert.equal(r.tasks.list(admin).length, 3);
+  } finally { db.close(); }
+});
+
+test('change checkpoint and task creation roll back together', t => {
+  const f = fixture(t); const r = f.runtime;
+  r.schedules.create(f.admin, { ...f.input, trigger_kind: 'shared_changes' });
+  const before = r.schedules.list(f.admin)[0]!.source_revision;
+  r.post(f.admin, f.room.id, '新しい話題');
+  const db = new DatabaseSync(join(f.root, 'control.db'));
+  try {
+    db.exec("CREATE TRIGGER reject_changed_run BEFORE INSERT ON schedule_runs BEGIN SELECT RAISE(ABORT,'changed run failure'); END;");
+    assert.throws(() => r.schedules.dispatch(f.admin, f.input.next_at), /changed run failure/);
+    assert.equal(r.schedules.list(f.admin)[0]!.source_revision, before);
+    assert.equal(r.tasks.list(f.admin).length, 0);
+    db.exec('DROP TRIGGER reject_changed_run;');
+    r.schedules.dispatch(f.admin, f.input.next_at);
+    assert.notEqual(r.schedules.list(f.admin)[0]!.source_revision, before);
+    assert.equal(r.tasks.list(f.admin).length, 1);
+  } finally { db.close(); }
 });

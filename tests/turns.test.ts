@@ -27,6 +27,22 @@ function model(reply: (request: ModelRequest) => ModelEvent[] | Promise<ModelEve
     async *run(request) { yield* await reply(request); } };
 }
 
+test('shared-change work reads the current conversation and its reply does not trigger itself', async t => {
+  const f = fixture(t); let calls = 0;
+  const input = { id: randomUUID(), agent_id: f.leader.id, room_id: f.room.id, prompt: '新しい話題を検討', trigger_kind: 'shared_changes' as const,
+    interval_ms: 60_000, next_at: Date.now() + 60_000, max_runs: 3, timeout_ms: 60_000 };
+  f.runtime.schedules.create(f.admin, input);
+  f.runtime.post(f.admin, f.room.id, '共有会話の新しい話題');
+  f.runtime.schedules.dispatch(f.admin, input.next_at);
+  await new TurnRunner(f.runtime, async () => model(request => {
+    calls++; assert.match(JSON.stringify(request.messages), /共有会話の新しい話題/);
+    return complete('変更を踏まえて回答しました');
+  })).run(f.runtime.tasks.claim(f.admin)!);
+  f.runtime.schedules.dispatch(f.admin, input.next_at + 60_000);
+  assert.equal(f.runtime.tasks.list(f.admin).length, 1); assert.equal(calls, 1);
+  assert.equal(f.runtime.schedules.list(f.admin)[0]!.model_calls, 1);
+});
+
 test('schedule budget prevents another model call after a transport failure and restart', async t => {
   const f = fixture(t); let calls = 0;
   const input = { id: randomUUID(), agent_id: f.leader.id, room_id: f.room.id, prompt: '予定の調査',
