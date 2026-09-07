@@ -1,9 +1,27 @@
 import { OAuthAccount } from './account.ts';
-import type { CredentialStore } from './credential-store.ts';
-import { loginWithBrowser, refreshOAuthCredential, type OAuthClientConfig } from './codex-oauth.ts';
+import { CredentialStoreUnavailableError, type CredentialStore } from './credential-store.ts';
+import { loginWithBrowser, refreshOAuthCredential, OAuthError, type OAuthClientConfig } from './codex-oauth.ts';
 import { CodexConnection } from '../providers/codex/connection.ts';
 import { check } from '../domain/types.ts';
 import type { ModelProfile } from '../providers/shared/profile.ts';
+
+function loginError(error: unknown): string {
+  if (error instanceof CredentialStoreUnavailableError) return '認証情報の保存領域を利用できませんでした。Niwaのファイル権限を確認してください。';
+  if (error instanceof OAuthError) {
+    const messages: Partial<Record<OAuthError['code'], string>> = {
+      INVALID_CONFIG: '認証の戻り先を開けませんでした。同じPCで別の認証処理が動いていないか確認してください。',
+      AUTHORIZATION_TIMEOUT: '認証結果の受信が時間切れになりました。Niwaを動かしているPCから、もう一度接続してください。',
+      STATE_MISMATCH: '認証結果が現在の接続操作と一致しません。古い認証タブを閉じ、もう一度接続してください。',
+      CALLBACK_ERROR: '認証結果を受け取れませんでした。もう一度接続してください。',
+      TOKEN_ENDPOINT_UNREACHABLE: 'Niwaから認証サーバーへ接続できませんでした。Niwaの通信許可とネットワーク接続を確認してください。',
+      TOKEN_EXCHANGE_TIMEOUT: '認証情報の交換が時間切れになりました。通信を確認し、もう一度接続してください。',
+      TOKEN_EXCHANGE_FAILED: '認証サーバーが認証情報の交換を受け付けませんでした。もう一度接続してください。',
+      TOKEN_RESPONSE_INVALID: '認証サーバーの応答を確認できませんでした。もう一度接続してください。',
+    };
+    if (messages[error.code]) return messages[error.code]!;
+  }
+  return '認証を完了できませんでした。もう一度接続してください。';
+}
 
 /** Server-owned OAuth state; Web clients receive only the authorization URL and bounded status. */
 export class Subscription {
@@ -55,8 +73,8 @@ export class Subscription {
         const credential = await loginWithBrowser({ ...this.#config, open_external: async url => { this.#url = url; resolve(url); } }, attempt.abort.signal);
         if (this.#attempt !== attempt || attempt.abort.signal.aborted) return;
         await this.account.login(credential); this.#changed();
-      } catch {
-        if (!attempt.abort.signal.aborted) this.#error = '認証を完了できませんでした。もう一度接続してください。';
+      } catch (error) {
+        if (!attempt.abort.signal.aborted) this.#error = loginError(error);
         reject(new Error('Subscription login did not start or was cancelled'));
       } finally { if (this.#attempt === attempt) { this.#attempt = undefined; this.#url = null; } }
     })();

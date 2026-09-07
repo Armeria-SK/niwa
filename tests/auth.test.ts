@@ -6,7 +6,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAuthorizationRequest, exchangeAuthorizationCode, loginWithBrowser } from '../src/auth/codex-oauth.ts';
-import { FileCredentialStore, MemoryCredentialStore } from '../src/auth/credential-store.ts';
+import { FileCredentialStore, MemoryCredentialStore, CredentialStoreUnavailableError } from '../src/auth/credential-store.ts';
 import { OAuthAccount } from '../src/auth/account.ts';
 import { Subscription } from '../src/auth/subscription.ts';
 import { setTimeout } from 'node:timers/promises';
@@ -53,6 +53,26 @@ test('OAuth requires opt-in and validates callback state without contacting the 
     fetch: async () => { exchanges++; return Response.json({}); },
   }), { code: 'STATE_MISMATCH' });
   assert.equal(exchanges, 0);
+});
+
+test('subscription failures distinguish network, rejected exchange and storage without exposing raw errors', async () => {
+  for (const failure of ['network', 'exchange', 'storage']) {
+    const store = new MemoryCredentialStore();
+    if (failure === 'storage') store.write = async () => { throw new CredentialStoreUnavailableError('private-path artificial-secret'); };
+    const subscription = new Subscription(store, () => {}, { callback_host: '127.0.0.1', callback_port: 0, fetch: async () => {
+      if (failure === 'network') throw new Error('private-path artificial-secret');
+      return failure === 'exchange' ? new Response('artificial-secret', { status: 400 }) : Response.json({ access_token: 'artificial-access', refresh_token: 'artificial-refresh' });
+    } });
+    try {
+      const url = new URL(await subscription.start()); const callback = new URL(url.searchParams.get('redirect_uri')!);
+      callback.searchParams.set('state', url.searchParams.get('state')!); callback.searchParams.set('code', 'artificial-code');
+      assert.match(await (await fetch(callback)).text(), /Niwa/);
+      for (let n = 0; n < 100 && (await subscription.status()).pending; n++) await setTimeout(10);
+      const status = await subscription.status(); assert.equal(status.pending, false); assert.equal(status.connected, false);
+      assert.match(status.error!, failure === 'network' ? /通信許可/ : failure === 'exchange' ? /交換を受け付け/ : /保存領域/);
+      assert.doesNotMatch(JSON.stringify(status), /private-path|artificial/);
+    } finally { await subscription.close(); }
+  }
 });
 
 test('token exchange is bounded, validates credentials and disallows redirects', async () => {

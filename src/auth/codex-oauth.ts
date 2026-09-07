@@ -90,6 +90,7 @@ export type OAuthErrorCode =
   | 'ABORTED'
   | 'TOKEN_EXCHANGE_TIMEOUT'
   | 'TOKEN_EXCHANGE_FAILED'
+  | 'TOKEN_ENDPOINT_UNREACHABLE'
   | 'TOKEN_RESPONSE_INVALID'
   | 'REFRESH_TIMEOUT'
   | 'REFRESH_FAILED';
@@ -278,7 +279,7 @@ async function tokenRequest(
       } catch (error) {
         if (error instanceof OAuthError) throw error;
         if (stageSignal.aborted) throw new OAuthError('ABORTED', 'OAuth token exchange was aborted.');
-        throw new OAuthError(failureCode, 'The OAuth token endpoint was unreachable.');
+        throw new OAuthError(stage === 'token_exchange' ? 'TOKEN_ENDPOINT_UNREACHABLE' : failureCode, 'The OAuth token endpoint was unreachable.');
       }
       let text: string;
       try {
@@ -428,7 +429,7 @@ async function handleCallback(request: IncomingMessage, response: ServerResponse
     respond(response, 400, 'OAuth code missing');
     throw new OAuthError('CALLBACK_ERROR', 'OAuth callback did not contain a code.');
   }
-  respond(response, 200, 'Authorization received by Carried. Return to the terminal while sign-in finishes. You may close this window.');
+  respond(response, 200, 'Niwaが認証結果を受け取りました。Niwaの設定画面へ戻り、認証情報の保存が完了するまでお待ちください。このウィンドウは閉じられます。');
   return { code };
 }
 
