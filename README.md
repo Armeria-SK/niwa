@@ -89,16 +89,10 @@ sudo -iu niwa
 
 **ここから手順6までは、この端末で続けてください。**
 
-保存先のフォルダーを作ります。
-
-```bash
-mkdir -p /home/niwa/niwa/app
-```
-
 GitHubからNiwaを取得します。
 
 ```bash
-git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa/app/source
+git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa
 ```
 
 ## 4. Niwaを使う準備をする
@@ -106,7 +100,7 @@ git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa/app/source
 Niwaのフォルダーへ移動します。
 
 ```bash
-cd /home/niwa/niwa/app/source
+cd /home/niwa/niwa
 ```
 
 Niwaに必要な部品を入れます。数分かかることがあります。
@@ -129,7 +123,7 @@ npm run build
 
 ```bash
 node \
-  /home/niwa/niwa/app/source/dist/entrypoints/server.js \
+  /home/niwa/niwa/dist/entrypoints/server.js \
   --root /home/niwa/niwa --init --origin http://127.0.0.1:3210
 ```
 
@@ -139,7 +133,7 @@ node \
 
 ```bash
 node \
-  /home/niwa/niwa/app/source/dist/entrypoints/server.js \
+  /home/niwa/niwa/dist/entrypoints/server.js \
   --root /home/niwa/niwa
 ```
 
@@ -178,7 +172,7 @@ ChatGPTとの接続は試験対応です。利用できるモデルや上限は�
 
 ```bash
 sudo -u niwa node \
-  /home/niwa/niwa/app/source/dist/entrypoints/server.js \
+  /home/niwa/niwa/dist/entrypoints/server.js \
   --root /home/niwa/niwa
 ```
 

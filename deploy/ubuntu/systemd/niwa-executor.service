@@ -4,11 +4,11 @@ Description=Niwa rootless program and browser executor
 
 [Service]
 Type=exec
-WorkingDirectory=/home/niwa/niwa/app/source
+WorkingDirectory=/home/niwa/niwa
 EnvironmentFile=/home/niwa/niwa/config/executor.env
 Environment=HOME=/home/niwa/niwa/runtime/executor/home
 Environment=XDG_RUNTIME_DIR=%t
-ExecStart=/usr/bin/node /home/niwa/niwa/app/source/dist/entrypoints/executor.js --workspace /home/niwa/niwa/workspace --socket /home/niwa/niwa/runtime/sockets/program.sock --state /home/niwa/niwa/runtime/executor/state --home /home/niwa/niwa/runtime/executor/home --runtime %t --image ${NIWA_PROGRAM_IMAGE} $NIWA_EXECUTOR_OPTIONS
+ExecStart=/usr/bin/node /home/niwa/niwa/dist/entrypoints/executor.js --workspace /home/niwa/niwa/workspace --socket /home/niwa/niwa/runtime/sockets/program.sock --state /home/niwa/niwa/runtime/executor/state --home /home/niwa/niwa/runtime/executor/home --runtime %t --image ${NIWA_PROGRAM_IMAGE} $NIWA_EXECUTOR_OPTIONS
 Delegate=yes
 Restart=on-failure
 RestartSec=5s

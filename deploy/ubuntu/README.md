@@ -23,15 +23,13 @@ sh deploy/ubuntu/check-prerequisites.sh
 ## 管理者が確認して実行する準備
 
 `prepare-executor.sh` は未実行。空の製品ルート、未作成の専用主体、x86_64を前提とする。
-先にルートREADMEのNode.js導入を済ませ、git clone前の空ルートで実行する。既にapp/sourceを配置した環境にはこの初回準備スクリプトを使わない。
+**現在のREADMEは/home/niwa/niwaへの直接clone構成です。このスクリプトは旧空ルート専用のため、その構成では使用しないでください。** clone済みソースや既存データを維持する準備処理への修正・検証が残っています。空にするための削除や拒否判定の撤去は行いません。
 システムの `/usr/bin/node` が24.16.0以上25未満であることを変更前に検査する。Node本体のダウンロード・製品内配置は行わない。
 Podman・uidmap・fuse-overlayfs・ACLを導入し、niwa-execとniwa-ipcを作成する。
 必要なディレクトリごとに所有者・モードを設定し、niwa-execには `/home/niwa` の通過権限だけを追加する。
 サービス登録・起動、モデル認証、実行イメージ取得、Windowsドライブのマウント変更は行わない。
 
-```sh
-sudo sh deploy/ubuntu/prepare-executor.sh --apply
-```
+旧空ルート専用の呼出しは `sudo sh deploy/ubuntu/prepare-executor.sh --apply` です。直接cloneした環境では実行しません。
 
 既存インストールや同名実行主体がある場合は停止する。途中失敗後に無条件で再実行せず、作成済みの状態を確認する。
 WSLでの `sh -n` 構文検査とaptの変更なしシミュレーションは実施済み。実導入は未実施。
@@ -57,8 +55,6 @@ runtimeは専用ユーザーのOS一時実行領域、socketは製品ルート�
 実機検証を完了するまではこの設定を追加しない。
 
 追加機能の準備と検証範囲は [ブラウザー](BROWSER.md)、[承認付き通常フォーム](FORMS.md)、[パッケージ導入](PACKAGES.md)、[共有X接続](X.md) を参照。
-
-継続起動のsystemd定義は [SERVICES.md](SERVICES.md) を参照。テンプレートは準備済みですが、登録・起動と実機受入は未実施です。
 
 継続起動のsystemd定義は [SERVICES.md](SERVICES.md) を参照。テンプレートは準備済みですが、登録・起動と実機受入は未実施です。
 

@@ -12,3 +12,12 @@ PLAN.md
 docs/
 prototype/
 provenance/
+# Local product data when the checkout is also the product root.
+/config/
+/state/
+/secrets/
+/workspace/
+/runtime/
+/backups/
+/logs/
+/app/
