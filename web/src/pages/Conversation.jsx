@@ -2,22 +2,23 @@ import { useEffect, useRef, useState } from 'react';
 import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
 import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon } from '../icons.jsx';
 import { uid } from '../data.js';
+import { ConversationWork } from '../ConversationWork.jsx';
 
-export function Conversation({ thread, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
+export function Conversation({ thread, tasks, onWork, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
   const [showPresence, setShowPresence] = useState(false);
   const visibleMembers = thread.scope === 'private' ? members.filter(item => thread.members.includes(item.id)) : members;
   const presenceProps = { members: visibleMembers, paused, onPause, onAppearance, onMember, isPrivate: thread.scope === 'private' };
   return <>
     <main className="conversation" id="main-content" tabIndex={-1} aria-label={thread.title}>
       <div className="conversation-mobile-tools"><button className="text-button" onClick={onBack}><BackIcon size={20} />スレッド</button><IconButton label="メンバーの様子" onClick={() => setShowPresence(true)}><UsersIcon size={22} /></IconButton></div>
-      <ThreadBody onThreadAction={onThreadAction} key={thread.id} thread={thread} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
+      <ThreadBody onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} onWork={onWork} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
     </main>
     <aside className="presence-rail" aria-label="メンバーの様子"><Presence {...presenceProps} /></aside>
     {showPresence ? <Modal title="メンバーの様子" onClose={() => setShowPresence(false)} className="presence-modal"><Presence {...presenceProps} noHeading onMember={id => { setShowPresence(false); onMember(id); }} onAppearance={id => { setShowPresence(false); onAppearance(id); }} /></Modal> : null}
   </>;
 }
 
-function ThreadBody({ thread, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
+function ThreadBody({ thread, tasks, onWork, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState(null);
   const [attachments, setAttachments] = useState([]);
@@ -41,6 +42,7 @@ function ThreadBody({ thread, memberMap, paused, onSend, onMember, onArtifact, o
       <div className="reply-divider"><span>{Math.max(0, thread.messages.length - 1)}件の返信</span><span /></div>
       <div className="replies">{thread.messages.slice(1).map(message => <Message key={message.id} message={message} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />)}</div>
       {thread.messages.length === 1 ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
+      <ConversationWork tasks={tasks} members={memberMap} onOpen={onWork} />
     </div>
     <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。返信するには「保管から戻す」を選んでください。</p> : null}
       {paused ? <div className="pause-notice"><PauseIcon size={14} />Botの活動は一時停止中です。返信は残せます。</div> : null}
