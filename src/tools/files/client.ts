@@ -1,11 +1,9 @@
 import { request } from 'node:http';
 import { createHash } from 'node:crypto';
-import { lstatSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { JsonObject } from '../../contracts/model.ts';
-import { assertDirectoryPath } from '../../config/paths.ts';
+import { verifyExecutorEndpoint as verifyEndpoint } from '../../config/executor-endpoint.ts';
 import type { WorkspaceWrite } from './write-log.ts';
 
 export type WorkspaceRead = (operation: 'list' | 'read', path: string, signal?: AbortSignal) => Promise<JsonObject>;
@@ -97,16 +95,4 @@ export function configuredWorkspaceDownloader(socketPath: string, executionUid: 
 }
 export function configuredWorkspaceWriter(socketPath: string, executionUid: number): WorkspaceWriter {
   return workspaceWriter(socketPath, verifyEndpoint(socketPath, executionUid));
-}
-function verifyEndpoint(socketPath: string, executionUid: number): () => void {
-  if (process.platform !== 'linux' || !Number.isSafeInteger(executionUid) || executionUid < 1 || executionUid === process.getuid?.()) {
-    throw new Error('A separate Linux execution identity is required');
-  }
-  return () => {
-    assertDirectoryPath(dirname(socketPath));
-    const directory = lstatSync(dirname(socketPath)); const socket = lstatSync(socketPath);
-    if ((directory.mode & 0o007) || !socket.isSocket() || socket.isSymbolicLink() || socket.uid !== executionUid || (socket.mode & 0o007)) {
-      throw new Error('Workspace endpoint is not protected');
-    }
-  };
 }

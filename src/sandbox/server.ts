@@ -29,7 +29,7 @@ export function createProgramServer(log: Pick<ProgramLog, 'execute'>) {
           response.writeHead(400).end('{"error":"invalid_request"}'); return;
         }
         const result = await log.execute(input as ProgramOperation, controller.signal);
-        if (!response.destroyed) response.end(JSON.stringify(result));
+        if (!response.destroyed) response.end(JSON.stringify({ operation_id: (input as ProgramOperation).operation_id, result }));
       } catch { if (!response.destroyed) response.writeHead(400).end('{"error":"request_failed"}'); }
       finally { active.delete(controller); response.off('close', disconnect); }
     })();

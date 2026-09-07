@@ -7,7 +7,8 @@ import { initializeProduct, productPaths, type ProductPaths } from './paths.ts';
 import { WebAuth } from '../web/auth.ts';
 
 const schema = Type.Object({ version: Type.Literal(1), origin: Type.String({ maxLength: 2048 }),
-  port: Type.Integer({ minimum: 1, maximum: 65535 }), workspaceExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })) }, { additionalProperties: false });
+  port: Type.Integer({ minimum: 1, maximum: 65535 }), workspaceExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
+  programExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })) }, { additionalProperties: false });
 export type Installation = Static<typeof schema>;
 function validate(value: unknown): Installation {
   if (!Value.Check(schema, value)) throw new Error('Invalid config/niwa.json');

@@ -207,7 +207,7 @@ export class Tasks {
     try { output = await execute(pending.execution_id); }
     catch { output = { error: 'outcome_unknown' }; }
     if (output.error === 'outcome_unknown') {
-      if (this.active(actor, lease)) this.wait(actor, lease, 'waiting_user', '共有ファイルへの書込結果を確認できません。再開時に実行サービスの記録を照合します。');
+      if (this.active(actor, lease)) this.wait(actor, lease, 'waiting_user', '外部処理の実行結果を確認できません。再開時に実行サービスの記録を照合します。');
     } else {
       // Completion can arrive after stop/cancellation. Record history without reactivating the task.
       this.#db.prepare('UPDATE external_operations SET output=? WHERE task_id=? AND operation_id=? AND execution_id=? AND output IS NULL')
