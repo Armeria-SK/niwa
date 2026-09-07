@@ -22,17 +22,23 @@ sh deploy/ubuntu/check-prerequisites.sh
 
 ## 管理者が確認して実行する準備
 
-`prepare-executor.sh` は未実行。空の製品ルート、未作成の専用主体、x86_64を前提とする。
-**現在のREADMEは/home/niwa/niwaへの直接clone構成です。このスクリプトは旧空ルート専用のため、その構成では使用しないでください。** clone済みソースや既存データを維持する準備処理への修正・検証が残っています。空にするための削除や拒否判定の撤去は行いません。
+`prepare-executor.sh` は `/home/niwa/niwa` に直接cloneした、初回設定前の環境用です。専用主体が未作成のx86_64環境を前提とします。ソースやビルド結果を保持し、旧配置のappディレクトリは作りません。
+ルートと親ホームがniwa所有で、グループ・その他の書込権限がなく、パスがシンボリックリンクでないことを確認します。既存のruntime/workspace（空ディレクトリやリンクを含む）があれば停止します。稼働済み環境や途中失敗からの再実行は、データ・所有権を個別に確認してください。拒否を解除するために既存データを削除しないでください。
 システムの `/usr/bin/node` が24.16.0以上25未満であることを変更前に検査する。Node本体のダウンロード・製品内配置は行わない。
 Podman・uidmap・fuse-overlayfs・ACLを導入し、niwa-execとniwa-ipcを作成する。
 必要なディレクトリごとに所有者・モードを設定し、niwa-execには `/home/niwa` の通過権限だけを追加する。
 サービス登録・起動、モデル認証、実行イメージ取得、Windowsドライブのマウント変更は行わない。
 
-旧空ルート専用の呼出しは `sudo sh deploy/ubuntu/prepare-executor.sh --apply` です。直接cloneした環境では実行しません。
+まず変更を行わない検査を実行します。Nodeが未導入の場合も停止します。
+
+```sh
+sh deploy/ubuntu/prepare-executor.sh --check
+```
+
+検査後、管理者がOS変更を許可した場合に限り `sudo sh deploy/ubuntu/prepare-executor.sh --apply` で準備します。`--apply` でも変更前の検査を繰り返します。本体の `--init` より先に実行してください。
 
 既存インストールや同名実行主体がある場合は停止する。途中失敗後に無条件で再実行せず、作成済みの状態を確認する。
-WSLでの `sh -n` 構文検査とaptの変更なしシミュレーションは実施済み。実導入は未実施。
+2026-09-08、修正後の `sh -n` と `python3 tests/prepare-executor.test.py` の11件が成功しました。テストは人工checkoutとOS操作の代替コマンドで、既存ファイルの保持、変更なし検査、拒否条件、変更対象を確認します。実Ubuntuの `--check` は `/usr/bin/node` 不在で停止。実導入・実ACL・隔離の成立は未検証です。
 
 ## 配置前に用意するもの
 
