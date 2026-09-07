@@ -67,7 +67,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/backups$/, schema: object({}), run: async () => {
       if (!backups) throw new DomainError('conflict', 'Backup service unavailable');
       const item = await backups.create(); return { id: item.id, created_at: item.created_at }; } },
-    { method: 'GET', path: /^\/api\/artifacts$/, run: () => runtime.artifacts(admin) },
+    { method: 'GET', path: /^\/api\/artifacts$/, run: (_m, _b, url) => runtime.artifacts(admin, url.searchParams.get('query') ?? '') },
     { method: 'GET', path: /^\/api\/artifacts\/([0-9a-f-]{36})$/, run: m => runtime.artifact(admin, m[1]!) },
     { method: 'GET', path: /^\/api\/updates$/, run: () => runtime.updates(admin) },
     { method: 'POST', path: /^\/api\/updates\/read$/, schema: object({ ids: Type.Array(Type.Integer({ minimum: 1 }), { maxItems: 1000, uniqueItems: true }) }),

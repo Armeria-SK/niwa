@@ -236,6 +236,15 @@ test('artifacts retain exact text and room access; recap acknowledgements surviv
   assert.throws(() => f.runtime.artifact(f.childActor, id), /unavailable/);
   assert.throws(() => f.runtime.createArtifact(f.parentActor, room.id, '../bad', 'メモ', '説明', '本文'), /filename/);
   assert.equal(f.runtime.artifacts(f.admin).length, 1);
+  assert.deepEqual(f.runtime.artifacts(f.admin, ' SCRIPT ').map(item => item.id), [id]);
+  assert.equal(f.runtime.artifacts(f.childActor, 'script').length, 0);
+  assert.equal(f.runtime.artifacts(f.admin, 'script')[0]?.content, undefined);
+  assert.equal(f.runtime.artifacts(f.admin, '%').length, 0);
+  assert.equal(f.runtime.artifacts(f.admin, '_').length, 0);
+  assert.equal(f.runtime.artifacts(f.admin, '確認メモ').length, 1);
+  assert.equal(f.runtime.artifacts(f.admin, '保存した').length, 1);
+  assert.equal(f.runtime.artifacts(f.admin, '  ').length, 1);
+  assert.throws(() => f.runtime.artifacts(f.admin, 'x'.repeat(201)), /Invalid/);
   const updates = f.runtime.updates(f.admin);
   assert.equal(updates[0]?.artifact_id, id);
   assert.throws(() => f.runtime.readUpdates(f.parentActor, [Number(updates[0]?.id)]), /Administrator/);

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api } from '../api.js';
 import { Avatar, EmptyState, Modal, Segmented } from '../components.jsx';
 import { CheckCircleIcon, FileIcon, SearchIcon, DownloadIcon, ChatIcon } from '../icons.jsx';
 import { WorkspaceFiles } from '../WorkspaceFiles.jsx';
@@ -18,11 +19,26 @@ export function Recap({ updates, seen, onRead, members, onThread, onArtifact, on
 export function ArtifactLibrary({ artifacts, members, onOpen, onThread }) {
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [query, setQuery] = useState(''); const [kind, setKind] = useState('all'); const [owner, setOwner] = useState('all');
-  const visible = artifacts.filter(item => (kind === 'all' || item.kind === kind) && (owner === 'all' || item.member === owner) && `${item.name} ${item.description} ${members[item.member]?.name}`.toLowerCase().includes(query.trim().toLowerCase())).sort((a, b) => b.created_at - a.created_at);
+  const search = query.trim(); const revision = artifacts.map(item => item.id).join(',');
+  const [result, setResult] = useState(null);
+  useEffect(() => {
+    if (!search) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      api(`/artifacts?query=${encodeURIComponent(search)}`).then(items => {
+        if (active) setResult({ search, revision, ids: new Set(items.map(item => item.id)) });
+      }).catch(error => { if (active) setResult({ search, revision, error: error.message }); });
+    }, 200);
+    return () => { active = false; clearTimeout(timer); };
+  }, [search, revision]);
+  const current = result?.search === search && result?.revision === revision ? result : null;
+  const pending = !!search && !current;
+  const visible = artifacts.filter(item => (kind === 'all' || item.kind === kind) && (owner === 'all' || item.member === owner) && (!search || current?.ids?.has(item.id) || `${item.name} ${item.description} ${members[item.member]?.name}`.toLowerCase().includes(search.toLowerCase()))).sort((a, b) => b.created_at - a.created_at);
   return <section>{workspaceOpen ? <WorkspaceFiles onClose={() => setWorkspaceOpen(false)} /> : null}<div className="section-toolbar"><div><h2>成果物</h2><p className="muted">みんなが作ったものを、ここから。</p></div><div className="inline-actions"><span className="muted">{visible.length}件</span><button className="button secondary" onClick={() => setWorkspaceOpen(true)}>共有フォルダー</button></div></div>
-    <div className="artifact-filters"><div className="search-field"><SearchIcon size={18} /><input type="search" aria-label="成果物を検索" placeholder="名前や内容で検索" value={query} onChange={e => setQuery(e.target.value)} /></div><label className="field"><span>作成者</span><select aria-label="作成者" value={owner} onChange={e => setOwner(e.target.value)}><option value="all">全員</option>{Object.values(members).map(member => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label></div>
+    <div className="artifact-filters"><div className="search-field"><SearchIcon size={18} /><input type="search" aria-label="成果物を検索" placeholder="名前や内容で検索" maxLength={200} value={query} onChange={e => setQuery(e.target.value)} /></div><label className="field"><span>作成者</span><select aria-label="作成者" value={owner} onChange={e => setOwner(e.target.value)}><option value="all">全員</option>{Object.values(members).map(member => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label></div>
     <Segmented label="成果物の種類" value={kind} onChange={setKind} options={[{ value: 'all', label: 'すべて' }, ...[...new Set(artifacts.map(item => item.kind))].map(value => ({ value, label: value }))]} />
-    {visible.length ? <div className="artifact-grid">{visible.map(item => <article className="artifact-card" key={item.id}><div className="artifact-card-meta"><FileIcon size={25} /><span>{item.kind} · {item.scope === 'shared' ? '共有' : '個別'}</span></div><button className="artifact-title" onClick={() => onOpen(item.id)}>{item.name}</button><p>{item.description}</p><div className="artifact-owner"><Avatar member={members[item.member]} size={24} /><span>{members[item.member]?.name}</span><time>{item.updated}</time></div><div className="inline-actions"><button className="button secondary" onClick={() => onOpen(item.id)}>開く</button><button className="text-button" onClick={() => onThread(item.thread)}>関連する会話</button></div></article>)}</div> : <EmptyState icon={SearchIcon} title="一致する成果物がありません" action={<button className="text-button" onClick={() => { setQuery(''); setKind('all'); setOwner('all'); }}>条件をクリア</button>}>検索する言葉や作成者を変えてみてください。</EmptyState>}
+    {pending ? <p role="status">検索中…</p> : current?.error ? <p role="alert">本文検索に失敗しました。{current.error}</p> : null}
+    {visible.length ? <div className="artifact-grid">{visible.map(item => <article className="artifact-card" key={item.id}><div className="artifact-card-meta"><FileIcon size={25} /><span>{item.kind} · {item.scope === 'shared' ? '共有' : '個別'}</span></div><button className="artifact-title" onClick={() => onOpen(item.id)}>{item.name}</button><p>{item.description}</p><div className="artifact-owner"><Avatar member={members[item.member]} size={24} /><span>{members[item.member]?.name}</span><time>{item.updated}</time></div><div className="inline-actions"><button className="button secondary" onClick={() => onOpen(item.id)}>開く</button><button className="text-button" onClick={() => onThread(item.thread)}>関連する会話</button></div></article>)}</div> : pending || current?.error ? null : <EmptyState icon={SearchIcon} title="一致する成果物がありません" action={<button className="text-button" onClick={() => { setQuery(''); setKind('all'); setOwner('all'); }}>条件をクリア</button>}>検索する言葉や作成者を変えてみてください。</EmptyState>}
   </section>;
 }
 

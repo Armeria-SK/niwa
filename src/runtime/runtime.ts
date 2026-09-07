@@ -379,9 +379,12 @@ export class Runtime {
       return id;
     });
   }
-  artifacts(actor: Actor): Record<string, unknown>[] {
+  artifacts(actor: Actor, query = ''): Record<string, unknown>[] {
+    check(typeof query === 'string' && query.length <= 200, 'invalid', 'Invalid artifact query');
     const rooms = new Set(this.rooms(actor).map(room => room.id));
-    return this.#db.prepare('SELECT id,room_id,author_id,name,kind,description,created_at FROM artifacts ORDER BY created_at DESC').all().filter(row => rooms.has(row.room_id as string));
+    return this.#db.prepare(`SELECT id,room_id,author_id,name,kind,description,created_at FROM artifacts
+      WHERE instr(lower(name || ' ' || description || ' ' || content), lower(?)) > 0 ORDER BY created_at DESC`)
+      .all(query.trim()).filter(row => rooms.has(row.room_id as string));
   }
   artifact(actor: Actor, id: string): Record<string, unknown> {
     const row = this.#db.prepare('SELECT * FROM artifacts WHERE id=?').get(text(id, 100));
