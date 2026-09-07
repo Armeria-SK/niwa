@@ -24,16 +24,26 @@ function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, on
   const [replyTo, setReplyTo] = useState(null);
   const [attachments, setAttachments] = useState([]);
   const [sending, setSending] = useState(false);
+  const [recipient, setRecipient] = useState(null);
+  const [caret, setCaret] = useState(0);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const fileRef = useRef(null);
+  const mention = draft.slice(0, caret).match(/(?:^|\s)@([^@\n]*)$/);
+  const candidates = mention ? Object.values(memberMap).filter(member => (thread.scope === 'shared' || thread.members.includes(member.id)) && member.name.toLowerCase().includes(mention[1].toLowerCase())) : [];
+  function chooseRecipient(member) {
+    const start = caret - mention[1].length - 1; const replacement = `@${member.name} `;
+    setDraft(draft.slice(0, start) + replacement + draft.slice(caret)); setRecipient({ id: member.id, name: member.name }); setCaret(0);
+    requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(start + replacement.length, start + replacement.length); });
+  }
   const previousLength = useRef(thread.messages.length);
   useEffect(() => { if (thread.messages.length > previousLength.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' }); previousLength.current = thread.messages.length; }, [thread.messages.length]);
   async function submit(e) {
     e?.preventDefault(); if (thread.archived || sending || (!draft.trim() && !attachments.length)) return;
     setSending(true);
-    try { if (await onSend(draft.trim(), attachments.map(({ name, size }) => ({ name, size })), replyTo ? { author: replyTo.author, text: replyTo.text } : null)) {
-      setDraft(''); setAttachments([]); setReplyTo(null); inputRef.current?.focus();
+    try { if (await onSend(draft.trim(), attachments.map(({ name, size }) => ({ name, size })), replyTo ? { author: replyTo.author, text: replyTo.text } : null, recipient?.id)) {
+      setDraft(''); setAttachments([]); setReplyTo(null); setRecipient(null); setCaret(0); inputRef.current?.focus();
     } } finally { setSending(false); }
   }
   return <>
@@ -51,7 +61,16 @@ function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, on
       {paused ? <div className="pause-notice"><PauseIcon size={14} />Botの活動は一時停止中です。返信は残せます。</div> : null}
       {replyTo ? <div className="reply-preview"><ReplyIcon size={16} /><div><strong>{memberMap[replyTo.author]?.name || 'あなた'}に返信</strong><span>{replyTo.text}</span></div><IconButton label="返信先を解除" onClick={() => setReplyTo(null)}><CloseIcon size={16} /></IconButton></div> : null}
       {attachments.length ? <div className="attachment-previews">{attachments.map(file => <span key={file.id}><PaperclipIcon size={15} />{file.name}<IconButton label={`${file.name}を外す`} onClick={() => setAttachments(current => current.filter(item => item.id !== file.id))}><CloseIcon size={13} /></IconButton></span>)}</div> : null}
-      <form className="composer" onSubmit={submit}><textarea disabled={thread.archived} ref={inputRef} aria-label="このスレッドに返信" placeholder="このスレッドに返信…" value={draft} rows={1} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); } }} />
+      {recipient ? <div className="reply-preview"><span>依頼先：{recipient.name}</span><IconButton label="依頼先の指定を解除" onClick={() => setRecipient(null)}><CloseIcon size={14} /></IconButton></div> : null}
+      {candidates.length ? <div className="mention-picker" role="listbox" aria-label="依頼するBot">{candidates.map((member, index) => <button type="button" role="option" aria-selected={index === mentionIndex} key={member.id} onClick={() => chooseRecipient(member)}>{member.name}<span className="muted">{member.role}</span></button>)}</div> : null}
+      <form className="composer" onSubmit={submit}><textarea disabled={thread.archived} ref={inputRef} aria-label="このスレッドに返信" placeholder="このスレッドに返信…（@でBotを指定）" value={draft} rows={1} onChange={e => { setDraft(e.target.value); setCaret(e.target.selectionStart); setMentionIndex(0); if (recipient && !e.target.value.includes(`@${recipient.name}`)) setRecipient(null); }} onKeyDown={e => {
+        if (e.nativeEvent.isComposing) return;
+        if (candidates.length && ['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(e.key) && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault(); if (e.key === 'Escape') setCaret(0); else if (e.key === 'Enter') chooseRecipient(candidates[mentionIndex % candidates.length]);
+          else setMentionIndex((mentionIndex + (e.key === 'ArrowDown' ? 1 : candidates.length - 1)) % candidates.length); return;
+        }
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
+      }} />
         <input className="visually-hidden" ref={fileRef} type="file" multiple aria-label="添付ファイル" onChange={e => { const next = Array.from(e.target.files || []).map(file => ({ id: uid('file'), name: file.name, size: file.size })); setAttachments(current => [...current, ...next]); e.target.value = ''; }} />
         <IconButton label="ファイルを添付" disabled={thread.archived} className="attach-button" onClick={() => fileRef.current?.click()}><PlusIcon size={23} /></IconButton><button className="button primary send-button" disabled={thread.archived || sending || (!draft.trim() && !attachments.length)}>送信</button>
       </form>

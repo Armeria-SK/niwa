@@ -137,11 +137,11 @@ export function App() {
   function readUpdates(ids) { return mutate(() => api('/updates/read', 'POST', { ids }), '確認済みにしました'); }
   function openMember(id) { setSelectedMember(id); navigate('members'); }
   function togglePause() { return mutate(() => api('/settings', 'PATCH', { paused: !paused }), paused ? '活動を再開しました' : '活動を一時停止しました'); }
-  async function sendMessage(text, attachments = [], replyTo) {
+  async function sendMessage(text, attachments = [], replyTo, selectedRecipient) {
     if (attachments.length) { notify('添付ファイルの保存はまだ利用できません。'); return false; }
     const body = replyTo ? `「${replyTo.text}」への返信\n${text}` : text;
-    const recipient = thread.scope === 'private' ? thread.members[0] : members.find(item => item.authority === 'leader')?.id;
-    const key = `${thread.id}:${body}`;
+    const recipient = selectedRecipient || (thread.scope === 'private' ? thread.members[0] : members.find(item => item.authority === 'leader')?.id);
+    const key = `${thread.id}:${recipient}:${body}`;
     if (submission.current?.key !== key) submission.current = { key, id: crypto.randomUUID() };
     const ok = await mutate(() => api(`/rooms/${thread.id}/messages`, 'POST', { id: submission.current.id, body, ...(recipient ? { agent_id: recipient } : {}) }), '送信しました');
     if (ok) submission.current = null;
