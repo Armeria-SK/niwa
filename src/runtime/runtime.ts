@@ -436,6 +436,28 @@ export class Runtime {
     this.#room(actor, roomId);
     return this.#db.prepare('SELECT * FROM messages WHERE room_id = ? ORDER BY rowid').all(roomId) as unknown as Message[];
   }
+  messageSummary(actor: Actor, roomId: string): { message_count: number; last_sequence: number; first_at: string | null; last_at: string | null } {
+    this.#room(actor, roomId);
+    return this.#db.prepare(`SELECT count(*) AS message_count,coalesce(max(rowid),0) AS last_sequence,
+      (SELECT created_at FROM messages WHERE room_id=? ORDER BY rowid LIMIT 1) AS first_at,
+      (SELECT created_at FROM messages WHERE room_id=? ORDER BY rowid DESC LIMIT 1) AS last_at FROM messages WHERE room_id=?`)
+      .get(roomId, roomId, roomId) as { message_count: number; last_sequence: number; first_at: string | null; last_at: string | null };
+  }
+  messagePage(actor: Actor, roomId: string, before = Number.MAX_SAFE_INTEGER) {
+    this.#room(actor, roomId);
+    check(Number.isSafeInteger(before) && before > 0, 'invalid', 'Invalid message cursor');
+    const first = this.#db.prepare('SELECT *,rowid AS sequence FROM messages WHERE room_id=? ORDER BY rowid LIMIT 1').get(roomId) as (Message & { sequence: number }) | undefined;
+    const rows = this.#db.prepare('SELECT *,rowid AS sequence FROM messages WHERE room_id=? AND rowid>? AND rowid<? ORDER BY rowid DESC LIMIT 51')
+      .all(roomId, first?.sequence ?? 0, before) as unknown as (Message & { sequence: number })[];
+    return { first: first ?? null, items: rows.slice(0, 50).reverse(), next: rows.length > 50 ? rows[49]!.sequence : null };
+  }
+  searchRoomMessages(actor: Actor, query: string): string[] {
+    check(typeof query === 'string' && query.length <= 200, 'invalid', 'Invalid conversation query');
+    const allowed = new Set(this.rooms(actor).map(room => room.id));
+    if (!query) return [...allowed];
+    return this.#db.prepare('SELECT DISTINCT room_id FROM messages WHERE instr(lower(body),lower(?))>0').all(query)
+      .map(row => row.room_id as string).filter(id => allowed.has(id));
+  }
 
   /** A directed conversation continues at its recipient without a reporting turn from the sender. */
   respond(actor: Actor, lease: TaskLease, content: string, recipientIds?: string[]): void {

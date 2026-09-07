@@ -190,3 +190,25 @@ test('memory pages cover all records with stable cursors, literal search and pri
   const reopened = new Runtime(f.path);
   try { assert.deepEqual(reopened.memoryPage(reopened.administrator(), f.child.id), f.runtime.memoryPage(f.admin, f.child.id)); } finally { reopened.close(); }
 });
+
+test('conversation pages retain the first message and cover replies without leaking private rooms', t => {
+  const f = fixture(t); const room = f.runtime.createRoom(f.admin, '個別ページ', [f.child.id]); const shared = f.runtime.createRoom(f.admin, '共有ページ');
+  const root = f.runtime.post(f.admin, room.id, '最初の発言'); const replies: string[] = [];
+  for (let i = 0; i < 123; i++) { replies.push(f.runtime.post(f.admin, room.id, i === 0 ? '古い Marker %_ 検索対象' : '返信' + i).id); if (i % 3 === 0) f.runtime.post(f.admin, shared.id, '別の会話'); }
+  const summary = f.runtime.messageSummary(f.admin, room.id); assert.equal(summary.message_count, 124); assert.equal(summary.first_at, root.created_at);
+  const first = f.runtime.messagePage(f.childActor, room.id); assert.equal(first.first?.id, root.id); assert.equal(first.items.length, 50); assert.ok(first.next);
+  const second = f.runtime.messagePage(f.admin, room.id, first.next!); const last = f.runtime.messagePage(f.admin, room.id, second.next!);
+  assert.equal(last.items.length, 23); assert.equal(last.next, null); assert.deepEqual([...last.items, ...second.items, ...first.items].map(item => item.id), replies);
+  denied(() => f.runtime.messagePage(f.leaderActor, room.id)); denied(() => f.runtime.messageSummary(f.leaderActor, room.id));
+  assert.deepEqual(f.runtime.searchRoomMessages(f.leaderActor, 'Marker'), []);
+  assert.deepEqual(f.runtime.searchRoomMessages(f.childActor, 'marker'), [room.id]); assert.deepEqual(f.runtime.searchRoomMessages(f.admin, '%_'), [room.id]);
+  assert.deepEqual(new Set(f.runtime.searchRoomMessages(f.admin, '')), new Set([room.id, shared.id]));
+  f.runtime.post(f.admin, room.id, 'ページ取得後に追加'); assert.ok(f.runtime.messageSummary(f.admin, room.id).last_sequence > summary.last_sequence);
+  assert.deepEqual(f.runtime.messagePage(f.admin, room.id, first.next!).items, second.items);
+  const empty = f.runtime.createRoom(f.admin, '空の会話'); assert.deepEqual(f.runtime.messagePage(f.admin, empty.id), { first: null, items: [], next: null });
+  assert.deepEqual({ ...f.runtime.messageSummary(f.admin, empty.id) }, { message_count: 0, last_sequence: 0, first_at: null, last_at: null });
+  for (const cursor of [0, -1, NaN, Infinity, 1.5]) assert.throws(() => f.runtime.messagePage(f.admin, room.id, cursor), /Invalid/);
+  assert.throws(() => f.runtime.searchRoomMessages(f.admin, 'x'.repeat(201)), /Invalid/);
+  const reopened = new Runtime(f.path);
+  try { assert.deepEqual(reopened.messagePage(reopened.administrator(), room.id), f.runtime.messagePage(f.admin, room.id)); } finally { reopened.close(); }
+});

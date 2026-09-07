@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
 import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon } from '../icons.jsx';
 import { uid } from '../data.js';
 import { ConversationWork } from '../ConversationWork.jsx';
 import { MentionText } from '../MentionText.jsx';
+import { useConversationMessages } from '../useConversationMessages.js';
 import './Conversation.css';
 
 export function Conversation({ thread, tasks, onWork, onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
@@ -21,6 +22,7 @@ export function Conversation({ thread, tasks, onWork, onNewSession, members, mem
 }
 
 function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
+  const history = useConversationMessages(thread);
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState(null);
   const [attachments, setAttachments] = useState([]);
@@ -38,8 +40,17 @@ function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, on
     setDraft(draft.slice(0, start) + replacement + draft.slice(caret)); setRecipients(current => [...current.filter(item => item.id !== member.id), { id: member.id, name: member.name }]); setCaret(0);
     requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(start + replacement.length, start + replacement.length); });
   }
-  const previousLength = useRef(thread.messages.length);
-  useEffect(() => { if (thread.messages.length > previousLength.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' }); previousLength.current = thread.messages.length; }, [thread.messages.length]);
+  const previousLast = useRef(null); const prependPosition = useRef(null);
+  const lastId = history.items.at(-1)?.id || history.first?.id;
+  useEffect(() => { if (lastId && lastId !== previousLast.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: previousLast.current ? 'smooth' : 'instant' }); previousLast.current = lastId; }, [lastId]);
+  useLayoutEffect(() => {
+    if (prependPosition.current && listRef.current) listRef.current.scrollTop = prependPosition.current.top + listRef.current.scrollHeight - prependPosition.current.height;
+    prependPosition.current = null;
+  }, [history.olderVersion]);
+  async function loadEarlier() {
+    const position = { top: listRef.current.scrollTop, height: listRef.current.scrollHeight }; prependPosition.current = position;
+    if (!await history.loadMore() && prependPosition.current === position) prependPosition.current = null;
+  }
   async function submit(e) {
     e?.preventDefault(); if (thread.archived || sending || (!draft.trim() && !attachments.length)) return;
     setSending(true);
@@ -50,12 +61,15 @@ function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, on
   return <>
     <header className="message-scroll conversation-header" aria-label="会話のヘッダー">
       <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" onClick={onNewSession}><PlusIcon size={15} />新規セッション</button><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : 'アーカイブ'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
-      <Message message={thread.messages[0]} isRoot title={thread.title} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
+      <Message message={history.first} isRoot title={thread.title} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
     </header>
     <div className="message-scroll conversation-replies" ref={listRef}>
-      <div className="reply-divider"><span>{Math.max(0, thread.messages.length - 1)}件の返信</span><span /></div>
-      <div className="replies">{thread.messages.slice(1).map(message => <Message key={message.id} message={message} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />)}</div>
-      {thread.messages.length === 1 ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
+      <div className="reply-divider"><span>{Math.max(0, thread.message_count - 1)}件の返信</span><span /></div>
+      {history.loading ? <p role="status">発言を読み込み中…</p> : null}
+      {history.error ? <p role="alert">{history.error}<button className="text-button" onClick={history.reload}>再読み込み</button></p> : null}
+      {history.next !== null ? <button className="text-button" disabled={history.loading} onClick={loadEarlier}>以前の返信を50件読み込む</button> : null}
+      <div className="replies">{history.items.map(message => <Message key={message.id} message={message} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />)}</div>
+      {thread.message_count === 1 ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
       <ConversationWork tasks={tasks} members={memberMap} onOpen={onWork} />
     </div>
     <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。返信するには「保管から戻す」を選んでください。</p> : null}

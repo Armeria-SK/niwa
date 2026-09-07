@@ -91,12 +91,14 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       run: (m, b) => b.provider === 'ollama' ? models.select(m[1]!, b.model as string) : models.selectSubscription(m[1]!, b.model as string, b.reasoning as string) },
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/profile$/, schema: profileSchema, run: (m, b) => { runtime.updateProfile(admin, m[1]!, b); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/state$/, run: () => ({ agents: runtime.agents(admin).map(agent => ({ ...agent, profile: runtime.profile(admin, agent.id), memory_version: runtime.memoryVersion(admin, agent.id) })),
-      rooms: runtime.rooms(admin).map(room => ({ ...room, ...runtime.roomPreferences(admin, room.id), participants: runtime.participants(admin, room.id) })), settings: runtime.settings(admin), commonRules: runtime.commonRules(admin), tasks: runtime.tasks.list(admin).map(task => ({ ...task, replies: runtime.tasks.replies(admin, task.id) })) }) },
+      rooms: runtime.rooms(admin).map(room => ({ ...room, ...runtime.roomPreferences(admin, room.id), ...runtime.messageSummary(admin, room.id), participants: runtime.participants(admin, room.id) })), settings: runtime.settings(admin), commonRules: runtime.commonRules(admin), tasks: runtime.tasks.list(admin).map(task => ({ ...task, replies: runtime.tasks.replies(admin, task.id) })) }) },
     { method: 'PATCH', path: /^\/api\/rooms\/([0-9a-f-]{36})\/organization$/, schema: object({ pinned: Type.Optional(Type.Boolean()), archived: Type.Optional(Type.Boolean()) }),
       run: (m, b) => { runtime.organizeRoom(admin, m[1]!, b); return runtime.roomPreferences(admin, m[1]!); } },
     { method: 'POST', path: /^\/api\/rooms$/, schema: object({ title: Type.String({ minLength: 1, maxLength: 200 }), participants: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
       run: (_m, b) => runtime.createRoom(admin, b.title as string, b.participants as string[] | undefined) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, run: m => runtime.messages(admin, m[1]!) },
+    { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages\/page$/, run: (m, _b, url) => runtime.messagePage(admin, m[1]!, Number(url.searchParams.get('before') ?? Number.MAX_SAFE_INTEGER)) },
+    { method: 'GET', path: /^\/api\/rooms\/search$/, run: (_m, _b, url) => runtime.searchRoomMessages(admin, url.searchParams.get('q') ?? '') },
     { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, schema: object({ id, body: string, agent_id: Type.Optional(id), agent_ids: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
       run: (m, b) => {
         if (b.agent_id && b.agent_ids) throw new DomainError('invalid', 'Specify one recipient field');

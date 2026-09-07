@@ -9,6 +9,7 @@ import { Members } from './pages/Members.jsx';
 import { Activity } from './pages/Activity.jsx';
 import { ArtifactPreview } from './pages/Productivity.jsx';
 import { Settings } from './pages/Settings.jsx';
+import { useRoomSearch } from './useRoomSearch.js';
 
 const navItems = [
   { id: 'conversation', label: '会話', icon: ChatIcon },
@@ -48,6 +49,7 @@ export function App() {
   const [mobileDetail, setMobileDetail] = useState(false);
   const [scope, setScope] = useState('all');
   const [search, setSearch] = useState('');
+  const roomSearch = useRoomSearch(search, threads);
   const [paused, setPaused] = useState(false);
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState('');
@@ -73,7 +75,6 @@ export function App() {
     const version = ++refreshVersion.current;
     try {
       const [state, modelSettings, savedUpdates, savedArtifacts, savedSchedules] = await Promise.all([api('/state'), api('/model-settings'), api('/updates'), api('/artifacts'), api('/schedules')]);
-      const roomMessages = await Promise.all(state.rooms.map(room => api(`/rooms/${room.id}/messages`)));
       if (version !== refreshVersion.current) return;
       if (previousTasks.current) for (const task of state.tasks) {
         if (task.state !== 'completed' || previousTasks.current.get(task.id) === 'completed') continue;
@@ -86,10 +87,9 @@ export function App() {
       setMembers(state.agents.map(agent => ({ ...agent, authority: agent.role, role: agent.profile.role || (agent.role === 'leader' ? 'リーダー' : '仲間'),
         shape: 'pebble', color: '#61B8A5', persona: '', interests: [], ...agent.profile, effort: agent.reasoning,
         runtimeMotion: state.tasks.some(task => task.agent_id === agent.id && task.state === 'running') ? 'sway' : 'none', status: agent.status === 'dormant' ? 'sleeping' : 'active', activity: state.tasks.some(task => task.agent_id === agent.id && task.state === 'running') ? '仕事を進めています' : '待機しています' })));
-      setThreads(state.rooms.map((room, index) => ({ ...room, scope: room.visibility, members: room.participants, unread: 0,
-        lastActivity: Date.parse(roomMessages[index].at(-1)?.created_at || room.created_at) || 0,
-        time: roomMessages[index].length ? time(roomMessages[index].at(-1).created_at) : '', day: roomMessages[index].length ? new Date(roomMessages[index][0].created_at).toLocaleDateString('ja-JP') : '',
-        messages: roomMessages[index].map(message => ({ id: message.id, author: message.author_id === 'administrator' ? 'you' : message.author_id, text: message.body, time: time(message.created_at) })) })));
+      setThreads(state.rooms.map(room => ({ ...room, scope: room.visibility, members: room.participants, unread: 0,
+        lastActivity: Date.parse(room.last_at) || 0, time: room.last_at ? time(room.last_at) : '',
+        day: room.first_at ? new Date(room.first_at).toLocaleDateString('ja-JP') : '' })));
       setActivities(state.tasks.map(task => ({ ...task, member: task.agent_id, thread: task.room_id, title: task.prompt,
         instructions: task.replies.map((reply, index) => ({ id: index, time: time(reply.created_at), text: reply.body })), detail: task.result || task.wait_reason || ({ queued: '順番を待っています', running: '実行中です', waiting_child: '仲間の結果を待っています' })[task.state],
         reason: task.wait_reason, status: task.paused ? 'paused' : ({ completed: 'done', failed: 'failed', cancelled: 'canceled', waiting_child: 'waiting', waiting_user: 'waiting', waiting_provider: 'waiting' })[task.state] || 'running', time: time(task.updated_at), steps: [({ queued: '順番を待っています', running: '実行中', waiting_child: '仲間を待っています', waiting_user: '回答を待っています', waiting_provider: '接続を待っています', completed: '完了', failed: '失敗', cancelled: '取り消し' })[task.state]] })));
@@ -173,7 +173,7 @@ export function App() {
     if (next.ollamaUrl !== settings.ollamaUrl) await api('/model-settings', 'PATCH', { ollamaUrl: next.ollamaUrl || null });
     setSettings(current => ({ ...current, theme: next.theme }));
   }); }
-  const visibleThreads = threads.filter(item => (scope === 'archived' ? item.archived : !item.archived) && (scope === 'all' || scope === 'archived' || item.scope === scope) && `${item.title} ${item.messages.map(message => message.text).join(' ')} ${item.members.map(id => memberMap[id]?.name).join(' ')}`.toLowerCase().includes(search.toLowerCase())).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivity - a.lastActivity);
+  const visibleThreads = threads.filter(item => (scope === 'archived' ? item.archived : !item.archived) && (scope === 'all' || scope === 'archived' || item.scope === scope) && (roomSearch.ids?.has(item.id) || `${item.title} ${item.members.map(id => memberMap[id]?.name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivity - a.lastActivity);
   if (!authenticated) return <Login loading={authenticated === null} onLogin={() => setAuthenticated(true)} />;
   if (!ready) return <main className="login-page">{loadError ? <div><p role="alert">{loadError}</p><button className="button secondary" onClick={() => { setLoadError(''); void refresh(); }}>再試行</button></div> : <p role="status">庭を読み込んでいます…</p>}</main>;
 
@@ -184,12 +184,12 @@ export function App() {
       <nav className="main-nav" aria-label="メインナビゲーション">{navItems.filter(item => item.id !== 'settings').map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={`nav-link ${page === id ? 'active' : ''}`} aria-current={page === id ? 'page' : undefined} onClick={() => { setPage(id); if (id === 'conversation') setMobileDetail(false); }}><Icon size={25} /><span>{label}</span>{id === 'activity' && pendingCount ? <span className="nav-notice" title={`${pendingCount}件の承認待ち`} /> : null}</a>)}</nav>
       <div className="thread-navigation">
         <div className="sidebar-section-heading"><h2>スレッド</h2><IconButton label="新しいスレッド" onClick={() => setModal({ type: 'new-thread' })}><PlusIcon size={22} /></IconButton></div>
-        <div className="search-field"><SearchIcon size={20} /><input type="search" aria-label="スレッドを検索" placeholder="スレッドを検索" value={search} onChange={e => setSearch(e.target.value)} />{search ? <IconButton label="検索をクリア" onClick={() => setSearch('')}><CloseIcon size={16} /></IconButton> : null}</div>
+        <div className="search-field"><SearchIcon size={20} /><input type="search" aria-label="スレッドを検索" placeholder="スレッドを検索" value={search} maxLength={200} onChange={e => setSearch(e.target.value)} />{search ? <IconButton label="検索をクリア" onClick={() => setSearch('')}><CloseIcon size={16} /></IconButton> : null}</div>
         <Segmented label="スレッドの公開範囲" options={[{ value: 'all', label: 'すべて' }, { value: 'shared', label: '共有' }, { value: 'private', label: '個別' }, { value: 'archived', label: '保管' }]} value={scope} onChange={setScope} />
-        <div className="thread-list">{visibleThreads.length ? visibleThreads.map(item => <button type="button" key={item.id} className={`thread-item ${selectedThread === item.id && page === 'conversation' ? 'selected' : ''}`} aria-current={selectedThread === item.id && page === 'conversation' ? 'true' : undefined} onClick={() => openThread(item.id)}>
+        {roomSearch.loading ? <p role="status">検索中…</p> : roomSearch.error ? <p role="alert">会話の検索に失敗しました。{roomSearch.error}</p> : null}<div className="thread-list">{visibleThreads.length ? visibleThreads.map(item => <button type="button" key={item.id} className={`thread-item ${selectedThread === item.id && page === 'conversation' ? 'selected' : ''}`} aria-current={selectedThread === item.id && page === 'conversation' ? 'true' : undefined} onClick={() => openThread(item.id)}>
           <span className="thread-item-top"><strong>{item.pinned ? <PinIcon size={13} aria-label="ピン留め" /> : null}{item.title}{item.scope === 'private' ? <LockIcon size={15} /> : null}</strong><time>{item.time}</time></span>
-          <span className="thread-item-bottom"><span>{item.scope === 'private' ? '個別' : '共有'} · {item.members.slice(0, 3).map(id => memberMap[id]?.name).join(' / ')}</span>{item.unread > 0 ? <span className="unread-count" aria-label={`${item.unread}件の未読`}>{item.unread}</span> : <span className="reply-count">{Math.max(0, item.messages.length - 1)}</span>}</span>
-        </button>) : <EmptyState icon={SearchIcon} title="スレッドが見つかりません" action={<button className="text-button" onClick={() => { setSearch(''); setScope('all'); }}>条件をクリア</button>}>言葉や公開範囲を変えてみてください。</EmptyState>}</div>
+          <span className="thread-item-bottom"><span>{item.scope === 'private' ? '個別' : '共有'} · {item.members.slice(0, 3).map(id => memberMap[id]?.name).join(' / ')}</span>{item.unread > 0 ? <span className="unread-count" aria-label={`${item.unread}件の未読`}>{item.unread}</span> : <span className="reply-count">{Math.max(0, item.message_count - 1)}</span>}</span>
+        </button>) : roomSearch.loading || roomSearch.error ? null : <EmptyState icon={SearchIcon} title="スレッドが見つかりません" action={<button className="text-button" onClick={() => { setSearch(''); setScope('all'); }}>条件をクリア</button>}>言葉や公開範囲を変えてみてください。</EmptyState>}</div>
       </div>
       <div className="sidebar-bottom"><a href="#settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}><SettingsIcon size={23} /><span>設定</span></a><button className="preview-label" onClick={async () => { await api('/logout', 'POST', {}); setAuthenticated(false); setReady(false); }}><span className="preview-dot" />ログアウト<InfoIcon size={13} /></button></div>
     </aside>
