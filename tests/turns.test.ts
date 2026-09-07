@@ -150,6 +150,28 @@ test('common rules reject stale edits, persist, and discard an old rule response
   finally { reopened.close(); }
 });
 
+test('an administrator profile edit discards saved instructions across restart before a waiting task resumes', async t => {
+  const f = fixture(t); const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '変更後の人格で続ける');
+  const lease = f.runtime.tasks.claim(f.admin)!;
+  const revision = f.runtime.context(f.actor, f.room.id).revision;
+  f.runtime.tasks.saveStep(f.actor, lease, revision, tool('agents_create', { name: '変更前の指示から生成' }));
+  f.runtime.tasks.wait(f.actor, lease, 'waiting_user', '続行待ち');
+  f.runtime.updateProfile(f.admin, f.leader.id, { persona: 'Botを追加せず、簡潔に回答する' });
+  assert.equal(f.runtime.isContextCurrent(f.actor, revision), false);
+  const reopened = new Runtime(f.root);
+  try {
+    const admin = reopened.administrator(); const actor = reopened.agentSession(f.leader.id);
+    assert.deepEqual(reopened.tasks.steps(actor, task.id)[0]!.events, []);
+    reopened.tasks.resume(admin, task.id);
+    await new TurnRunner(reopened, async () => model(request => {
+      assert.match(request.system_instructions, /Botを追加せず、簡潔に回答する/);
+      return complete('変更後の人格で完了');
+    })).run(reopened.tasks.claim(admin)!);
+    assert.equal(reopened.agents(admin).length, 1);
+    assert.equal(reopened.tasks.get(admin, task.id).result, '変更後の人格で完了');
+  } finally { reopened.close(); }
+});
+
 test('saved tool calls from a previous rule revision are not executed after resuming', async t => {
   const f = fixture(t); const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '新しいルールで続行');
   const lease = f.runtime.tasks.claim(f.admin)!;
