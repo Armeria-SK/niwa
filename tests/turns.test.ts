@@ -83,6 +83,30 @@ test('interruption during compaction rebuilds from stored steps after restart wi
   } finally { reopened.close(); }
 });
 
+test('model saves a sourced procedure and applies it through the common tool path', async t => {
+  const f = fixture(t); let calls = 0;
+  const source = f.runtime.post(f.admin, f.room.id, '確認した資料');
+  const previous = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '成功した前回の仕事');
+  f.runtime.tasks.finish(f.actor, f.runtime.tasks.claim(f.admin)!, '検証済み');
+  const runner = new TurnRunner(f.runtime, async () => model(request => {
+    const state = JSON.parse(request.messages.at(-1)!.content!).work_state;
+    if (++calls === 1) return tool('procedure_save', { id: null, expected_revision: 0, procedure: {
+      title: '資料の更新確認', conditions: '同じ資料を更新するとき', steps: ['資料を読む', '差分を確認する'], source_task_id: previous.id,
+      sources: [{ kind: 'message', source_id: source.id, revision: f.runtime.readHistory(f.actor, f.room.id, 'message', source.id).revision }],
+    } });
+    if (calls === 2) {
+      const saved = JSON.parse(request.messages.findLast(message => message.role === 'tool')!.content!);
+      return tool('procedure_apply', { id: saved.id, revision: saved.revision, plan_revision: state.remaining_plan.revision, applicability: '同じ資料の更新を確認するため' });
+    }
+    assert.deepEqual(state.remaining_plan.remaining, ['資料を読む', '差分を確認する']);
+    assert.equal(state.applied_procedures.length, 1); assert.equal(state.external_operations.length, 0);
+    return complete('採用した手順を確認');
+  }));
+  const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '前回の手順を再利用');
+  await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'completed'); assert.equal(calls, 3);
+});
+
 test('model can read a source and save a searchable auxiliary summary with its exact revision', async t => {
   const f = fixture(t); let calls = 0;
   const source = f.runtime.post(f.admin, f.room.id, '人工の確認済み資料');

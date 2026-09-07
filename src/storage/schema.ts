@@ -106,4 +106,17 @@ CREATE TRIGGER summary_delete AFTER DELETE ON task_summaries BEGIN
 CREATE TRIGGER invalidate_task_summaries AFTER UPDATE OF revision ON memory_state BEGIN
   DELETE FROM task_summaries;
 END;
+`, `
+CREATE TABLE procedures (id TEXT PRIMARY KEY,room_id TEXT NOT NULL,revision INTEGER NOT NULL,enabled INTEGER NOT NULL CHECK(enabled IN (0,1))) STRICT;
+CREATE TABLE procedure_versions (
+  procedure_id TEXT NOT NULL REFERENCES procedures(id) ON DELETE CASCADE,revision INTEGER NOT NULL,body TEXT NOT NULL,created_at INTEGER NOT NULL,
+  PRIMARY KEY(procedure_id,revision)
+) STRICT;
+CREATE TABLE procedure_uses (
+  task_id TEXT NOT NULL,operation_id TEXT NOT NULL,room_id TEXT NOT NULL,
+  procedure_id TEXT NOT NULL REFERENCES procedures(id) ON DELETE CASCADE,revision INTEGER NOT NULL,applicability TEXT NOT NULL,created_at INTEGER NOT NULL,
+  PRIMARY KEY(task_id,operation_id)
+) STRICT;
+CREATE TABLE procedure_receipts (task_id TEXT NOT NULL,operation_id TEXT NOT NULL,input_hash TEXT NOT NULL,output TEXT NOT NULL,PRIMARY KEY(task_id,operation_id)) STRICT;
+CREATE TRIGGER invalidate_procedures AFTER UPDATE OF revision ON memory_state BEGIN DELETE FROM procedures; END;
 `];

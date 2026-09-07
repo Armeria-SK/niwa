@@ -5,6 +5,7 @@ import type { Runtime, Actor } from './runtime.ts';
 import type { TaskLease } from '../domain/task.ts';
 import { DomainError } from '../domain/types.ts';
 import { summarySchema, type WorkSummary } from '../domain/summary.ts';
+import { procedureDefinitions } from './procedures.ts';
 import { readPublicPage } from '../tools/web/public-page.ts';
 import type { WebSearch } from '../tools/web/search.ts';
 import type { WorkspaceRead, WorkspaceWriter } from '../tools/files/client.ts';
@@ -15,6 +16,7 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  ...procedureDefinitions,
   task_summary_save: { description: '現在の仕事の結論・理由・未解決事項・次の手順を出典付きの補助要約として保存する。sourcesにはhistory_readで確認した出所IDとrevisionを指定する。承認や実行記録を置き換えない。', schema: object(summarySchema.properties) },
   task_plan_update: { description: '現在の仕事で残っている手順を保存する。expected_revisionはwork_state.remaining_plan.revisionを使う。長い仕事では着手前と進捗後に更新する。メモは承認や実行済み記録にはならない。', schema: object({ expected_revision: Type.Integer({ minimum: 0 }), remaining: Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), { maxItems: 30 }) }) },
   task_history_read: { description: '現在の仕事の保存済みモデル応答とツール結果を読み直す。stepは0からsaved_model_steps-1。無効化済み応答は取得不可。最初はoffset=0・revision=null、続きは返された版と位置を指定する。結果nullは未保存であり成功を意味しない。', schema: object({ step: Type.Integer({ minimum: 0 }), offset: Type.Integer({ minimum: 0 }), revision: Type.Union([Type.Null(), Type.String({ pattern: '^[a-f0-9]{64}$' })]) }) },
@@ -46,6 +48,10 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
   const definition = definitions[call.name as keyof typeof definitions];
   if (!definition || !Value.Check(definition.schema, call.arguments)) return { error: 'Unknown tool or invalid arguments' };
   const args = call.arguments as Record<string, string>;
+  if (call.name.startsWith('procedure_')) {
+    try { return runtime.procedureTool(actor, lease, operationId, call.name, call.arguments); }
+    catch (error) { if (error instanceof DomainError) return { error: error.code, message: error.message }; throw error; }
+  }
   if (call.name === 'task_history_read') {
     try { return runtime.tasks.readStep(actor, lease, call.arguments.step as number, call.arguments.offset as number, call.arguments.revision as string | null); }
     catch (error) { if (error instanceof DomainError) return { error: error.code, message: error.message }; throw error; }

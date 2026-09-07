@@ -105,6 +105,7 @@ export class Tasks {
     return {
       task: publicTask(task), runtime_paused: this.#paused(),
       remaining_plan: { revision: plan ? Number(plan.revision) : 0, remaining: plan ? JSON.parse(String(plan.remaining)) as string[] : [] },
+      applied_procedures: memory.prepare('SELECT procedure_id,revision,applicability FROM procedure_uses WHERE task_id=? ORDER BY created_at,operation_id').all(task.id),
       administrator_replies: this.#db.prepare('SELECT sequence,body,created_at FROM task_replies WHERE task_id=? ORDER BY sequence').all(task.id),
       child_results: this.#db.prepare('SELECT id AS task_id,agent_id,prompt,state,result,wait_reason FROM tasks WHERE parent_id=? AND room_id=? ORDER BY created_at,rowid').all(task.id, task.room_id),
       updates: this.#db.prepare('SELECT id,kind,title,detail,artifact_id FROM updates WHERE task_id=? AND room_id=? ORDER BY id').all(task.id, task.room_id),

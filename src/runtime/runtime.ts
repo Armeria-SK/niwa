@@ -24,6 +24,8 @@ import { profileSchema } from '../domain/profile.ts';
 import { Value } from '@sinclair/typebox/value';
 import type { Task, TaskLease } from '../domain/task.ts';
 import { summarySchema, type WorkSummary } from '../domain/summary.ts';
+import { executeProcedure } from './procedures.ts';
+import type { JsonObject } from '../contracts/model.ts';
 
 declare const identity: unique symbol;
 /** Opaque in-process capability; never construct this from HTTP or tool arguments. */
@@ -596,6 +598,18 @@ export class Runtime {
         .run(task.id, task.room_id, task.prompt, body, revision, operationId, hash, Date.now());
       return { id: task.id, revision };
     });
+  }
+  procedureTool(actor: Actor, lease: TaskLease, operationId: string, name: string, args: JsonObject): JsonObject {
+    const principal = this.#bot(actor); this.#running(actor);
+    check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
+    const task = this.tasks.get(actor, lease.task.id); text(operationId, 180);
+    return executeProcedure({
+      db: this.#memory(actor, principal.id), task,
+      rooms: this.rooms(actor).filter(room => room.visibility === 'shared' || room.id === task.room_id).map(room => room.id),
+      readSource: (kind, id, revision) => this.readHistory(actor, task.room_id, kind, id, 0, revision),
+      taskInfo: id => this.tasks.get(actor, id),
+      updatePlan: (revision, remaining) => this.tasks.updatePlan(actor, lease, `${operationId}:plan`, revision, remaining),
+    }, name, args, operationId);
   }
   /** Validate dependencies before returning derived text; summaries never become execution authority. */
   #summary(actor: Actor, roomId: string, id: string): { room_id: string; body: string; revision: number } | undefined {
