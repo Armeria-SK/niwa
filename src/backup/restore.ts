@@ -12,7 +12,7 @@ import { acquireProcessLock } from '../runtime/process-lock.ts';
 import type { BackupManifest } from './backups.ts';
 
 /** Prepare a new state directory. The caller must hold the source service lock until activation. */
-export async function prepareRestore(backup: string, target: string, deletions: ReturnType<Runtime['deletionRecords']>, deletedAgents: ReturnType<Runtime['deletedAgents']> = []): Promise<BackupManifest> {
+export async function prepareRestore(backup: string, target: string, deletions: ReturnType<Runtime['deletionRecords']>, deletedAgents: ReturnType<Runtime['deletedAgents']> = [], deletedContent: ReturnType<Runtime['deletedContent']> = []): Promise<BackupManifest> {
   assertDirectoryPath(backup); assertDirectoryPath(target);
   const manifestPath = join(backup, 'manifest.json'); const stat = await fs.lstat(manifestPath);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error('Invalid backup manifest');
@@ -49,6 +49,7 @@ export async function prepareRestore(backup: string, target: string, deletions: 
       if (expected.size !== names.size || [...expected].some(name => !names.has(name))) throw new Error('Incomplete backup database set');
       restored.applyDeletions(admin, [...restored.deletionRecords(admin), ...deletions]);
       restored.applyAgentDeletions(admin, deletedAgents);
+      restored.applyContentDeletions(admin, deletedContent);
       restored.updateSettings(admin, { paused: true });
     } finally { restored.close(); }
     return manifest;
@@ -70,7 +71,7 @@ export async function restoreInstallation(root: string, id: string, destination:
   try {
     await fs.mkdir(target.root, { mode: 0o700 }); created = true;
     initializeProduct(target.root); runtime = new Runtime(source.state);
-    const manifest = await prepareRestore(join(source.backups, id), join(target.runtime, 'restored-state'), runtime.deletionRecords(runtime.administrator()), runtime.deletedAgents(runtime.administrator()));
+    const manifest = await prepareRestore(join(source.backups, id), join(target.runtime, 'restored-state'), runtime.deletionRecords(runtime.administrator()), runtime.deletedAgents(runtime.administrator()), runtime.deletedContent(runtime.administrator()));
     initializeInstallation(target.root, manifest.installation);
     await fs.rmdir(target.state);
     await fs.rename(join(target.runtime, 'restored-state'), target.state);

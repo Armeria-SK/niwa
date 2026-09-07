@@ -366,8 +366,9 @@ export class Tasks {
   }
   resume(actor: Actor, id: string, answer?: string): void {
     this.#admin(actor);
+    check(!this.#db.prepare("SELECT 1 FROM approval_requests WHERE task_id=? AND status='pending'").get(id), 'conflict', 'Decide the pending approval first');
     transaction(this.#db, () => {
-      const task = this.#read(id);
+      const task = this.get(actor, id);
       check(!this.#db.prepare('SELECT 1 FROM deleted_agents WHERE id=?').get(task.agent_id), 'not_found', 'Agent not found');
       if (task.paused) {
         this.#db.prepare('UPDATE tasks SET paused=0,updated_at=? WHERE id=?').run(Date.now(), id);
@@ -388,7 +389,7 @@ export class Tasks {
   pause(actor: Actor, id: string): void {
     this.#admin(actor);
     transaction(this.#db, () => {
-      const task = this.#read(id);
+      const task = this.get(actor, id);
       check(!isTerminal(task.state), 'conflict', 'Task has finished');
       if (task.paused) return;
       if (task.state === 'running') this.#change(id, 'queued');
@@ -399,7 +400,7 @@ export class Tasks {
   instruct(actor: Actor, id: string, body: string): void {
     this.#admin(actor); text(body);
     transaction(this.#db, () => {
-      const task = this.#read(id);
+      const task = this.get(actor, id);
       check(!['completed', 'cancelled'].includes(task.state), 'conflict', 'Task has finished');
       // Drop unfinished model plans; completed tool receipts remain to prevent their replay.
       this.#access.memory(actor, task.agent_id).prepare("UPDATE task_steps SET discarded=1,events='[]' WHERE task_id=?").run(id);
@@ -416,7 +417,7 @@ export class Tasks {
   retry(actor: Actor, id: string): void {
     this.#admin(actor);
     transaction(this.#db, () => {
-      const task = this.#read(id);
+      const task = this.get(actor, id);
       check(!this.#db.prepare('SELECT 1 FROM deleted_agents WHERE id=?').get(task.agent_id), 'not_found', 'Agent not found');
       check(['failed', 'cancelled'].includes(task.state), 'conflict', 'Task cannot be retried');
       check(task.conversation_reply === 1 || !task.parent_id || this.#read(task.parent_id).state === 'waiting_child', 'conflict', 'Parent has already continued; submit a new request');
@@ -428,7 +429,7 @@ export class Tasks {
   complete(actor: Actor, id: string): void {
     this.#admin(actor);
     transaction(this.#db, () => {
-      const task = this.#read(id);
+      const task = this.get(actor, id);
       check(task.state === 'running' || task.state === 'queued', 'conflict', 'Task cannot be completed');
       this.#db.prepare('UPDATE tasks SET paused=0,lease_token=NULL WHERE id=?').run(id);
       this.#change(id, 'completed', '管理者が完了にしました');

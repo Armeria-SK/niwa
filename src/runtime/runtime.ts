@@ -42,6 +42,7 @@ import type { Task, TaskLease } from '../domain/task.ts';
 import { summarySchema, type WorkSummary } from '../domain/summary.ts';
 import { executeProcedure } from './procedures.ts';
 import type { JsonObject } from '../contracts/model.ts';
+import { contentManagementSchema } from '../storage/content-management-schema.ts';
 
 declare const identity: unique symbol;
 /** Opaque in-process capability; never construct this from HTTP or tool arguments. */
@@ -61,7 +62,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -71,8 +72,8 @@ export class Runtime {
       memory: (actor, id) => this.#memory(actor, id),
       participant: (agentId, roomId) => {
         const agent = this.#agent(agentId);
-        const room = this.#db.prepare('SELECT visibility FROM rooms WHERE id=?').get(roomId);
-        return agent.status === 'active' && (room?.visibility === 'shared'
+        const room = this.#db.prepare("SELECT visibility FROM rooms WHERE id=? AND id NOT IN (SELECT id FROM deleted_content WHERE kind='room')").get(roomId);
+        return !!room && agent.status === 'active' && (room.visibility === 'shared'
           || !!this.#db.prepare('SELECT 1 FROM participants WHERE room_id=? AND agent_id=?').get(roomId, agentId));
       },
     });
@@ -407,10 +408,12 @@ export class Runtime {
   }
   rooms(actor: Actor): Room[] {
     const principal = this.#principal(actor);
-    return (principal.kind === 'admin'
+    const records = (principal.kind === 'admin'
       ? this.#db.prepare('SELECT * FROM rooms ORDER BY rowid').all()
       : this.#db.prepare(`SELECT * FROM rooms WHERE visibility = 'shared' OR id IN
           (SELECT room_id FROM participants WHERE agent_id = ?) ORDER BY rowid`).all(principal.id)) as unknown as Room[];
+    const deleted = new Set(this.#db.prepare("SELECT id FROM deleted_content WHERE kind='room'").all().map(row => row.id));
+    return records.filter(room => !deleted.has(room.id));
   }
   participants(actor: Actor, roomId: string): string[] {
     const room = this.#room(actor, roomId);
@@ -461,6 +464,80 @@ export class Runtime {
     this.#admin(actor); check(Array.isArray(ids) && ids.length <= 1000 && ids.every(id => Number.isSafeInteger(id) && id > 0), 'invalid', 'Invalid update ids');
     transaction(this.#db, () => { for (const id of ids) this.#db.prepare('UPDATE updates SET seen=1 WHERE id=?').run(id); });
   }
+  businessTasks(actor: Actor): Record<string, unknown>[] {
+    this.#admin(actor); return this.#db.prepare('SELECT * FROM business_tasks').all();
+  }
+  approvals(actor: Actor): Record<string, unknown>[] {
+    this.#admin(actor);
+    return this.#db.prepare("SELECT a.* FROM approval_requests a JOIN tasks t ON t.id=a.task_id WHERE a.status='pending' AND t.state='waiting_user'").all();
+  }
+  requestApproval(actor: Actor, lease: TaskLease, title: string, detail: string): void {
+    check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active'); text(title, 200); text(detail, 2000);
+    transaction(this.#db, () => {
+      this.#db.prepare("INSERT INTO approval_requests VALUES (?,?,?,?,'pending') ON CONFLICT(task_id) DO UPDATE SET title=excluded.title,detail=excluded.detail,version=excluded.version,status='pending'").run(lease.task.id, title, detail, randomUUID());
+      this.tasks.wait(actor, lease, 'waiting_user', title);
+    });
+  }
+  decideApproval(actor: Actor, id: string, approved: boolean, version: string): void {
+    this.#admin(actor); check(typeof approved === 'boolean', 'invalid', 'Expected approval decision');
+    transaction(this.#db, () => {
+      const task = this.tasks.get(actor, id);
+      const request = this.#db.prepare("SELECT * FROM approval_requests WHERE task_id=? AND status='pending'").get(id);
+      check(request && request.version === version && task.state === 'waiting_user', 'conflict', 'Approval is no longer pending');
+      this.#db.prepare('UPDATE approval_requests SET status=? WHERE task_id=?').run(approved ? 'approved' : 'declined', id);
+      if (approved) this.#db.prepare('UPDATE tasks SET paused=0 WHERE id=?').run(id);
+      if (approved) this.tasks.resume(actor, id, `管理者が次の内容を承認しました：${request.title}\n${request.detail}`);
+      else this.tasks.cancel(actor, id);
+    });
+  }
+  registerBusinessTask(actor: Actor, lease: TaskLease, title: string, detail: string): void {
+    check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active'); text(title, 200); text(detail, 2000);
+    this.#db.prepare('INSERT INTO business_tasks VALUES (?,?,?) ON CONFLICT(task_id) DO UPDATE SET title=excluded.title,detail=excluded.detail').run(lease.task.id, title, detail);
+  }
+  deletedContent(actor: Actor): { kind: 'room' | 'artifact'; id: string; deleted_at: number }[] {
+    this.#admin(actor); return this.#db.prepare('SELECT * FROM deleted_content').all() as ReturnType<Runtime['deletedContent']>;
+  }
+  deleteContent(actor: Actor, kind: 'room' | 'artifact', id: string): void {
+    this.#admin(actor);
+    if (!this.#db.prepare('SELECT 1 FROM deleted_content WHERE kind=? AND id=?').get(kind, id)) {
+      if (kind === 'room') this.#room(actor, id); else this.artifact(actor, id);
+    }
+    this.applyContentDeletions(actor, [{ kind, id, deleted_at: Date.now() }]);
+  }
+  applyContentDeletions(actor: Actor, records: ReturnType<Runtime['deletedContent']>): void {
+    this.#admin(actor);
+    for (const record of records) {
+      check(['room', 'artifact'].includes(record.kind) && /^[0-9a-f-]{36}$/.test(record.id) && Number.isSafeInteger(record.deleted_at) && record.deleted_at >= 0, 'invalid', 'Invalid content deletion');
+      // Invalidate saved output before deleting its source, including work in other rooms.
+      for (const agent of this.agents(actor)) {
+        const memory = this.#memory(actor, agent.id);
+        transaction(memory, () => {
+          if (record.kind === 'room') for (const row of memory.prepare('SELECT id,revision FROM memories WHERE source_room_id=?').all(record.id)) {
+            memory.prepare('DELETE FROM memories WHERE id=?').run(row.id as string);
+            this.#audit(memory, row.id as string, 'deleted', 'administrator', Number(row.revision) + 1);
+          }
+          memory.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]';");
+        });
+      }
+      transaction(this.#db, () => {
+        if (record.kind === 'room') {
+          for (const task of this.tasks.list(actor)) if (task.room_id === record.id && !['completed', 'cancelled'].includes(task.state)) this.tasks.cancel(actor, task.id);
+          this.#db.prepare("UPDATE schedules SET deleted=1,enabled=0,prompt='',source_revision='',wait_reason=NULL WHERE room_id=?").run(record.id);
+          this.#db.prepare('DELETE FROM updates WHERE room_id=?').run(record.id);
+          this.#db.prepare('DELETE FROM artifacts WHERE room_id=?').run(record.id);
+          this.#db.prepare('DELETE FROM submissions WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)').run(record.id);
+          this.#db.prepare('DELETE FROM messages WHERE room_id=?').run(record.id);
+          this.#db.prepare("UPDATE rooms SET title='' WHERE id=?").run(record.id);
+          this.#db.prepare("UPDATE tasks SET prompt='',result=NULL,wait_reason=NULL WHERE room_id=?").run(record.id);
+          for (const table of ['task_replies', 'tool_receipts', 'business_tasks', 'approval_requests']) this.#db.prepare('DELETE FROM ' + table + ' WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
+        } else {
+          this.#db.prepare('DELETE FROM updates WHERE artifact_id=?').run(record.id);
+          this.#db.prepare('DELETE FROM artifacts WHERE id=?').run(record.id);
+        }
+        this.#db.prepare('INSERT OR IGNORE INTO deleted_content VALUES (?,?,?)').run(record.kind, record.id, record.deleted_at);
+      });
+    }
+  }
   organizeRoom(actor: Actor, roomId: string, patch: { pinned?: boolean; archived?: boolean }): void {
     this.#admin(actor); this.#room(actor, roomId);
     check(Object.entries(patch).every(([key, value]) => ['pinned', 'archived'].includes(key) && typeof value === 'boolean'), 'invalid', 'Invalid room preferences');
@@ -471,6 +548,7 @@ export class Runtime {
   }
   #room(actor: Actor, id: string): Room {
     const principal = this.#principal(actor);
+    check(!this.#db.prepare("SELECT 1 FROM deleted_content WHERE kind='room' AND id=?").get(id), 'not_found', 'Room deleted');
     const room = this.#db.prepare('SELECT * FROM rooms WHERE id = ?').get(text(id, 100)) as unknown as Room | undefined;
     check(room && (principal.kind === 'admin' || room.visibility === 'shared'
       || this.#db.prepare('SELECT 1 FROM participants WHERE room_id = ? AND agent_id = ?').get(id, principal.id)),

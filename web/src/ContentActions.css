@@ -1,0 +1,6 @@
+.thread-row { position: relative; }
+.thread-row .thread-item { width: 100%; }
+.thread-quick-actions { position: absolute; right: 5px; top: 5px; display: flex; gap: 2px; opacity: 0; pointer-events: none; background: var(--surface, #fafaf7); border-radius: 7px; }
+.thread-row:hover .thread-quick-actions, .thread-row:focus-within .thread-quick-actions { opacity: 1; pointer-events: auto; }
+.thread-quick-actions .icon-button { width: 28px; height: 28px; }
+@media (hover: none) { .thread-quick-actions { position: static; justify-content: flex-end; opacity: 1; pointer-events: auto; background: transparent; } }

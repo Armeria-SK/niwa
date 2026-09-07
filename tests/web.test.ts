@@ -10,6 +10,26 @@ import { Runtime } from '../src/runtime/runtime.ts';
 import { WebAuth } from '../src/web/auth.ts';
 import { createApiServer } from '../src/web/api.ts';
 
+test('content deletion and approval endpoints require login and reject stale approval details', async t => {
+  const f = await fixture(t); const actor = f.runtime.agentSession(f.leader.id); const room = f.runtime.createRoom(f.admin, '人工会話');
+  const artifact = f.runtime.createArtifact(actor, room.id, '人工.txt', '資料', '説明', '本文');
+  const task = f.runtime.tasks.create(f.admin, f.leader.id, room.id, '人工確認'); const lease = f.runtime.tasks.claim(f.admin)!;
+  f.runtime.requestApproval(actor, lease, '承認する案', '人工の条件');
+  const version = f.runtime.approvals(f.admin)[0]!.version;
+  assert.equal((await f.call(`/api/artifacts/${artifact}`, 'DELETE', {})).status, 401);
+  assert.equal((await f.call(`/api/rooms/${room.id}`, 'DELETE', {})).status, 401);
+  await f.login();
+  assert.equal((await f.call(`/api/approvals/${task.id}`, 'POST', { approved: true })).status, 400);
+  assert.equal((await f.call(`/api/approvals/${task.id}`, 'POST', { approved: true, version: randomUUID() })).status, 409);
+  assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'waiting_user');
+  assert.equal((await f.call(`/api/approvals/${task.id}`, 'POST', { approved: true, version })).status, 200);
+  assert.equal((await f.call(`/api/approvals/${task.id}`, 'POST', { approved: true, version })).status, 409);
+  assert.equal((await f.call(`/api/artifacts/${artifact}`, 'DELETE', {})).status, 200);
+  assert.equal((await f.call(`/api/artifacts/${artifact}`)).status, 404);
+  assert.equal((await f.call(`/api/rooms/${room.id}`, 'DELETE', {})).status, 200);
+  assert.equal((await f.call(`/api/rooms/${room.id}/messages`)).status, 404);
+});
+
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const root = mkdtempSync(join(tmpdir(), 'niwa-web-'));
   const runtime = new Runtime(root); const admin = runtime.administrator(); const leader = runtime.bootstrap(admin);

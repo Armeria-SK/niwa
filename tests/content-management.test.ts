@@ -1,0 +1,68 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Runtime } from '../src/runtime/runtime.ts';
+import { initializeInstallation } from '../src/config/installation.ts';
+import { Backups } from '../src/backup/backups.ts';
+import { prepareRestore } from '../src/backup/restore.ts';
+
+test('content deletion removes sources, cancels work and survives restoring an older backup', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-content-delete-'));
+  const config = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
+  const paths = initializeInstallation(root, config); const runtime = new Runtime(paths.state);
+  t.after(() => { runtime.close(); rmSync(root, { recursive: true, force: true }); });
+  const admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const actor = runtime.agentSession(leader.id);
+  const room = runtime.createRoom(admin, '消す会話'); const keep = runtime.createRoom(admin, '残す会話');
+  const message = runtime.post(admin, room.id, '消す出所'); runtime.remember(actor, message.id, '消す会話由来の記憶');
+  const keptMessage = runtime.post(admin, keep.id, '残す出所'); runtime.remember(actor, keptMessage.id, '残す記憶');
+  const artifact = runtime.createArtifact(actor, keep.id, '消す資料.txt', '資料', '削除対象', '消す本文');
+  const related = runtime.createArtifact(actor, room.id, '会話内資料.txt', '資料', '会話内', '会話内本文');
+  const task = runtime.tasks.create(admin, leader.id, room.id, '止める仕事');
+  const before = await new Backups(runtime, paths, config).create();
+  assert.throws(() => runtime.deleteContent(actor, 'room', room.id), /Administrator/);
+  assert.throws(() => runtime.deleteContent(actor, 'artifact', artifact), /Administrator/);
+  runtime.deleteContent(admin, 'artifact', artifact);
+  assert.throws(() => runtime.artifact(admin, artifact), /not found/);
+  assert.equal(runtime.searchHistory(actor, keep.id, '消す本文').length, 0);
+  runtime.deleteContent(admin, 'room', room.id);
+  assert.equal(runtime.rooms(admin).some(item => item.id === room.id), false);
+  assert.equal(runtime.tasks.list(admin).some(item => item.id === task.id), false);
+  assert.throws(() => runtime.tasks.retry(admin, task.id), /Room deleted/);
+  assert.throws(() => runtime.tasks.resume(admin, task.id), /Room deleted/);
+  assert.throws(() => runtime.messages(admin, room.id), /Room deleted/);
+  assert.throws(() => runtime.artifact(admin, related), /not found/);
+  assert.deepEqual(runtime.context(actor, keep.id).memories.map(item => item.body), ['残す記憶']);
+  assert.equal(runtime.tasks.claim(admin), undefined);
+  runtime.deleteContent(admin, 'room', room.id);
+  const target = join(paths.runtime, 'restored-content');
+  await prepareRestore(join(paths.backups, before.id), target, runtime.deletionRecords(admin), runtime.deletedAgents(admin), runtime.deletedContent(admin));
+  const restored = new Runtime(target);
+  try { const restoredAdmin = restored.administrator(); assert.equal(restored.rooms(restoredAdmin).some(item => item.id === room.id), false); assert.equal(restored.artifacts(restoredAdmin).length, 0); }
+  finally { restored.close(); }
+});
+
+test('money work is explicit and approval decisions resume or cancel only pending work', t => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-business-')); const runtime = new Runtime(root);
+  t.after(() => { runtime.close(); rmSync(root, { recursive: true, force: true }); });
+  const admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const actor = runtime.agentSession(leader.id); const room = runtime.createRoom(admin, '仕事');
+  runtime.tasks.create(admin, leader.id, room.id, '雑談の返信'); const lease = runtime.tasks.claim(admin)!;
+  assert.equal(runtime.businessTasks(admin).length, 0);
+  runtime.registerBusinessTask(actor, lease, '販売価格を決める', '収益と費用を比較する');
+  assert.equal(runtime.businessTasks(admin).length, 1);
+  runtime.requestApproval(actor, lease, '人工案の確認', '実際の支払いは行わない');
+  assert.equal(runtime.approvals(admin).length, 1);
+  assert.throws(() => runtime.tasks.resume(admin, lease.task.id), /pending approval/);
+  assert.throws(() => runtime.decideApproval(actor, lease.task.id, true, String(runtime.approvals(admin)[0]?.version)), /Administrator/);
+  assert.throws(() => runtime.decideApproval(admin, lease.task.id, true, 'stale'), /no longer pending/);
+  runtime.decideApproval(admin, lease.task.id, true, String(runtime.approvals(admin)[0]?.version));
+  assert.equal(runtime.tasks.get(admin, lease.task.id).state, 'queued');
+  assert.equal(runtime.approvals(admin).length, 0);
+  assert.throws(() => runtime.decideApproval(admin, lease.task.id, true, String(runtime.approvals(admin)[0]?.version)), /no longer pending/);
+  const next = runtime.tasks.claim(admin)!;
+  runtime.requestApproval(actor, next, '次の人工案', '見送る確認');
+  runtime.decideApproval(admin, next.task.id, false, String(runtime.approvals(admin)[0]?.version));
+  assert.equal(runtime.tasks.get(admin, next.task.id).state, 'cancelled');
+  assert.equal(runtime.approvals(admin).length, 0);
+});
