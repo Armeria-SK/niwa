@@ -78,7 +78,7 @@ export class Tasks {
       const next = (this.#db.prepare(`SELECT t.id,t.agent_id FROM tasks t JOIN agents a ON a.id=t.agent_id
         WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS
           (SELECT 1 FROM tasks running WHERE running.agent_id=t.agent_id AND running.state='running')
-        ORDER BY t.created_at,t.rowid`).all() as { id: string; agent_id: string }[]).find(task => !excludedAgents.has(task.agent_id));
+        ORDER BY t.created_at,t.rowid`).all() as { id: string; agent_id: string }[]).find(task => !excludedAgents.has(task.agent_id) && this.#autonomyAllowed(task.id));
       if (!next) return undefined;
       const token = randomUUID();
       this.#db.prepare("UPDATE tasks SET lease_token=?,attempt=attempt+1 WHERE id=?").run(token, next.id);
@@ -91,10 +91,25 @@ export class Tasks {
     const task = this.#read(lease.task.id);
     check(principal.kind === 'agent' && task.agent_id === principal.id, 'forbidden', 'Task belongs to another agent');
     check(task.lease_token === lease.token && !task.paused && (!requireRunning || task.state === 'running'), 'conflict', 'Task lease is no longer active');
+    check(this.#autonomyAllowed(task.id), 'conflict', 'Autonomous activity is paused');
     return task;
   }
   active(actor: Actor, lease: TaskLease): boolean {
     try { this.#owned(actor, lease); return true; } catch { return false; }
+  }
+  #autonomyAllowed(taskId: string): boolean {
+    if (this.#db.prepare('SELECT autonomous FROM settings WHERE id=1').get()!.autonomous === 1) return true;
+    return !this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id) AS (
+      SELECT id,parent_id FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
+      SELECT 1 FROM ancestors a JOIN schedule_runs r ON r.task_id=a.id JOIN schedules s ON s.id=r.schedule_id WHERE s.autonomous=1 LIMIT 1`).get(taskId);
+  }
+  suspendAutonomous(actor: Actor): void {
+    this.#admin(actor);
+    for (const task of this.#db.prepare("SELECT id FROM tasks WHERE state='running'").all() as { id: string }[]) {
+      if (this.#autonomyAllowed(task.id)) continue;
+      this.#change(task.id, 'queued');
+      this.#db.prepare('UPDATE tasks SET lease_token=NULL WHERE id=?').run(task.id);
+    }
   }
   #autonomous(taskId: string): boolean {
     return !!this.#db.prepare('SELECT 1 FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id WHERE r.task_id=? AND s.autonomous=1').get(taskId);

@@ -18,6 +18,7 @@ import { providerLimitSchema } from '../storage/provider-limit-schema.ts';
 import { modelRouteSchema } from '../storage/model-route-schema.ts';
 import { providerRetrySchema } from '../storage/provider-retry-schema.ts';
 import { commonRulesSchema } from '../storage/common-rules-schema.ts';
+import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { ProviderLimits } from './provider-limits.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
@@ -56,7 +57,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema]);
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
@@ -291,25 +292,27 @@ export class Runtime {
   settings(actor: Actor): Settings {
     this.#principal(actor);
     const row = this.#db.prepare('SELECT * FROM settings WHERE id = 1').get() as {
-      paused: number; generated_limit: number; concurrency_limit: number | null; backup_days: number;
+      paused: number; generated_limit: number; concurrency_limit: number | null; backup_days: number; autonomous: number;
     };
     return { paused: row.paused === 1, generatedLimit: row.generated_limit,
-      concurrencyLimit: row.concurrency_limit, backupDays: row.backup_days };
+      concurrencyLimit: row.concurrency_limit, backupDays: row.backup_days, autonomous: row.autonomous === 1 };
   }
   updateSettings(actor: Actor, patch: Partial<Settings>): Settings {
     this.#admin(actor);
     check(patch && typeof patch === 'object' && !Array.isArray(patch), 'invalid', 'Expected settings');
-    const allowed = ['paused', 'generatedLimit', 'concurrencyLimit', 'backupDays'];
+    const allowed = ['paused', 'generatedLimit', 'concurrencyLimit', 'backupDays', 'autonomous'];
     check(Object.keys(patch).every(key => allowed.includes(key)), 'invalid', 'Unknown setting');
     return transaction(this.#db, () => {
       const next = { ...this.settings(actor), ...patch };
       check(typeof next.paused === 'boolean', 'invalid', 'Expected boolean');
+      check(typeof next.autonomous === 'boolean', 'invalid', 'Expected autonomy boolean');
       check(Number.isSafeInteger(next.generatedLimit) && next.generatedLimit >= 0, 'invalid', 'Invalid agent limit');
       check(next.concurrencyLimit === null || (Number.isSafeInteger(next.concurrencyLimit) && next.concurrencyLimit > 0),
         'invalid', 'Invalid concurrency limit');
       check(Number.isSafeInteger(next.backupDays) && next.backupDays > 0, 'invalid', 'Invalid backup days');
-      this.#db.prepare('UPDATE settings SET paused=?, generated_limit=?, concurrency_limit=?, backup_days=? WHERE id=1')
-        .run(Number(next.paused), next.generatedLimit, next.concurrencyLimit, next.backupDays);
+      this.#db.prepare('UPDATE settings SET paused=?, generated_limit=?, concurrency_limit=?, backup_days=?,autonomous=? WHERE id=1')
+        .run(Number(next.paused), next.generatedLimit, next.concurrencyLimit, next.backupDays, Number(next.autonomous));
+      if (!next.autonomous) this.tasks.suspendAutonomous(actor);
       if (next.paused) this.#interruptTasks();
       return next;
     });

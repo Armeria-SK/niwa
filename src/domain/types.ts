@@ -29,6 +29,7 @@ export interface Memory {
 }
 export interface Settings {
   paused: boolean;
+  autonomous: boolean;
   generatedLimit: number;
   concurrencyLimit: number | null;
   backupDays: number;
