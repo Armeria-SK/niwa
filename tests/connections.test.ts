@@ -6,6 +6,23 @@ import { MemoryCredentialStore } from '../src/auth/credential-store.ts';
 import { collectModelEvents } from '../src/providers/shared/adapter.ts';
 import { credential, profile, request, response } from './fixtures/model.ts';
 import { Subscription } from '../src/auth/subscription.ts';
+import { ConnectionGate } from '../src/providers/shared/serial.ts';
+import { OAuthAccount } from '../src/auth/account.ts';
+
+test('parallel subscription authentication failures share one credential refresh', async () => {
+  const store = new MemoryCredentialStore(); await store.write(credential); let refreshes = 0; let firstAttempts = 0;
+  let release!: () => void; const both = new Promise<void>(resolve => { release = resolve; });
+  const account = new OAuthAccount(store, async current => { refreshes++; await setImmediate(); return { ...current, access_token: 'artificial-rotated-access' }; });
+  const connection = new CodexConnection({ credential_store: account, refresh: account.refresh, experimental_opt_in: true,
+    fetch: async (_url, options) => {
+      if (new Headers(options?.headers).get('authorization') === `Bearer ${credential.access_token}`) {
+        if (++firstAttempts === 2) release(); await both; return new Response('', { status: 401 });
+      }
+      return response();
+    } });
+  const events = await Promise.all([1, 2].map(() => collectModelEvents(connection.create(profile).run(request, { timeout_ms: 2000 }))));
+  assert.equal(firstAttempts, 2); assert.equal(refreshes, 1); assert.ok(events.every(items => items.at(-1)?.type === 'completed'));
+});
 
 test('catalog capacity survives profile and serialized connection without treating maximum capacity as active', async () => {
   for (const contextWindow of [32768, undefined]) {
@@ -30,50 +47,55 @@ test('catalog capacity survives profile and serialized connection without treati
   }
 });
 
-test('separate task adapters share one subscription gate and cancelled waiters cannot bypass it', async () => {
+test('independent subscription tasks run concurrently through the gateway gate and cancellation stays local', async () => {
   const store = new MemoryCredentialStore(); await store.write(credential);
-  let calls = 0; let release!: () => void;
+  let calls = 0; let release!: () => void; let cancelStarted!: () => void;
+  const started = new Promise<void>(resolve => { cancelStarted = resolve; });
   const connection = new CodexConnection({ credential_store: store, experimental_opt_in: true,
-    fetch: async () => {
+    fetch: async (_url, options) => {
       calls++;
       if (calls === 1) await new Promise<void>(resolve => { release = resolve; });
-      return response();
+      else if (calls === 2) { cancelStarted(); await new Promise<void>((_resolve, reject) => options!.signal!.addEventListener('abort', () => reject(options!.signal!.reason), { once: true })); }
+      return response(JSON.parse(String(options?.body)).input[0].content[0].text);
     },
   });
-  const firstAdapter = connection.create(profile); const secondAdapter = connection.create(profile);
+  const gate = new ConnectionGate();
+  const firstAdapter = gate.wrap(connection.create(profile)); const secondAdapter = gate.wrap(connection.create(profile));
   assert.notEqual(firstAdapter, secondAdapter);
-  const first = collectModelEvents(firstAdapter.run(request, { timeout_ms: 2000 }));
+  const first = collectModelEvents(firstAdapter.run({ ...request, messages: [{ role: 'user', content: 'first-bot' }] }, { timeout_ms: 2000 }));
   await setImmediate();
   const abort = new AbortController();
   const cancelled = collectModelEvents(secondAdapter.run(request, { timeout_ms: 2000, signal: abort.signal }));
-  const third = collectModelEvents(connection.create(profile).run(request, { timeout_ms: 2000 }));
+  await started;
+  const third = collectModelEvents(gate.wrap(connection.create(profile)).run({ ...request, messages: [{ role: 'user', content: 'third-bot' }] }, { timeout_ms: 2000 }));
   abort.abort();
   assert.equal((await cancelled).at(-1)?.type, 'failed');
-  await setImmediate(); assert.equal(calls, 1);
+  const thirdEvents = await third; assert.equal(thirdEvents.at(-1)?.type, 'completed');
+  assert.equal(thirdEvents.filter(event => event.type === 'text_delta').map(event => event.text).join(''), 'third-bot');
+  assert.equal(calls, 3);
   release();
-  assert.equal((await first).at(-1)?.type, 'completed');
-  assert.equal((await third).at(-1)?.type, 'completed');
-  assert.equal(calls, 2);
+  const firstEvents = await first; assert.equal(firstEvents.at(-1)?.type, 'completed');
+  assert.equal(firstEvents.filter(event => event.type === 'text_delta').map(event => event.text).join(''), 'first-bot');
 });
 
-test('subscription queue timeout does not submit a request or wedge later work', async () => {
+test('one subscription request timing out does not block another task', async () => {
   const store = new MemoryCredentialStore(); await store.write(credential);
-  let calls = 0; let release!: () => void;
+  let calls = 0;
   const connection = new CodexConnection({ credential_store: store, experimental_opt_in: true,
-    fetch: async () => { calls++; if (calls === 1) await new Promise<void>(resolve => { release = resolve; }); return response(); },
+    fetch: async () => { calls++; if (calls === 1) return new Promise<Response>(() => {}); return response(); },
   });
-  const first = collectModelEvents(connection.create(profile).run(request, { timeout_ms: 2000 }));
+  const first = collectModelEvents(connection.create(profile).run(request, { timeout_ms: 50 }));
   await setImmediate();
   // Keep the test process alive while AbortSignal.timeout's unreferenced timer is pending.
   const keepAlive = setTimeout(() => {}, 2000);
   try {
-    const events = await collectModelEvents(connection.create(profile).run(request, { timeout_ms: 20 }));
-    assert.equal(events.at(-1)?.type, 'failed');
-    assert.equal(calls, 1);
-    release(); await first;
+    const events = await collectModelEvents(connection.create(profile).run(request, { timeout_ms: 2000 }));
+    assert.equal(events.at(-1)?.type, 'completed');
+    assert.equal(calls, 2);
+    assert.equal((await first).find(event => event.type === 'failed')?.error.code, 'TIMED_OUT');
     const next = await collectModelEvents(connection.create(profile).run(request, { timeout_ms: 2000 }));
     assert.equal(next.at(-1)?.type, 'completed');
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
   } finally { clearTimeout(keepAlive); }
 });
 
