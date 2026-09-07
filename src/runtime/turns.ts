@@ -9,6 +9,7 @@ import { turnTools, executeAsyncTurnTool, type ExternalTools } from './turn-tool
 import { ContextLimit, fitContext, type FittedContext } from './context/fit.ts';
 import { Value } from '@sinclair/typebox/value';
 import { memoryReviewSchema } from '../domain/memory-review.ts';
+import { summarySchema } from '../domain/summary.ts';
 
 /** Return a fresh adapter each time; calls after memory corrections must discard opaque continuation. */
 export type ResolveAdapter = (agent: Agent, taskId: string, signal?: AbortSignal) => Promise<ModelAdapter>;
@@ -47,6 +48,7 @@ export class TurnRunner {
       return;
     }
     let saved = runtime.tasks.steps(actor, lease.task.id);
+    let pendingCompletion: (typeof saved)[number] | undefined;
     let position = 0;
     let historyRevision: number | undefined;
     while (runtime.tasks.active(actor, lease) && !signal?.aborted) {
@@ -55,6 +57,7 @@ export class TurnRunner {
       const rules = runtime.commonRules(actor);
       if (historyRevision !== undefined && historyRevision !== context.revision) {
         history.length = 0;
+        pendingCompletion = undefined;
         position = 0;
         // Provider-owned opaque continuation may also contain the superseded memory.
         try { adapter = await this.#resolve(agent, lease.task.id, signal); }
@@ -66,7 +69,9 @@ export class TurnRunner {
         if (!runtime.isContextCurrent(actor, context.revision)) continue;
       }
       historyRevision = context.revision;
-      let step = saved[position++];
+      let step: (typeof saved)[number] | undefined;
+      if (pendingCompletion && !runtime.needsCompletionSummary(actor, lease)) { step = pendingCompletion; pendingCompletion = undefined; }
+      else step = saved[position++];
       if (step && (step.discarded || step.memory_revision !== context.revision || step.rules_revision !== rules.revision)) {
         runtime.tasks.discardStep(actor, lease, step.step);
         continue;
@@ -83,8 +88,11 @@ export class TurnRunner {
         }));
         const workState = runtime.tasks.workState(actor, lease);
         const reviewingMemory = base.length > 0 && !runtime.memoryReviewed(actor, lease);
+        const phaseTool = reviewingMemory ? 'memory_review' : pendingCompletion ? 'task_summary_save' : undefined;
+        const phaseSchema = phaseTool === 'memory_review' ? memoryReviewSchema : summarySchema;
         // Full external results remain in receipts and task_history_read, not duplicated in every request.
-        const inputState = { ...workState, external_operations: workState.external_operations.map(({ result: _result, ...operation }) => operation) };
+        const inputState = { ...workState, external_operations: workState.external_operations.map(({ result: _result, ...operation }) => operation),
+          ...(phaseTool === 'task_summary_save' ? { summary_sources: runtime.completionSummarySources(actor, lease), proposed_completion: pendingCompletion!.events } : {}) };
         if (workState.autonomous && !adapter.capabilities.supports_tool_calls) {
           runtime.tasks.wait(actor, lease, 'waiting_provider', '自発活動には休息を選べるツール対応モデルが必要です。'); return;
         }
@@ -98,7 +106,7 @@ export class TurnRunner {
           messages: [...base, { role: 'user', content: `現在の依頼: ${lease.task.prompt}` }, ...history,
             { role: 'user', content: JSON.stringify({ work_state: inputState }) }],
           tools: adapter.capabilities.supports_tool_calls ? turnTools(agent.role === 'leader', this.#external, runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared', workState.autonomous)
-            .filter(tool => !reviewingMemory || tool.name === 'memory_review') : [],
+            .filter(tool => !phaseTool || tool.name === phaseTool) : [],
           response_contract: { type: 'text' }, model_options: {},
           budget: { max_output_tokens: 4096, max_total_tokens: 64_000, max_requests: 1, max_tool_calls: 8 },
           ...(adapter.adapter_id === 'openai-subscription' && isReasoningEffort(agent.reasoning) ? { reasoning_effort: agent.reasoning } : {}),
@@ -106,6 +114,7 @@ export class TurnRunner {
         const requestForPhase = (): ModelRequest => {
           const request = makeRequest();
           if (reviewingMemory) request.system_instructions += '\n現在は返答・作業の前の記憶整理です。表示された会話から今後も役立つ好み・合意・経験・継続した関心を最大5件選び、実在するmessage_idをsource_message_idに指定します。推測、挨拶、重複、認証情報、一時的な進捗は保存しません。他Botの発言を自分の経験と混同せず、発言者と不確かさを保ちます。既存記憶と矛盾する場合は勝手に上書きせず省きます。memory_reviewだけを呼んでください。保存不要ならmemoriesは空配列です。ツールがない場合は同じ引数のJSON {"memories":[{"source_message_id":"表示されたID","body":"短い記憶"}]} だけを返してください。通常の会話への返答は次の呼び出しで行います。';
+          else if (phaseTool === 'task_summary_save') request.system_instructions += `\n現在は仕事を完了する前の引継ぎ整理です。保存済みの事実から結論・理由・未解決事項・次の手順を短くまとめ、task_summary_saveだけを呼んでください。proposed_completionはまだ送っていない返答候補であり、実行済みの証拠ではありません。sourcesにはsummary_sourcesで確認できるkind/source_id/revisionを使い、現在の仕事自体を出所にしません。要約は承認や実行記録を置き換えません。ツールがない場合はこの形式に合うJSONだけを返します: ${JSON.stringify(summarySchema)}`;
           return request;
         };
         let fitted: FittedContext;
@@ -142,19 +151,19 @@ export class TurnRunner {
           runtime.tasks.wait(actor, lease, 'waiting_provider', `モデル応答を完了できませんでした (${failure.error.code})。${retry ? '1分後に接続先を再確認します。' : ''}`, retry);
           return;
         }
-        if (reviewingMemory) {
+        if (phaseTool) {
           let review = events.filter(event => event.type === 'tool_call');
           if (!review.length && events.some(event => event.type === 'completed' && event.finish_reason === 'stop')) {
             try {
               const args: unknown = JSON.parse(events.filter(event => event.type === 'text_delta').map(event => event.text).join(''));
-              if (Value.Check(memoryReviewSchema, args)) {
-                events = [{ type: 'tool_call', name: 'memory_review', tool_call_id: 'memory-review', arguments: args }, { type: 'completed', finish_reason: 'tool_calls' }];
+              if (Value.Check(phaseSchema, args)) {
+                events = [{ type: 'tool_call', name: phaseTool, tool_call_id: phaseTool, arguments: args }, { type: 'completed', finish_reason: 'tool_calls' }];
                 review = events.filter(event => event.type === 'tool_call');
               }
             } catch { /* Invalid review output must never become a public reply or another tool operation. */ }
           }
-          if (review.length !== 1 || review[0]!.name !== 'memory_review' || !Value.Check(memoryReviewSchema, review[0]!.arguments)) {
-            runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデルが記憶整理の形式を返せませんでした。1分後に再確認します。', true); return;
+          if (review.length !== 1 || review[0]!.name !== phaseTool || !Value.Check(phaseSchema, review[0]!.arguments)) {
+            runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデルが記憶・引継ぎ整理の形式を返せませんでした。1分後に再確認します。', true); return;
           }
         }
         const index = runtime.tasks.saveStep(actor, lease, context.revision, events);
@@ -164,6 +173,9 @@ export class TurnRunner {
       const calls: ModelToolCall[] = step.events.filter((event): event is Extract<ModelEvent, { type: 'tool_call' }> => event.type === 'tool_call')
         .map(({ name, tool_call_id, arguments: args }) => ({ name, tool_call_id, arguments: args }));
       const content = step.events.filter(event => event.type === 'text_delta').map(event => event.text).join('');
+      const completing = calls.length === 1 && ['conversation_send', 'task_rest'].includes(calls[0]!.name) ||
+        !calls.length && step.events.some(event => event.type === 'completed' && event.finish_reason === 'stop');
+      if (completing && runtime.needsCompletionSummary(actor, lease)) { pendingCompletion = step; continue; }
       if (!calls.length) {
         const terminal = step.events.find(event => event.type === 'completed');
         if (!terminal || terminal.finish_reason !== 'stop') {

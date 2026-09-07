@@ -25,8 +25,13 @@ const tool = (name: string, args: Record<string, unknown>): ModelEvent[] => [
 function model(reply: (request: ModelRequest) => ModelEvent[] | Promise<ModelEvent[]>): ModelAdapter {
   return { adapter_id: 'artificial', capabilities: openAISubscriptionAdapterCapabilities,
     async *run(request) {
-      yield* request.tools.length === 1 && request.tools[0]?.name === 'memory_review'
-        ? tool('memory_review', { memories: [] }) : await reply(request);
+      if (request.tools.length === 1 && request.tools[0]?.name === 'memory_review') { yield* tool('memory_review', { memories: [] }); return; }
+      if (request.tools.length === 1 && request.tools[0]?.name === 'task_summary_save') {
+        const state = JSON.parse(request.messages.at(-1)!.content!).work_state;
+        yield* tool('task_summary_save', { conclusion: '人工の引継ぎ', reason: '保存済み資料を参照', unresolved: [], next_steps: [],
+          sources: state.summary_sources.slice(0, 1).map(({ kind, source_id, revision }: { kind: string; source_id: string; revision: string }) => ({ kind, source_id, revision })) }); return;
+      }
+      yield* await reply(request);
     } };
 }
 
@@ -282,8 +287,8 @@ test('long turns compact complete exchanges, recreate the adapter, and preserve 
   const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '二つの資料を確認');
   await runner.run(f.runtime.tasks.claim(f.admin)!);
   assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'completed');
-  assert.equal(requests, 3); assert.equal(reads, 2); assert.equal(resolutions, 2);
-  assert.equal(f.runtime.tasks.steps(f.actor, task.id).length, 4);
+  assert.equal(requests, 3); assert.equal(reads, 2); assert.equal(resolutions, 3);
+  assert.equal(f.runtime.tasks.steps(f.actor, task.id).length, 5);
 });
 
 test('interruption during compaction rebuilds from stored steps after restart without repeating completed reads', async t => {

@@ -938,6 +938,29 @@ export class Runtime {
       updatePlan: (revision, remaining) => this.tasks.updatePlan(actor, lease, `${operationId}:plan`, revision, remaining),
     }, name, args, operationId);
   }
+  completionSummarySources(actor: Actor, lease: TaskLease): JsonObject[] {
+    const state = this.tasks.workState(actor, lease);
+    const sources = [
+      ...this.messages(actor, lease.task.room_id).slice(-10).map(message => ({ kind: 'message' as const, id: message.id })),
+      ...state.artifacts.slice(-10).map(artifact => ({ kind: 'artifact' as const, id: String(artifact.id) })),
+      ...state.child_results.filter(child => child.state === 'completed' || child.state === 'failed').slice(-10)
+        .map(child => ({ kind: 'task' as const, id: String(child.task_id) })),
+    ];
+    // The current task is still changing. Citing its current state would immediately stale the summary.
+    return sources.map(source => {
+      const read = this.readHistory(actor, lease.task.room_id, source.kind, source.id);
+      const body = String(read.text);
+      return { ...read, text: body.slice(0, 1000), ...(body.length > 1000 ? { next_offset: 1000 } : {}) };
+    });
+  }
+  needsCompletionSummary(actor: Actor, lease: TaskLease): boolean {
+    const state = this.tasks.workState(actor, lease);
+    const workedTools = this.tasks.steps(actor, lease.task.id).some(step => !step.discarded && step.events.some(event => event.type === 'tool_call' &&
+      !['memory_review', 'memory_search', 'memory_remember', 'task_history_read', 'task_summary_save', 'conversation_send', 'task_rest'].includes(event.name)));
+    const worked = state.remaining_plan.revision > 0 || state.external_operations.length > 0 || state.artifacts.length > 0 || state.child_results.length > 0 ||
+      workedTools || !!this.#db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(lease.task.id);
+    return worked && !this.#summary(actor, lease.task.room_id, lease.task.id) && this.completionSummarySources(actor, lease).length > 0;
+  }
   /** Validate dependencies before returning derived text; summaries never become execution authority. */
   #summary(actor: Actor, roomId: string, id: string): { room_id: string; body: string; revision: number } | undefined {
     const principal = this.#bot(actor), db = this.#memory(actor, principal.id);
