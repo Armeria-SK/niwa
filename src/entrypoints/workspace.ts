@@ -6,6 +6,7 @@ import { Workspace } from '../tools/files/workspace.ts';
 import { createWorkspaceServer } from '../tools/files/server.ts';
 import { WorkspaceWriteLog } from '../tools/files/write-log.ts';
 import { acquireProcessLock } from '../runtime/process-lock.ts';
+import { recoverExecutorSocket } from '../runtime/executor-socket.ts';
 
 let server: ReturnType<typeof createWorkspaceServer> | undefined;
 let writes: WorkspaceWriteLog | undefined;
@@ -32,7 +33,8 @@ try {
   writes = new WorkspaceWriteLog(join(values.state, 'workspace-writes.db'), files);
   server = createWorkspaceServer(files, writes);
   server.once('close', closeState);
-  // Do not unlink an existing socket: a second process must fail instead of replacing a live broker.
+  // The lock excludes another owner; a live or replaced socket still must never be unlinked.
+  await recoverExecutorSocket(values.socket, process.getuid!());
   await new Promise<void>((resolve, reject) => { server!.once('error', reject); server!.listen(values.socket, resolve); });
   chmodSync(values.socket, 0o660);
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => {

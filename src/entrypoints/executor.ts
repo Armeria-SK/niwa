@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { assertDirectoryPath } from '../config/paths.ts';
 import { acquireProcessLock } from '../runtime/process-lock.ts';
+import { recoverExecutorSocket } from '../runtime/executor-socket.ts';
 import { configuredProgramRunner } from '../sandbox/program.ts';
 import { ProgramLog } from '../sandbox/program-log.ts';
 import { createProgramServer } from '../sandbox/server.ts';
@@ -62,12 +63,14 @@ try {
   // Recovery only terminates saved containers. It does not infer success or repeat their commands.
   for (const pending of log.pending()) await run.cleanup(pending.container);
   broker = createProgramServer(log, packages);
+  await recoverExecutorSocket(socket, environment.uid);
   await new Promise<void>((resolve, reject) => { broker!.server.once('error', reject); broker!.server.listen(socket, resolve); });
   chmodSync(socket, 0o660);
   if (values['browser-image']) {
     const browsers = configuredBrowserRunner({ ...environment, image: values['browser-image'] as string }); await browsers.verify();
     browser = createBrowserServer(browsers.create);
     const browserSocket = join(dirname(socket), 'browser.sock');
+    await recoverExecutorSocket(browserSocket, environment.uid);
     await new Promise<void>((resolve, reject) => { browser!.server.once('error', reject); browser!.server.listen(browserSocket, resolve); });
     chmodSync(browserSocket, 0o660);
   }
