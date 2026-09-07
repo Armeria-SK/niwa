@@ -4,7 +4,9 @@ import { get as httpGet } from 'node:http';
 import { get as httpsGet } from 'node:https';
 
 const MAX_BYTES = 256 * 1024;
-export interface PageResponse { status: number; location?: string; contentType: string; body: string }
+const PAGE_TYPES = /^(text\/(html|plain)|application\/json)(;|$)/i;
+const RESOURCE_TYPES = /^(text\/(html|plain|css|javascript)|application\/(json|javascript|x-javascript)|image\/(png|jpeg|gif|webp|avif|svg\+xml|x-icon|vnd.microsoft.icon)|font\/(woff|woff2|ttf|otf))(;|$)/i;
+export interface PageResponse { status: number; location?: string; contentType: string; body: string | Buffer }
 export interface PageNetwork {
   resolve(host: string): Promise<string[]>;
   get(url: URL, address: string, signal: AbortSignal): Promise<PageResponse>;
@@ -34,14 +36,14 @@ function pageUrl(input: string): URL {
   return url;
 }
 
-const network: PageNetwork = {
+const networkFor = (accept: string, types: RegExp): PageNetwork => ({
   resolve: async host => (await lookup(host, { family: 4, all: true })).map(item => item.address),
   get: (url, address, signal) => new Promise((resolve, reject) => {
     // Keep Host/SNI from the original URL, pin the checked address, and do not use proxies or pooled sockets.
     const request = (url.protocol === 'https:' ? httpsGet : httpGet)(url, {
       agent: false, signal, family: 4,
       lookup: (_host, _options, callback) => callback(null, address, 4),
-      headers: { accept: 'text/html,text/plain,application/json', 'accept-encoding': 'identity', 'user-agent': 'Niwa/0.1 (public page reader)' },
+      headers: { accept, 'accept-encoding': 'identity', 'user-agent': 'Niwa/0.1 (public page reader)' },
     }, response => {
       const status = response.statusCode ?? 0;
       const contentType = response.headers['content-type'] ?? '';
@@ -49,7 +51,7 @@ const network: PageNetwork = {
       if (status >= 300 && status < 400) {
         response.destroy(); resolve({ status, contentType, body: '', ...(location ? { location } : {}) }); return;
       }
-      if (status !== 200 || !/^(text\/(html|plain)|application\/json)(;|$)/i.test(contentType) ||
+      if (status !== 200 || !types.test(contentType) ||
         (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') ||
         Number(response.headers['content-length']) > MAX_BYTES) {
         response.destroy(); reject(new Error('Page status, type, encoding or size is unsupported')); return;
@@ -61,13 +63,15 @@ const network: PageNetwork = {
         chunks.push(chunk);
       });
       response.on('error', reject);
-      response.on('end', () => resolve({ status, contentType, body: Buffer.concat(chunks).toString('utf8') }));
+      response.on('end', () => resolve({ status, contentType, body: Buffer.concat(chunks) }));
     });
     request.on('error', reject);
   }),
-};
+});
+const network = networkFor('text/html,text/plain,application/json', PAGE_TYPES);
+const resourceNetwork = networkFor('*/*', RESOURCE_TYPES);
 
-export async function readPublicPage(input: string, signal?: AbortSignal, transport: PageNetwork = network) {
+async function fetchPublic(input: string, types: RegExp, signal: AbortSignal | undefined, transport: PageNetwork) {
   const cancellation = AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]);
   let url = pageUrl(input);
   for (let redirects = 0; redirects <= 5; redirects++) {
@@ -88,9 +92,21 @@ export async function readPublicPage(input: string, signal?: AbortSignal, transp
       if (url.protocol === 'https:' && next.protocol === 'http:') throw new Error('HTTPS downgrade is not supported');
       url = next; continue;
     }
-    if (response.status !== 200 || Buffer.byteLength(response.body) > MAX_BYTES) throw new Error('Page could not be read');
-    return { url: url.href, content_type: response.contentType, text: response.body.slice(0, 20_000),
-      truncated: response.body.length > 20_000, fetched_at: new Date().toISOString(), untrusted: true };
+    if (response.status !== 200 || !types.test(response.contentType) || /[\r\n]/.test(response.contentType) ||
+      Buffer.byteLength(response.body) > MAX_BYTES) throw new Error('Page could not be read');
+    return { url: url.href, content_type: response.contentType, body: Buffer.from(response.body), fetched_at: new Date().toISOString(), untrusted: true };
   }
   throw new Error('Page could not be read');
+}
+
+export async function readPublicPage(input: string, signal?: AbortSignal, transport: PageNetwork = network) {
+  const { body, ...source } = await fetchPublic(input, PAGE_TYPES, signal, transport);
+  const text = body.toString('utf8');
+  return { ...source, text: text.slice(0, 20_000), truncated: text.length > 20_000 };
+}
+
+/** Broker-only anonymous GET. No caller-controlled headers, cookies, body, credentials or proxy. */
+export async function readPublicResource(input: string, signal?: AbortSignal, transport: PageNetwork = resourceNetwork) {
+  const { body, ...source } = await fetchPublic(input, RESOURCE_TYPES, signal, transport);
+  return { ...source, body_base64: body.toString('base64') };
 }

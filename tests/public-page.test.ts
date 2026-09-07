@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { publicIPv4, readPublicPage, type PageNetwork } from '../src/tools/web/public-page.ts';
+import { publicIPv4, readPublicPage, readPublicResource, type PageNetwork } from '../src/tools/web/public-page.ts';
 
 test('public page destination policy rejects private, reserved and alternate IP forms', async () => {
   for (const ip of ['0.1.2.3', '10.0.0.1', '100.64.0.1', '127.1.2.3', '169.254.169.254', '172.16.0.1',
@@ -12,6 +12,30 @@ test('public page destination policy rejects private, reserved and alternate IP 
   for (const url of ['file:///etc/passwd', 'ftp://example.com/a', 'http://user:password@example.com/', 'http://example.com:11434/',
     'http://localhost/', 'http://service.local/', 'http://[::1]/', 'http://2130706433/', 'http://0x7f000001/',
     'http://127.1/', 'http://169.254.169.254/latest/']) await assert.rejects(readPublicPage(url, undefined, transport));
+  assert.equal(gets, 0);
+});
+
+test('browser resources preserve binary bytes while retaining public destination, type and size restrictions', async () => {
+  const bytes = Buffer.from([137, 80, 78, 71, 255, 0, 192, 128]);
+  const transport: PageNetwork = {
+    resolve: async () => ['8.8.8.8'],
+    get: async () => ({ status: 200, contentType: 'image/png', body: bytes }),
+  };
+  const resource = await readPublicResource('https://public.example.com/image.png', undefined, transport);
+  assert.deepEqual(Buffer.from(resource.body_base64, 'base64'), bytes);
+  await assert.rejects(readPublicPage('https://public.example.com/image.png', undefined, transport));
+  transport.get = async () => ({ status: 200, contentType: 'text/javascript', body: 'const value = 1;' });
+  assert.equal(Buffer.from((await readPublicResource('https://public.example.com/app.js', undefined, transport)).body_base64, 'base64').toString(), 'const value = 1;');
+  transport.get = async () => ({ status: 200, contentType: 'application/octet-stream', body: bytes });
+  await assert.rejects(readPublicResource('https://public.example.com/file', undefined, transport));
+  transport.get = async () => ({ status: 200, contentType: 'image/png\r\nSet-Cookie: forged', body: bytes });
+  await assert.rejects(readPublicResource('https://public.example.com/image', undefined, transport));
+  transport.get = async () => ({ status: 200, contentType: 'image/png', body: Buffer.alloc(256 * 1024 + 1) });
+  await assert.rejects(readPublicResource('https://public.example.com/large', undefined, transport));
+  let gets = 0;
+  transport.resolve = async () => ['127.0.0.1'];
+  transport.get = async () => { gets++; throw new Error('Must not connect'); };
+  await assert.rejects(readPublicResource('https://public.example.com/private', undefined, transport));
   assert.equal(gets, 0);
 });
 
