@@ -14,7 +14,8 @@ export function BackupStatus() {
   }
   const latest = status?.items[0];
   return <>
-    <div className="backup-status"><ClockIcon size={24} /><div><strong>{latest ? `最後の保存: ${new Date(latest.created_at).toLocaleString('ja-JP')}` : status ? 'まだバックアップはありません' : '保存状況を確認しています…'}</strong><p>{status?.available ? `${status.items.length}件の保存履歴があります。前回の保存から24時間後に、自動で保存します。` : 'バックアップの接続を確認しています。'}</p></div></div>
+    <div className="backup-status"><ClockIcon size={24} /><div><strong>{latest ? `最後の保存: ${new Date(latest.created_at).toLocaleString('ja-JP')}` : status ? 'まだバックアップはありません' : '保存状況を確認しています…'}</strong><p>{status?.available ? `${status.items.length}件の保存履歴があります。設定した時刻に、1日1回自動で保存します。当日の保存があれば重ねて保存しません。` : 'バックアップの接続を確認しています。'}</p></div></div>
+    <p className="field-hint">予定時刻を過ぎて起動した場合は、その日にまだ保存されていなければ実行します。</p>
     {error || status?.error ? <p className="field-error" role="alert">{error || status.error}</p> : null}
     <button type="button" className="button secondary" disabled={busy || !status?.available} onClick={create}>{busy ? '保存しています…' : '今すぐバックアップ'}</button>
     <p className="field-hint">認証情報と共有作業フォルダーは含みません。復元の操作は準備中です。</p>

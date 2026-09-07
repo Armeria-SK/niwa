@@ -33,6 +33,7 @@ export interface Settings {
   generatedLimit: number;
   concurrencyLimit: number | null;
   backupDays: number;
+  backupTime: string;
 }
 export class DomainError extends Error {
   code: 'forbidden' | 'invalid' | 'not_found' | 'conflict' | 'limit';

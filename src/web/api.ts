@@ -90,7 +90,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, schema: object({ id, body: string, agent_id: Type.Optional(id) }),
       run: (m, b) => runtime.submit(admin, b.id as string, m[1]!, b.body as string, b.agent_id as string | undefined) },
     { method: 'PATCH', path: /^\/api\/settings$/, schema: object({ paused: Type.Optional(Type.Boolean()), autonomous: Type.Optional(Type.Boolean()), generatedLimit: Type.Optional(Type.Integer({ minimum: 0 })),
-      concurrencyLimit: Type.Optional(Type.Union([Type.Null(), Type.Integer({ minimum: 1 })])), backupDays: Type.Optional(Type.Integer({ minimum: 1 })) }),
+      concurrencyLimit: Type.Optional(Type.Union([Type.Null(), Type.Integer({ minimum: 1 })])), backupDays: Type.Optional(Type.Integer({ minimum: 1 })), backupTime: Type.Optional(Type.String({ pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' })) }),
       run: (_m, b) => runtime.updateSettings(admin, b as Partial<Settings>) },
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/dormancy$/, schema: object({ dormant: Type.Boolean() }),
       run: (m, b) => { runtime.setDormant(admin, m[1]!, b.dormant as boolean); return { ok: true }; } },

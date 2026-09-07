@@ -11,6 +11,48 @@ import { Backups } from '../src/backup/backups.ts';
 import { prepareRestore, restoreInstallation } from '../src/backup/restore.ts';
 import { acquireProcessLock } from '../src/runtime/process-lock.ts';
 
+test('daily backups use the saved Japan time and avoid duplicates after restarts or schedule changes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-backup-time-'));
+  const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
+  const paths = initializeInstallation(root, installation); const runtime = new Runtime(paths.state); const admin = runtime.administrator();
+  runtime.bootstrap(admin);
+  let now = Date.parse('2026-09-07T02:59:00+09:00');
+  let backups = new Backups(runtime, paths, installation, () => now);
+  try {
+    assert.equal(runtime.settings(admin).backupTime, '03:00');
+    assert.throws(() => runtime.updateSettings(admin, { backupTime: '24:00' }), /Invalid backup time/);
+    await backups.tick(); assert.equal((await backups.list()).length, 0);
+    now += 60_000;
+    const first = backups.tick(); assert.equal(backups.tick(), first); await first;
+    assert.equal((await backups.list()).length, 1);
+    await backups.stop(); backups = new Backups(runtime, paths, installation, () => now);
+    await backups.tick(); assert.equal((await backups.list()).length, 1);
+    runtime.updateSettings(admin, { backupTime: '04:00' }); now += 3600_000;
+    await backups.tick(); assert.equal((await backups.list()).length, 1);
+    now = Date.parse('2026-09-08T03:59:00+09:00'); await backups.tick(); assert.equal((await backups.list()).length, 1);
+    now += 60_000; await backups.tick(); assert.equal((await backups.list()).length, 2);
+    // A missed day is not replayed in a burst; starting after today's time creates one snapshot.
+    now = Date.parse('2026-09-11T11:00:00+09:00'); await backups.tick(); assert.equal((await backups.list()).length, 3);
+    now = Date.parse('2026-09-12T01:00:00+09:00'); await backups.create();
+    now = Date.parse('2026-09-12T04:00:00+09:00'); await backups.tick(); assert.equal((await backups.list()).length, 4);
+    now += 86400_000;
+    const list = backups.list.bind(backups); let release!: () => void; let started!: () => void; let delayed = false;
+    const pendingRead = new Promise<void>(resolve => { started = resolve; });
+    backups.list = async () => {
+      const items = await list();
+      if (!delayed) { delayed = true; started(); await new Promise<void>(resolve => { release = resolve; }); }
+      return items;
+    };
+    const pendingTick = backups.tick(); await pendingRead;
+    try { await backups.create(); } finally { release(); }
+    await pendingTick; assert.equal((await list()).length, 5);
+    await backups.stop(); now += 86400_000; await backups.tick(); assert.equal((await backups.list()).length, 5);
+    const reopened = new Runtime(paths.state);
+    try { assert.equal(reopened.settings(reopened.administrator()).backupTime, '04:00'); }
+    finally { reopened.close(); }
+  } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test('backup captures a consistent set of databases, excludes secrets, and compresses after writes resume', async () => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-backup-'));
   const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };

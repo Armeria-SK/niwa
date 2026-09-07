@@ -41,7 +41,7 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
       </section> : null}
       {tab === 'backup' ? <section className="settings-section"><h2>大切な記憶を残す</h2><p>設定・人格・個別記憶・会話履歴を、毎日バックアップします。</p>
         <Switch disabled checked={true} label="毎日のバックアップ" description="本体が起動している間、定期的に保存します。" />
-        <div className="field-pair"><label className="field"><span>実行する時刻（設定準備中）</span><input type="time" value="" disabled readOnly /></label><label className="field"><span>保存する日数</span><div className="input-with-unit"><input type="number" min="1" max="365" value={draft.backupDays} onChange={e => change('backupDays', e.target.value)} required /><span>日</span></div></label></div>
+        <div className="field-pair"><label className="field"><span>実行する時刻（日本時間）</span><input type="time" value={draft.backupTime} onChange={e => change('backupTime', e.target.value)} required /></label><label className="field"><span>保存する日数</span><div className="input-with-unit"><input type="number" min="1" max="365" value={draft.backupDays} onChange={e => change('backupDays', e.target.value)} required /><span>日</span></div></label></div>
         <BackupStatus />
       </section> : null}
       <div className="form-actions settings-save"><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />保存しました</> : null}</span><button type="button" className="button subtle" onClick={() => { setDraft(settings); setSaved(false); }}>変更を戻す</button><button className="button primary">設定を保存</button></div>

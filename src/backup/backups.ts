@@ -21,8 +21,10 @@ export class Backups {
   #job: Promise<BackupManifest> | undefined;
   #timer: ReturnType<typeof setInterval> | undefined;
   #stopped = false;
+  #checking: Promise<void> | undefined;
+  #lastCompletedAt = 0;
   error: string | null = null;
-  constructor(runtime: Runtime, paths: ProductPaths, installation: Installation) {
+  constructor(runtime: Runtime, paths: ProductPaths, installation: Installation, private clock = () => Date.now()) {
     this.#runtime = runtime; this.#paths = paths; this.#installation = installation;
   }
   async list(): Promise<BackupManifest[]> {
@@ -46,7 +48,7 @@ export class Backups {
   }
   async #create(): Promise<BackupManifest> {
     const admin = this.#runtime.administrator();
-    const id = randomUUID(); const created_at = Date.now();
+    const id = randomUUID(); const created_at = this.clock();
     const parent = join(this.#paths.runtime, 'backup-staging');
     assertDirectoryPath(parent); await fs.mkdir(parent, { recursive: true, mode: 0o700 });
     const stage = join(parent, id);
@@ -65,6 +67,7 @@ export class Backups {
       await fs.writeFile(join(stage, 'manifest.json'), JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
       assertDirectoryPath(this.#paths.backups);
       await fs.rename(stage, join(this.#paths.backups, id));
+      this.#lastCompletedAt = Math.max(this.#lastCompletedAt, created_at);
       const cutoff = created_at - this.#runtime.settings(admin).backupDays * 86_400_000;
       for (const old of await this.list()) if (old.id !== id && old.created_at < cutoff) {
         const target = resolve(this.#paths.backups, old.id);
@@ -83,12 +86,25 @@ export class Backups {
   start(): void {
     if (this.#timer) return;
     this.#stopped = false;
-    const tick = async () => {
-      try { const last = (await this.list())[0]?.created_at ?? 0; if (!this.#stopped && Date.now() - last >= 86_400_000) await this.create(); }
-      catch { this.error = 'バックアップを保存できませんでした。保存先と空き容量を確認してください。'; }
-    };
-    this.#timer = setInterval(() => { void tick(); }, 60_000);
-    void tick();
+    this.#timer = setInterval(() => { void this.tick(); }, 60_000);
+    void this.tick();
   }
-  async stop(): Promise<void> { this.#stopped = true; clearInterval(this.#timer); this.#timer = undefined; await this.#job?.catch(() => {}); }
+  tick(): Promise<void> {
+    if (this.#stopped) return Promise.resolve();
+    return this.#checking ??= this.#daily().catch(() => {
+      this.error = 'バックアップを保存できませんでした。保存先と空き容量を確認してください。';
+    }).finally(() => { this.#checking = undefined; });
+  }
+  async #daily(): Promise<void> {
+    const items = await this.list();
+    if (this.#stopped) return;
+    const now = this.clock(); const day = Math.floor((now + 9 * 3600_000) / 86400_000) * 86400_000 - 9 * 3600_000;
+    const [hour, minute] = this.#runtime.settings(this.#runtime.administrator()).backupTime.split(':').map(Number);
+    const due = day + hour! * 3600_000 + minute! * 60_000;
+    if (now >= due && Math.max(items[0]?.created_at ?? 0, this.#lastCompletedAt) < day) await this.create();
+  }
+  async stop(): Promise<void> {
+    this.#stopped = true; clearInterval(this.#timer); this.#timer = undefined;
+    await this.#checking; await this.#job?.catch(() => {});
+  }
 }
