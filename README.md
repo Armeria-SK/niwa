@@ -147,6 +147,12 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor-session.sh --apply
 
 この操作は `niwa-exec` のsystemdユーザー管理機能を起動し、rootless Podman・seccomp・cgroup・保存先を検査します。Niwa本体やコンテナは起動しません。
 
+成功後、初回の実行環境を準備する場合は、[ディスク上限の準備](deploy/ubuntu/STORAGE.md)へ進みます。共有作業場8 GiB・実行領域16 GiBを確保するため、26 GiB以上の空き容量が必要です。
+
+```bash
+sudo python3 /home/niwa/niwa/deploy/ubuntu/prepare-disks.py --apply
+```
+
 ここではNiwaのサービス登録・起動や実行イメージの取得は行いません。プログラム実行の有効化には、[追加の準備と隔離検証](deploy/ubuntu/README.md)および[サービス設定](deploy/ubuntu/SERVICES.md)が必要です。
 
 ## 5. 初回の設定を作る

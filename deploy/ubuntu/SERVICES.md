@@ -39,7 +39,7 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor-session.sh --apply
 
 既存の所有権やアクセス権が想定と違えば、変更前に停止します。通過後は `loginctl enable-linger niwa-exec` と `systemctl start user@<確認したUID>.service` を実行します。専用user manager内の一時サービスへcgroupを委譲し、製品と同じ `validatePodmanInfo` でrootless・seccomp・CPU/memory/pids制御・private保存先を確認します。Podmanの初期メタデータが専用HOME/runtimeへ作られる場合があります。イメージ取得やコンテナ起動は行いません。
 
-2026-09-08、スクリプト構文と人工環境テスト5件が成功。実行はsudo対話認証が必要で未完了です。途中失敗時はエラーを確認してください。所有権を変更せず同じlinger/user managerの状態へ揃える処理ですが、成功してもディスク上限・実イメージ・コンテナ隔離の受入は別途必要です。
+2026-09-08、ACL判定修正後にユーザー端末で実行成功。専用主体のアクセス検査と、rootless/local・seccomp・cgroup v2のcpu/memory/pids・private保存先の検査がPASS。linger有効、user manager起動も確認しました。実イメージ・コンテナ隔離の受入は未実施です。次は[ディスク上限の準備](STORAGE.md)を行います。
 
 受入では、ソケット到達、ソース・ビルド済みコード・configへの書込拒否、秘密への到達拒否、Podmanのcgroup cpu/memory/pids、サービス停止時のcontainer終了、SIGKILL後の再起動、OS再起動後の手動停止状態維持を実際に確認します。systemd-analyze verifyは構文や依存の検査であり、この動作確認の代わりではありません。
 
