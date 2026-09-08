@@ -729,3 +729,30 @@ test('long work yields to queued requests and resumes without repeating committe
   assert.equal(calls, 5);
   assert.equal(r.updates(f.admin).filter(item => item.kind === 'decision').length, 4);
 });
+
+for (const shared of [false, true]) test(`model instructions reflect room permissions, configured tools and autonomous setting; shared=${shared}`, async t => {
+  const f = fixture(t), room = shared ? f.room : f.runtime.createRoom(f.admin, 'Private capability check', [f.leader.id]);
+  f.runtime.updateSettings(f.admin, {autonomous: shared});
+  f.runtime.updateCommonRules(f.admin, f.runtime.commonRules(f.admin).revision, '人工の事業方針');
+  const unavailable = async (): Promise<never> => { throw Error('Capability inspection must not execute tools'); };
+  let observed = 0;
+  const runner = new TurnRunner(f.runtime, async () => model(request => {
+    observed++;
+    const line = request.system_instructions.split('\n').find(line => line.startsWith('現在の実行環境: '))!;
+    const state = JSON.parse(line.slice('現在の実行環境: '.length));
+    assert.equal(state.conversation, shared ? 'shared' : 'private');
+    assert.equal(state.autonomous_enabled, shared); assert.equal(state.activity_paused, false);
+    assert.equal(state.model_supports_tools, true); assert.equal(state.this_task_autonomous, false);
+    for (const name of ['program_run', 'workspace_write', 'web_download']) {
+      assert.equal(state.configured_tools_here.includes(name), shared);
+      assert.equal(request.tools.some(tool => tool.name === name), shared);
+      assert.ok(state.configured_tools_in_shared_room.includes(name));
+    }
+    assert.ok(!state.configured_tools_in_shared_room.includes('x_post'));
+    assert.match(request.system_instructions, /人工の事業方針/);
+    assert.match(request.system_instructions, /Niwa全体の未実装と混同しません/);
+    return complete('環境を確認しました');
+  }), {program: unavailable, workspace: unavailable, workspaceWrite: unavailable});
+  f.runtime.tasks.create(f.admin, f.leader.id, room.id, '実行環境を説明してください');
+  await runner.run(f.runtime.tasks.claim(f.admin)!); assert.equal(observed, 1);
+});
