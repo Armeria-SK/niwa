@@ -120,12 +120,23 @@ export class BrowserPage {
     const revision = randomUUID();
     const value = await this.#evaluate(`(() => {
       const visible = el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
-      const nodes = Array.from(document.querySelectorAll('a[href],button,input,textarea,select,[role="button"]')).filter(visible).slice(0,100);
+      const roots = [document], nodes = [], texts = [];
+      // Traverse open component roots with the same observation and output limits.
+      for (let i = 0; i < roots.length && i < 100; i++) {
+        const root = roots[i];
+        for (const el of root.querySelectorAll('*')) {
+          if (el.shadowRoot && visible(el) && roots.length < 100) roots.push(el.shadowRoot);
+          if (el.tagName === 'IFRAME' && visible(el) && roots.length < 100 && el.contentDocument) roots.push(el.contentDocument);
+          if (nodes.length < 100 && el.matches('a[href],button,input,textarea,select,[role="button"]') && visible(el)) nodes.push(el);
+        }
+        const text = root.nodeType === 9 ? root.body?.innerText : Array.from(root.children).filter(visible).map(el => el.innerText || '').join('\\n');
+        texts.push((text || '').slice(0,20000));
+      }
       const elements = nodes.map((el, ref) => ({ref, role: el.getAttribute('role') || el.tagName.toLowerCase(),
         name: (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || '').slice(0,200),
         ...(el.tagName === 'A' ? {href: el.href} : {})}));
       globalThis.niwaObservation = {nodes, elements, revision: ${JSON.stringify(revision)}};
-      return {url: location.href, title: document.title.slice(0,500), text: (document.body?.innerText || '').slice(0,20000), elements};
+      return {url: location.href, title: document.title.slice(0,500), text: texts.join('\\n').slice(0,20000), elements};
     })()`, signal) as Omit<BrowserSnapshot, 'revision' | 'blocked' | 'untrusted'>;
     this.#revision = revision;
     return { ...value, revision, blocked: [...(this.#active?.blocked ?? [])], untrusted: true };
@@ -198,7 +209,7 @@ export class BrowserPage {
         const method = (submitter.getAttribute('formmethod') || form.method || 'get').toUpperCase();
         const enctype = submitter.getAttribute('formenctype') || form.enctype;
         if (!['GET','POST'].includes(method) || enctype !== 'application/x-www-form-urlencoded') throw Error('Unsupported form encoding');
-        const url = new URL(submitter.getAttribute('formaction') || form.getAttribute('action') || location.href, document.baseURI).href;
+        const url = new URL(submitter.getAttribute('formaction') || form.getAttribute('action') || form.ownerDocument.URL, form.ownerDocument.baseURI).href;
         try {
           for (const change of changes) {
             const el = s.nodes[change.ref];

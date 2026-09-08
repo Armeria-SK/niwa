@@ -33,6 +33,7 @@ test('dedicated browser renders broker resources, blocks unknown writes, and fol
       <a href="/download" download>Download</a><button>Submit</button><input placeholder="Query" oninput="document.getElementById('echo').textContent=this.value"><p id="echo"></p>
       <button type="button" onclick="document.getElementById('detail').hidden=false;fetch('/click-write',{method:'POST'}).catch(()=>{});">Expand</button><p id="detail" hidden>Expanded locally</p>
       <input type="password" placeholder="Secret"><input type="file" aria-label="Upload">
+      <iframe srcdoc='<p>Embedded text</p><input placeholder="Embedded query"><button type="button" onclick="this.textContent=String(43)">Embedded action</button>'></iframe><div id="component"></div><script>document.getElementById('component').attachShadow({mode:'open'}).innerHTML='<p>Component text</p><input placeholder="Component query"><button type="button" onclick="this.textContent=String(42)">Component action</button>';</script>
       <script>fetch('/write', {method:'POST',body:'forbidden'}).catch(()=>{});</script>`;
     return { url: address, content_type: 'text/html', body_base64: Buffer.from(body).toString('base64'), fetched_at: new Date().toISOString(), untrusted: true };
   }));
@@ -50,6 +51,14 @@ test('dedicated browser renders broker resources, blocks unknown writes, and fol
     await assert.rejects(page.follow(first.revision, first.elements.find(el => el.name === 'Continue')!.ref), /changed/);
     await cdp.send('Runtime.evaluate', { expression: "document.querySelector('a').href='/next'" }, { sessionId: ownedSession });
     let interaction = await page.snapshot();
+    assert.match(interaction.text, /Component text/);
+    assert.match(interaction.text, /Embedded text/);
+    interaction = await page.interact({ action: 'fill', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Embedded query')!.ref, value: 'frame value' });
+    interaction = await page.interact({ action: 'click', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Embedded action')!.ref });
+    assert.ok(interaction.elements.some(el => el.name === '43'));
+    interaction = await page.interact({ action: 'fill', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Component query')!.ref, value: 'component value' });
+    interaction = await page.interact({ action: 'click', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Component action')!.ref });
+    assert.ok(interaction.elements.some(el => el.name === '42'));
     await assert.rejects(page.interact({ action: 'fill', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Secret')!.ref, value: 'not-a-real-secret' }));
     await assert.rejects(page.interact({ action: 'fill', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Upload')!.ref, value: 'file' }));
     await assert.rejects(page.interact({ action: 'click', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Submit')!.ref }));

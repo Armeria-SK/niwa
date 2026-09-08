@@ -7,7 +7,7 @@ export async function verifyBrowserSession(create) {
   let requests = 0;
   const session = create(url => new BrowserRequests(url, async address => {
     requests++;
-    const html = `<title>Niwa acceptance</title><p>Artificial page</p><button type="button" onclick="document.getElementById('detail').hidden=false;fetch('/click-send',{method:'POST'}).catch(()=>{});">Expand</button><p id="detail" hidden>Expanded locally</p><a href="/next">Next</a>
+    const html = `<title>Niwa acceptance</title><iframe srcdoc='<p>Embedded acceptance</p><button type="button" onclick="this.textContent=String(44)">Frame action</button>'></iframe><div id="component"></div><script>document.getElementById('component').attachShadow({mode:'open'}).innerHTML='<p>Shadow acceptance</p><button type="button" onclick="this.textContent=String(45)">Shadow action</button>';</script><p>Artificial page</p><button type="button" onclick="document.getElementById('detail').hidden=false;fetch('/click-send',{method:'POST'}).catch(()=>{});">Expand</button><p id="detail" hidden>Expanded locally</p><a href="/next">Next</a>
       <form method="post" action="https://forms.example.com/send"><input name="message" placeholder="Message" value="original"><button>Send</button></form>
       <script>fetch('/forbidden',{method:'POST',body:'artificial'}).catch(()=>{});</script>`;
     return {url:address,content_type:'text/html',body_base64:Buffer.from(html).toString('base64'),fetched_at:new Date().toISOString(),untrusted:true};
@@ -16,6 +16,11 @@ export async function verifyBrowserSession(create) {
     const cancel = AbortSignal.timeout(60_000);
     let page = await session.navigate('https://fixture.example.com/', cancel);
     assert.equal(page.title,'Niwa acceptance'); assert.ok(page.blocked.includes('approval_required'));
+    assert.match(page.text,/Embedded acceptance/); assert.match(page.text,/Shadow acceptance/);
+    for (const [name, expected] of [['Frame action','44'],['Shadow action','45']]) {
+      page = await session.interact({action:'click',revision:page.revision,ref:page.elements.find(el=>el.name===name).ref},cancel);
+      assert.ok(page.elements.some(el=>el.name===expected));
+    }
     page = await session.interact({action:'click',revision:page.revision,ref:page.elements.find(el=>el.name==='Expand').ref},cancel);
     assert.match(page.text,/Expanded locally/); assert.equal(requests,1);
     page = await session.interact({action:'fill',revision:page.revision,ref:page.elements.find(el=>el.name==='Message').ref,value:'local value'},cancel);
