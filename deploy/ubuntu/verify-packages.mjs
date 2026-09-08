@@ -49,5 +49,5 @@ try {
     checks:['offline-install','committed-version','nonroot-program-execution','base-unchanged']},null,2)+'\n',{mode:0o600});
   renameSync(join(stage,'receipt.json'),`${root}/runtime/executor/state/package-acceptance.json`);
   console.log('PASS: offline package installed, committed, version-checked and executed nonroot; original image unchanged');
-  console.log('Package feature is not enabled in the application; verified derived image retained.');
+  console.log('Application settings were not changed by this acceptance run; verified derived image retained.');
 } finally { rmSync(stage,{recursive:true,force:true}); }

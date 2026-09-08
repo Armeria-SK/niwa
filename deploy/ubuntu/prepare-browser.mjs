@@ -69,7 +69,7 @@ try {
   writeFileSync(join(stage,'receipt.json'),JSON.stringify(receipt,null,2)+'\n',{mode:0o600});
   renameSync(join(stage,'receipt.json'),`${root}/runtime/executor/state/browser-acceptance.json`);
   console.log('PASS: browser rendering, resource policy, form preparation and cleanup; acceptance receipt saved');
-  console.log('Browser is not enabled in the application yet; no external form was sent.');
+  console.log('Application settings were not changed by this acceptance run; no external form was sent.');
 } catch (error) {
   if (name) {
     console.error('Browser acceptance failed; collecting startup diagnostics from the same image.');

@@ -63,6 +63,19 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh restart
 
 端末のCtrl+Cでサービスは停止しません。`node ...server.js` を別に起動すると二重起動になります。日常操作にセットアップの再実行や `--init` は不要です。上のstopは今回の稼働を停止する操作で、自動起動の登録は残ります。Botの活動停止状態は画面で管理します。
 
+## ブラウザー・パッケージ機能を追加する
+
+初回セットアップ後に追加する場合は、次を順に実行します。すでに有効化済みの環境で繰り返す必要はありません。
+
+```sh
+sudo sh /home/niwa/niwa/deploy/ubuntu/verify-extensions.sh --apply
+sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
+```
+
+最初のコマンドで専用ブラウザーと人工パッケージの隔離・動作を検証し、次のコマンドで受入記録を確認して本体へ接続・再起動します。ブラウザーの通常フォームは内容ごとの承認が必要です。パッケージの管理カタログは空で開始し、管理者が検証したdebを追加して使います。任意のオンラインパッケージ取得は行いません。詳しくは[パッケージ運用](docs/ubuntu/PACKAGES.md)を参照してください。
+
+保存・復元・サービス再起動を再検証する場合は `sudo sh /home/niwa/niwa/deploy/ubuntu/verify-continuity.sh --apply` を使います。復元試験は人工データの一時環境で行います。
+
 ## 困ったとき
 
 | 状況 | 確認すること |

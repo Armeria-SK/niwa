@@ -5,6 +5,7 @@ import { verifyExecutorEndpoint } from '../../dist/config/executor-endpoint.js';
 const root = '/home/niwa/niwa';
 const config = readInstallation(root);
 const checks = [['workspace', config.workspaceExecutorUid], ['program', config.programExecutorUid]];
+if (config.browserExecutorUid) checks.push(['browser', config.browserExecutorUid]);
 const deadline = Date.now() + 45_000;
 for (const [name, uid] of checks) {
   if (!uid) throw new Error(`Missing ${name} executor UID`);
@@ -27,4 +28,4 @@ for (const [name, uid] of checks) {
     }
   }
 }
-console.log('PASS: protected workspace and program sockets respond as application user');
+console.log(`PASS: protected ${checks.map(([name])=>name).join(', ')} sockets respond as application user`);
