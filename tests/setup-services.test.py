@@ -93,6 +93,8 @@ class SetupTests(unittest.TestCase):
             self.assertNotIn('prepare-program.sh', flat)
             self.assertNotIn('prepare-executor.sh', flat)
             self.assertIn('prepare-executor-session.sh', flat)
+            self.assertIn('allow-workspace-read.py --apply', flat)
+            self.assertLess(flat.index('allow-workspace-read.py --apply'), flat.index('services.sh start'))
             self.assertLess(flat.index('daemon-reload'), flat.index('services.sh start'))
 
 

@@ -165,6 +165,8 @@ def install():
             if os.path.exists(staged): os.unlink(staged)
     managed_file(ROOT / 'config/executor.env', f'NIWA_PROGRAM_IMAGE={image}\n', 0, executor.pw_gid, 0o640)
     run('setfacl', '-m', f'u:{executor.pw_uid}:--x', ROOT / 'config')
+    # Apply after bounded mounts and initial directories exist, before services start.
+    run('python3', DEPLOY / 'allow-workspace-read.py', '--apply')
     user_unit = Path(executor.pw_dir) / '.config/systemd/user/niwa-executor.service'
     # Create parents as their dedicated owner; never recursively chown executor data.
     as_user('niwa-exec', 'mkdir', '-p', user_unit.parent)
