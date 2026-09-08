@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { verifyApprovedForm } from './form-acceptance.mjs';
 import { BrowserRequests } from '../../dist/tools/browser/requests.js';
 
 // In-memory public-page fixtures; nothing is fetched or submitted to the named domains.
@@ -19,6 +20,7 @@ export async function verifyBrowserSession(create) {
       [{ref:page.elements.find(el=>el.name==='Message').ref,value:'artificial & 日本語'}],cancel);
     assert.deepEqual(prepared.form, {url:'https://forms.example.com/send',method:'POST',fields:[{name:'message',value:'artificial & 日本語'}]});
     assert.equal(requests,1,'Form preparation must not submit or fetch');
+    await verifyApprovedForm(prepared.form);
     const next = await session.follow(prepared.revision,prepared.elements.find(el=>el.name==='Next').ref,cancel);
     assert.match(next.url,/\/next$/); assert.equal(requests,2);
     assert.throws(()=>session.follow(page.revision,0,cancel),/stale/);

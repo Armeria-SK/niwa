@@ -65,7 +65,7 @@ try {
   session = undefined;
   assert.equal(podman('ps','-aq','--filter',`name=${name}`).trim(),'');
   const receipt = {image,reference:suppliedImage ? image : lock.reference,verified_at:new Date().toISOString(),
-    checks:['browser-chroot-seccomp','container-boundaries','sandbox-render','broker-only-resources','form-prepare-no-send','stale-reference','cleanup']};
+    checks:['browser-chroot-seccomp','container-boundaries','sandbox-render','broker-only-resources','form-prepare-no-send','exact-approval-synthetic-send-reopen','stale-reference','cleanup']};
   writeFileSync(join(stage,'receipt.json'),JSON.stringify(receipt,null,2)+'\n',{mode:0o600});
   renameSync(join(stage,'receipt.json'),`${root}/runtime/executor/state/browser-acceptance.json`);
   console.log('PASS: browser rendering, resource policy, form preparation and cleanup; acceptance receipt saved');
