@@ -93,4 +93,4 @@ sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
 
 ## ライセンス
 
-取り込み元・依存ライブラリ・フォント・アイコンのライセンスと帰属表記は [LICENSES.md](LICENSES.md) にまとめています。ビルド成果物にも同梱します。Niwa本体のライセンス指定とは区別しています。
+Niwaのライセンスの扱いは [LICENSES.md](LICENSES.md) に記載しています。ビルド成果物にも同梱します。Niwa本体のライセンス指定とは区別しています。
