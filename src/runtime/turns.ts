@@ -148,7 +148,7 @@ export class TurnRunner {
           return;
         }
         if (!runtime.tasks.reserveModelCall(actor, lease)) {
-          runtime.tasks.wait(actor, lease, 'waiting_user', '定期実行のモデル呼び出し上限に達しました。'); return;
+          if (runtime.tasks.active(actor,lease)) runtime.tasks.wait(actor, lease, 'waiting_user', '定期実行のモデル呼び出し上限に達しました。'); return;
         }
         let events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 600_000, ...(signal ? { signal } : {}) }),
           { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024 });
@@ -162,8 +162,8 @@ export class TurnRunner {
               if (fallback.adapter_id === 'ollama') { adapter = fallback; continue; }
             } catch { /* Leave a visible provider wait when the configured fallback is unavailable. */ }
           }
-          const retry = failure.error.code === 'QUOTA_EXCEEDED';
-          runtime.tasks.wait(actor, lease, 'waiting_provider', `モデル応答を完了できませんでした (${failure.error.code})。${retry ? '1分後に接続先を再確認します。' : ''}`, retry);
+          const retry = failure.error.code === 'QUOTA_EXCEEDED' || !!lease.task.internal_autonomous;
+          runtime.tasks.wait(actor, lease, 'waiting_provider', `モデル応答を完了できませんでした (${failure.error.code})。${retry ? (lease.task.internal_autonomous ? '待機後に接続先を再確認します。' : '1分後に接続先を再確認します。') : ''}`, retry);
           return;
         }
         if (phaseTool) {

@@ -1,0 +1,102 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {Runtime} from '../src/runtime/runtime.ts';
+import {DatabaseSync} from 'node:sqlite';
+function fixture(t:{after(fn:()=>void):void}) {
+ const root=mkdtempSync(join(tmpdir(),'niwa-wakes-')),r=new Runtime(root),admin=r.administrator(),leader=r.bootstrap(admin),actor=r.agentSession(leader.id);
+ t.after(()=>{r.close();rmSync(root,{recursive:true,force:true});});
+ return {root,r,admin,leader,actor};
+}
+test('zero schedules produce one durable wake; rest and restart retain the cooldown without messages',t=>{
+ const {root,r,admin,leader,actor}=fixture(t),now=Date.now();
+ r.autonomousWakes.dispatch(admin,now);assert.equal(r.tasks.list(admin).length,0);
+ r.autonomousWakes.dispatch(admin,now+60000);assert.equal(r.schedules.list(admin).length,0);
+ const lease=r.tasks.claim(admin)!;assert.equal(lease.task.agent_id,leader.id);
+ assert.equal(r.tasks.workState(actor,lease).autonomous,true);
+ r.autonomousWakes.dispatch(admin,now+120000);assert.equal(r.tasks.list(admin).length,1);
+ r.tasks.rest(actor,lease);r.autonomousWakes.dispatch(admin,now+120001);
+ const state=r.autonomousWakes.list(admin)[0]!;assert.equal(state.reason,'休息中');assert.ok(Number(state.next_at)>=now+3500000);
+ assert.equal(r.messages(admin,lease.task.room_id).length,0);
+ const reopen=new Runtime(root);try{reopen.autonomousWakes.dispatch(reopen.administrator(),now+180000);assert.equal(reopen.tasks.list(reopen.administrator()).length,1);assert.deepEqual(reopen.autonomousWakes.list(reopen.administrator()),r.autonomousWakes.list(admin));}finally{reopen.close();}
+});
+test('off, pause, dormancy, deletion and archived rooms forbid new wakes; manual work remains runnable',t=>{
+ const {r,admin,leader,actor}=fixture(t),bot=r.createAgent(actor,'仲間'),room=r.createRoom(admin,'共有'),now=Date.now();
+ r.autonomousWakes.dispatch(admin,now);r.updateSettings(admin,{autonomous:false});r.autonomousWakes.dispatch(admin,now+60000);assert.equal(r.tasks.list(admin).length,0);
+ r.updateSettings(admin,{autonomous:true,paused:true});r.autonomousWakes.dispatch(admin,now+120000);assert.equal(r.tasks.list(admin).length,0);
+ r.updateSettings(admin,{paused:false});r.setDormant(admin,bot.id,true);r.organizeRoom(admin,room.id,{archived:true});r.autonomousWakes.dispatch(admin,now+180000);assert.equal(r.tasks.list(admin).length,0);
+ r.organizeRoom(admin,room.id,{archived:false});r.autonomousWakes.dispatch(admin,now+240000);assert.equal(r.tasks.list(admin).length,1);assert.equal(r.tasks.list(admin)[0]!.agent_id,leader.id);
+ r.updateSettings(admin,{autonomous:false});assert.equal(r.tasks.claim(admin),undefined);
+ const manual=r.tasks.create(admin,leader.id,room.id,'通常依頼');assert.equal(r.tasks.claim(admin)!.task.id,manual.id);
+});
+test('fair staggered opportunities, manual priority, and active-task recovery do not duplicate work',t=>{
+ const {root,r,admin,leader,actor}=fixture(t),other=r.createAgent(actor,'仲間'),room=r.createRoom(admin,'共有'),now=Date.now();
+ r.autonomousWakes.dispatch(admin,now);r.autonomousWakes.dispatch(admin,now+60000);r.autonomousWakes.dispatch(admin,now+60001);assert.equal(r.tasks.list(admin).length,1);
+ const manual=r.tasks.create(admin,leader.id,room.id,'急ぎの通常依頼');const first=r.tasks.claim(admin)!;assert.equal(first.task.id,manual.id);r.tasks.finish(actor,first,'完了');
+ const wake=r.tasks.claim(admin)!;r.autonomousWakes.dispatch(admin,now+120000);assert.equal(r.tasks.list(admin).filter(t=>t.agent_id===other.id).length,1);
+ const pending=r.tasks.claim(admin)!;assert.equal(pending.task.agent_id,other.id);
+ r.updateSettings(admin,{autonomous:false});assert.equal(r.tasks.active(actor,wake),false);assert.equal(r.tasks.active(r.agentSession(other.id),pending),false);
+ const reopened=new Runtime(root);try{const a=reopened.administrator();reopened.tasks.recover(a);reopened.autonomousWakes.dispatch(a,now+180000);assert.equal(reopened.tasks.list(a).length,3);reopened.updateSettings(a,{autonomous:true});assert.ok(reopened.tasks.claim(a));}finally{reopened.close();}
+});
+test('public wake context excludes private memory, history and artifacts; failures back off',t=>{
+ const {r,admin,leader,actor}=fixture(t),shared=r.createRoom(admin,'共有'),privateRoom=r.createRoom(admin,'個別',[leader.id]);
+ const msg=r.post(admin,privateRoom.id,'private-canary');r.remember(actor,msg.id,'private-canary');
+ r.tasks.create(admin,leader.id,privateRoom.id,'private-canary');r.tasks.finish(actor,r.tasks.claim(admin)!,'private-canary');
+ const now=Date.now();r.autonomousWakes.dispatch(admin,now);r.autonomousWakes.dispatch(admin,now+60000);const lease=r.tasks.claim(admin)!;
+ assert.equal(lease.task.room_id,shared.id);assert.ok(!JSON.stringify(r.context(actor,shared.id)).includes('private-canary'));assert.ok(!JSON.stringify(r.tasks.workState(actor,lease)).includes('private-canary'));
+ r.tasks.expire(admin,lease.task.deadline_at+1);r.autonomousWakes.dispatch(admin,Date.now());assert.equal(r.autonomousWakes.list(admin)[0]!.reason,'失敗後の待機');
+ r.autonomousWakes.dispatch(admin,now+120000);assert.equal(r.tasks.list(admin).length,2);
+});
+test('restored work disables fresh wakeups until explicit review, and deleted bots stay absent',t=>{
+ const {root,r,admin,actor}=fixture(t),bot=r.createAgent(actor,'削除対象'),now=Date.now();
+ r.autonomousWakes.dispatch(admin,now);
+ r.applyAgentDeletions(admin,[{id:bot.id,deleted_at:now}]);
+ assert.ok(!r.autonomousWakes.list(admin).some(row=>row.agent_id===bot.id));
+ r.tasks.protectRestoredWork(admin);assert.equal(r.settings(admin).autonomous,false);
+ r.autonomousWakes.dispatch(admin,now+60000);assert.equal(r.tasks.list(admin).length,0);
+ const db=new DatabaseSync(join(root,'control.db'),{readOnly:true});try{assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,36);}finally{db.close();}
+});
+
+test('a normal request interrupts an in-flight wake before claiming the same Bot again',async t=>{
+ const {r,admin,actor}=fixture(t),now=Date.now();
+ const {Scheduler}=await import('../src/runtime/scheduler.ts');
+ r.autonomousWakes.dispatch(admin,now-60001);r.autonomousWakes.dispatch(admin,now);
+ let started!:()=>void,aborted=false;const ready=new Promise<void>(resolve=>{started=resolve;});
+ const scheduler=new Scheduler(r,{async run(lease,signal){
+  if(lease.task.internal_autonomous){started();await new Promise<void>(resolve=>signal!.addEventListener('abort',()=>{aborted=true;resolve();},{once:true}));}
+  else r.tasks.finish(actor,lease,'通常依頼を処理');
+ }});
+ t.after(()=>scheduler.stop());scheduler.tick();await ready;
+ const initial=r.tasks.list(admin)[0]!;
+ const manual=r.tasks.create(admin,initial.agent_id,initial.room_id,'優先するユーザー依頼');
+ scheduler.tick();await new Promise(resolve=>setImmediate(resolve));assert.equal(aborted,true);
+ scheduler.tick();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(r.tasks.get(admin,manual.id).state,'completed');assert.equal(r.tasks.get(admin,initial.id).state,'queued');
+ assert.equal(r.tasks.list(admin).length,2);
+});
+
+test('wake and delegated work share a rolling call allowance and continue automatically instead of asking for count-limit approval',t=>{
+ const {root,r,admin,actor}=fixture(t),other=r.createAgent(actor,'担当'),now=Date.now();
+ r.autonomousWakes.dispatch(admin,now);r.autonomousWakes.dispatch(admin,now+60000);
+ const parent=r.tasks.claim(admin)!;
+ for(let i=0;i<23;i++)assert.equal(r.tasks.reserveModelCall(actor,parent),true);
+ r.tasks.delegate(actor,parent,other.id,'資料を確認');const child=r.tasks.claim(admin)!,childActor=r.agentSession(other.id);
+ assert.equal(r.tasks.reserveModelCall(childActor,child),true);assert.equal(r.tasks.reserveModelCall(childActor,child),false);
+ const waiting=r.tasks.get(admin,child.task.id);assert.equal(waiting.state,'waiting_provider');assert.ok(waiting.provider_retry_at!>now);assert.equal(r.approvals(admin).length,0);
+ r.updateSettings(admin,{autonomous:false});r.tasks.retryProviders(admin,waiting.provider_retry_at!);assert.equal(r.tasks.claim(admin),undefined);
+ r.updateSettings(admin,{autonomous:true});const resumed=r.tasks.claim(admin)!;assert.equal(resumed.task.id,child.task.id);
+ const db=new DatabaseSync(join(root,'control.db'));db.prepare('UPDATE autonomous_wakes SET budget_reset_at=?').run(Date.now()-1);db.close();
+ assert.equal(r.tasks.reserveModelCall(childActor,resumed),true);
+ assert.equal(r.tasks.list(admin).length,2);
+});
+test('pending external approval blocks new wakeups and does not become a repeated new task',t=>{
+ const {r,admin,actor}=fixture(t),now=Date.now();r.autonomousWakes.dispatch(admin,now);r.autonomousWakes.dispatch(admin,now+60000);
+ const lease=r.tasks.claim(admin)!;
+ assert.equal(r.authorizeAction(actor,lease,'0:0','人工送信',{url:'https://service.example/submit',method:'POST',body:'test'}),false);
+ r.autonomousWakes.dispatch(admin,now+86400000);assert.equal(r.tasks.list(admin).length,1);
+ assert.equal(r.tasks.get(admin,lease.task.id).state,'waiting_user');assert.equal(r.autonomousWakes.list(admin)[0]!.reason,'承認待ち');
+ const approval=r.approvals(admin)[0]!;r.decideApproval(admin,lease.task.id,false,String(approval.version));
+ r.autonomousWakes.dispatch(admin);assert.equal(r.tasks.list(admin).length,1);
+});

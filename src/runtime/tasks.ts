@@ -72,6 +72,10 @@ export class Tasks {
     }
     this.#event(id, state);
   }
+  queuedRequestAgents(actor: Actor): Set<string> {
+    this.#admin(actor);
+    return new Set(this.#db.prepare("SELECT DISTINCT agent_id FROM tasks WHERE state='queued' AND paused=0 AND internal_autonomous=0").all().map(row=>String(row.agent_id)));
+  }
   /** Claims one task atomically; waiting parents consume no execution slot. */
   claim(actor: Actor, excludedAgents: ReadonlySet<string> = new Set()): TaskLease | undefined {
     this.#admin(actor);
@@ -84,7 +88,7 @@ export class Tasks {
       const next = (this.#db.prepare(`SELECT t.id,t.agent_id FROM tasks t JOIN agents a ON a.id=t.agent_id
         WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS
           (SELECT 1 FROM tasks running WHERE running.agent_id=t.agent_id AND running.state='running')
-        ORDER BY t.updated_at,t.rowid`).all() as { id: string; agent_id: string }[]).find(task => !excludedAgents.has(task.agent_id) && this.#autonomyAllowed(task.id));
+        ORDER BY t.internal_autonomous,t.updated_at,t.rowid`).all() as { id: string; agent_id: string }[]).find(task => !excludedAgents.has(task.agent_id) && this.#autonomyAllowed(task.id));
       if (!next) return undefined;
       const token = randomUUID();
       this.#db.prepare("UPDATE tasks SET lease_token=?,attempt=attempt+1 WHERE id=?").run(token, next.id);
@@ -121,10 +125,10 @@ export class Tasks {
   #autonomyAllowed(taskId: string): boolean {
     if (this.#db.prepare('SELECT autonomous FROM settings WHERE id=1').get()!.autonomous === 1 &&
       !this.#db.prepare('SELECT 1 FROM tasks t JOIN room_preferences p ON p.room_id=t.room_id WHERE t.id=? AND p.archived=1').get(taskId)) return true;
-    return !this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id,conversation_reply) AS (
-      SELECT id,parent_id,conversation_reply FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id,t.conversation_reply FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
+    return !this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id,conversation_reply,internal_autonomous) AS (
+      SELECT id,parent_id,conversation_reply,internal_autonomous FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id,t.conversation_reply,t.internal_autonomous FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
       SELECT 1 FROM ancestors a LEFT JOIN schedule_runs r ON r.task_id=a.id LEFT JOIN schedules s ON s.id=r.schedule_id
-      WHERE a.conversation_reply=1 OR s.autonomous=1 LIMIT 1`).get(taskId);
+      WHERE a.conversation_reply=1 OR a.internal_autonomous=1 OR s.autonomous=1 LIMIT 1`).get(taskId);
   }
   suspendAutonomous(actor: Actor): void {
     this.#admin(actor);
@@ -135,7 +139,7 @@ export class Tasks {
     }
   }
   #autonomous(taskId: string): boolean {
-    return !!this.#db.prepare('SELECT 1 FROM tasks t LEFT JOIN schedule_runs r ON r.task_id=t.id LEFT JOIN schedules s ON s.id=r.schedule_id WHERE t.id=? AND (t.conversation_reply=1 OR s.autonomous=1)').get(taskId);
+    return !!this.#db.prepare('SELECT 1 FROM tasks t LEFT JOIN schedule_runs r ON r.task_id=t.id LEFT JOIN schedules s ON s.id=r.schedule_id WHERE t.id=? AND (t.conversation_reply=1 OR t.internal_autonomous=1 OR s.autonomous=1)').get(taskId);
   }
   rest(actor: Actor, lease: TaskLease): void {
     transaction(this.#db, () => {
@@ -168,6 +172,20 @@ export class Tasks {
   reserveModelCall(actor: Actor, lease: TaskLease): boolean {
     return transaction(this.#db, () => {
       const task = this.#owned(actor, lease); this.#access.room(actor, task.room_id);
+      const wake = this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id,internal_autonomous,agent_id) AS (
+        SELECT id,parent_id,internal_autonomous,agent_id FROM tasks WHERE id=? UNION
+        SELECT t.id,t.parent_id,t.internal_autonomous,t.agent_id FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
+        SELECT w.* FROM ancestors a JOIN autonomous_wakes w ON w.agent_id=a.agent_id WHERE a.internal_autonomous=1 LIMIT 1`).get(task.id);
+      if (wake) {
+        const now = Date.now(), reset = Number(wake.budget_reset_at), calls = reset <= now ? 0 : Number(wake.model_calls);
+        if (calls >= 24) {
+          this.wait(actor,lease,'waiting_provider','自発活動の時間枠の利用量に達したため休息中です。時間枠が戻ると自動で続けます。',true);
+          this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(reset,task.id);
+          return false;
+        }
+        this.#db.prepare('UPDATE autonomous_wakes SET model_calls=?,budget_reset_at=? WHERE agent_id=?')
+          .run(calls+1,reset<=now?now+3600000:reset,wake.agent_id!);
+      }
       const row = this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id) AS (
         SELECT id,parent_id FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id FROM tasks t JOIN ancestors a ON t.id=a.parent_id
       ) SELECT s.* FROM ancestors a JOIN schedule_runs r ON r.task_id=a.id JOIN schedules s ON s.id=r.schedule_id`).get(task.id);
@@ -191,6 +209,9 @@ export class Tasks {
     const memory = this.#access.memory(actor, task.agent_id);
     const plan = memory.prepare('SELECT revision,remaining FROM task_plans WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)').get(task.id);
     return {
+      recent_autonomous_work: this.#autonomous(task.id) ? this.#db.prepare(`SELECT t.id,t.room_id,substr(t.prompt,1,300) AS prompt,t.state,substr(t.result,1,1000) AS result,t.wait_reason
+        FROM tasks t JOIN rooms r ON r.id=t.room_id WHERE t.agent_id=? AND t.id<>? AND r.visibility='shared'
+        AND r.id NOT IN (SELECT id FROM deleted_content WHERE kind='room') ORDER BY t.updated_at DESC LIMIT 8`).all(task.agent_id,task.id) : [],
       coordination: this.#db.prepare('SELECT * FROM task_coordination WHERE task_id=?').get(task.id) ?? {revision:0},
       task: publicTask(task), runtime_paused: this.#paused(), autonomous: this.#autonomous(task.id),
       remaining_plan: { revision: plan ? Number(plan.revision) : 0, remaining: plan ? JSON.parse(String(plan.remaining)) as string[] : [] },
@@ -392,7 +413,7 @@ export class Tasks {
     text(reason, 1000);
     transaction(this.#db, () => {
       this.#owned(actor, lease); this.#change(lease.task.id, state, null, reason);
-      if (retryProvider) this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(Date.now() + 60_000, lease.task.id);
+      if (retryProvider) this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(Date.now() + (lease.task.internal_autonomous ? Math.min(60,15*2**Math.min(lease.task.attempt-1,2))*60_000 : 60_000), lease.task.id);
     });
   }
   retryProviders(actor: Actor, now = Date.now()): void {
@@ -547,7 +568,7 @@ export class Tasks {
   protectRestoredWork(actor: Actor): void {
     this.#admin(actor);
     transaction(this.#db, () => {
-      this.#db.exec('INSERT OR IGNORE INTO restored_tasks SELECT id FROM tasks;');
+      this.#db.exec('INSERT OR IGNORE INTO restored_tasks SELECT id FROM tasks; UPDATE settings SET autonomous=0 WHERE id=1;');
       this.#db.prepare("UPDATE schedules SET enabled=0,wait_reason=? WHERE deleted=0")
         .run('バックアップから復元した予定です。実行済みの履歴と次回日時を確認してから再開してください。');
     });

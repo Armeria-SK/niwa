@@ -54,6 +54,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       if (!workspace) throw new DomainError('conflict', 'Workspace service unavailable');
       return workspace.download(url.searchParams.get('path') ?? ''); } },
     { method: 'POST', path: /^\/api\/agents$/, schema: object({ id, name: Type.String({ minLength: 1, maxLength: 100 }), profile: creationProfileSchema }), run: (_m, b) => runtime.requestMember(admin, b.id as string, b.name as string, b.profile as Record<string, unknown>) },
+    { method: 'GET', path: /^\/api\/autonomy$/, run: () => runtime.autonomousWakes.list(admin) },
     { method: 'GET', path: /^\/api\/schedules$/, run: () => runtime.schedules.list(admin) },
     { method: 'DELETE', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, run: m => { runtime.schedules.remove(admin, m[1]!); return { ok: true }; } },
     { method: 'POST', path: /^\/api\/schedules$/, schema: object({ id, ...scheduleFields }),

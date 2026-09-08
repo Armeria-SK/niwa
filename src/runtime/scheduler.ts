@@ -10,6 +10,7 @@ export class Scheduler {
   #jobs = new Map<string, { actor: Actor; lease: TaskLease; abort: AbortController; done: Promise<void> }>();
   #timer: ReturnType<typeof setInterval> | undefined;
   #stopped = false;
+  #nextWakeCheck = 0;
 
   constructor(runtime: Runtime, runner: Pick<TurnRunner, 'run'>) {
     this.#runtime = runtime; this.#admin = runtime.administrator(); this.#runner = runner;
@@ -26,7 +27,15 @@ export class Scheduler {
     tasks.expire(this.#admin);
     tasks.retryProviders(this.#admin);
     this.#runtime.schedules.dispatch(this.#admin);
+    if (Date.now() >= this.#nextWakeCheck) {
+      this.#runtime.autonomousWakes.dispatch(this.#admin);
+      this.#nextWakeCheck = Date.now() + 1000;
+    }
+    const requested = tasks.queuedRequestAgents(this.#admin);
     for (const job of this.#jobs.values()) {
+      if (job.lease.task.internal_autonomous && requested.has(job.lease.task.agent_id) && tasks.active(job.actor,job.lease)) {
+        tasks.interrupt(this.#admin,job.lease);
+      }
       if (!tasks.active(job.actor, job.lease)) job.abort.abort();
     }
     // An invalidated lease can still have a model request unwinding. Do not overlap it.

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Avatar, Switch, Segmented } from '../components.jsx';
 import { THEMES } from '../data.js';
+import { AutonomyStatus } from '../AutonomyStatus.jsx';
 import { BackupStatus } from '../BackupStatus.jsx';
 import { SubscriptionConnection } from '../SubscriptionConnection.jsx';
 import { FallbackConnection } from '../FallbackConnection.jsx';
@@ -35,7 +36,8 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
       </section> : null}
       {tab === 'activity' ? <section className="settings-section"><h2>Botたちの活動</h2><p>人数と同時に活動できる数は、別々に設定できます。</p>
         <div className="pause-setting"><div><strong>{paused ? '活動を一時停止しています' : 'Botたちは活動中です'}</strong><small>一時停止中も、会話や設定を確認できます。</small></div><button className="button secondary" type="button" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? '再開' : '一時停止'}</button></div>
-        <Switch checked={draft.autonomous} onChange={value => change('autonomous', value)} label="自発的な活動を許可する" description="保存すると、活動の予定で設定した自発活動と、その委任先に適用します。オフでも通常の依頼は続けられます。" />
+        <Switch checked={draft.autonomous} onChange={value => change('autonomous', value)} label="自発的な活動を許可する" description="保存すると、予定登録なしでもBotが順番に活動を選べます。必要がなければ休息します。オフでも通常の依頼は続けられます。" />
+        <AutonomyStatus />
         <label className="field narrow-field"><span>リーダーが生成できるBotの数</span><div className="input-with-unit"><input type="number" min="1" max="100" value={draft.maxMembers} onChange={e => change('maxMembers', e.target.value)} required /><span>体</span></div><small>休眠中も含みます。リーダーは別枠です。</small></label>
         <Switch checked={draft.unlimited} onChange={value => change('unlimited', value)} label="同時実行数を制限しない" description="接続先やマシンの実行上限には従います。" />
         {!draft.unlimited ? <label className="field narrow-field"><span>同時実行数</span><div className="input-with-unit"><input type="number" min="1" max="100" value={draft.concurrent} onChange={e => change('concurrent', e.target.value)} required /><span>件</span></div></label> : null}
