@@ -61,3 +61,33 @@ test('leader escalation does not disclose a private task to a nonparticipant',t=
  assert.throws(()=>r.coordination(r.agentSession(leader.id),room.id),/unavailable/);
  assert.equal(r.messages(admin,room.id).length,1);
 });
+
+test('planned next owners never dispatch work; one explicit fixed-version handoff completes revision, review and freeze',t=>{
+ const {r,admin,leader,actor,bot,other,room}=fixture(t);
+ const started=Date.now();r.tasks.create(admin,leader.id,room.id,'期限：20分。文書を作成し確認に渡す');const lease=r.tasks.claim(admin)!;
+ assert.ok(lease.task.deadline_at>=started+1199000 && lease.task.deadline_at<=Date.now()+1200000);
+ const fields={completion_condition:'固定版の内容確認',stop_condition:'入力不足',blocker:'',waiting_for:null,next_agent_id:bot.id,notify:'involved' as const};
+ r.updateCoordination(actor,lease,{...fields,expected_revision:0});r.updateCoordination(actor,lease,{...fields,next_agent_id:other.id,expected_revision:1});r.updateCoordination(actor,lease,{...fields,expected_revision:2});
+ assert.equal(r.tasks.list(admin).length,1);assert.equal(r.messages(admin,room.id).length,0);
+ assert.equal(r.tasks.acknowledgeWork(actor,lease).state,'running');assert.equal(r.tasks.get(admin,lease.task.id).state,'running');
+ assert.throws(()=>r.handoff(actor,lease,'内容を確認する'),/not ready/);
+ const original=r.createArtifact(actor,room.id,'handoff.txt','文書','人工の受入','version one',lease.task.id);
+ const first=r.artifactVersions.inspect(actor,original);
+ const revised=r.artifactVersions.revise(actor,original,first.sha256,'version two',lease.task.id);
+ assert.throws(()=>r.reviewReady(actor,lease,original,first.sha256),/latest/);
+ assert.throws(()=>r.reviewReady(actor,lease,revised.id,'0'.repeat(64)),/latest/);
+ r.reviewReady(actor,lease,revised.id,revised.sha256);assert.equal(r.tasks.list(admin).length,1);
+ const handoff=r.handoff(actor,lease,'固定版を読み、値がversion twoであることを確認する');assert.equal(r.tasks.list(admin).length,2);
+ const child=r.tasks.claim(admin)!;assert.equal(child.task.id,handoff.task_id);assert.equal(child.task.agent_id,bot.id);
+ const childActor=r.agentSession(bot.id);r.tasks.acknowledgeWork(childActor,child);
+ const inspected=r.artifactVersions.reference(childActor,revised.id,child.task.id);assert.equal(inspected.content,'version two');
+ assert.match(r.messages(admin,room.id)[0]!.body,/review_ready/);assert.ok(r.messages(admin,room.id)[0]!.body.includes(revised.sha256));
+ r.updateCoordination(childActor,child,{...fields,next_agent_id:leader.id,expected_revision:0});assert.equal(r.tasks.list(admin).length,2);
+ r.artifactVersions.review(childActor,revised.id,revised.sha256,'approved','version twoを確認');r.tasks.finish(childActor,child,'固定版の確認完了');
+ const resumed=r.tasks.claim(admin)!;r.artifactVersions.freeze(actor,revised.id,revised.sha256);
+ assert.equal(r.handoff(actor,resumed,'同じ成果物の重複依頼').task_id,child.task.id);assert.equal(r.tasks.list(admin).length,2);
+ assert.equal(r.artifactVersions.inspect(actor,original).content,'version one');assert.equal(r.artifactVersions.inspect(actor,revised.id).frozen,1);
+ r.tasks.finish(actor,resumed,'改訂・レビュー・凍結まで完了');
+ assert.ok(r.tasks.create(admin,leader.id,room.id,'20分の動画の内容を調べる').deadline_at>Date.now()+86400000);
+ assert.ok(r.tasks.create(admin,leader.id,room.id,'0.5時間以内の表現を確認').deadline_at>Date.now()+86400000);
+});

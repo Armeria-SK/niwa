@@ -31,6 +31,9 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  task_review_ready: {description:'自分の仕事で作成した最新成果物をreview_ready（受け渡し準備完了）にする。固定IDとSHA256が必要。これだけでは他Botを起動しない。',schema:object({artifact_id:short(),sha256:Type.String({pattern:'^[a-f0-9]{64}$'})})},
+  task_handoff: {description:'準備済みの固定成果物を、予定した次担当に明示的に渡して結果を待つ。task_review_readyの登録と具体的な依頼内容が必要。1タスクからの受け渡しは1回だけ。単独で呼ぶ。',schema:object({prompt:Type.String({minLength:1,maxLength:17000})})},
+  task_acknowledge: {description:'実作業の依頼を受領済みとして状態だけ記録する。本文・別Botの起動・作業の完了は発生しない。そのまま作業を続ける。',schema:object({})},
   task_timebox: {description:'現在の仕事と子タスクに今からの制限秒数（1〜86400）を設定する。既存の期限を延長できない。期限で実行を停止し、時間切れとして保存する。',schema:object({seconds:Type.Integer({minimum:1,maximum:86400})})},
   coordination_digest: {description:'この会話の直近24時間の保存成果物、送信記録と結果不明、承認待ち、ブロッカー、期限超過を読む。売上・入金・顧客接点の実績は未検証。発言数や自己申告を実績と数えない。',schema:object({})},
   artifact_inspect: {description:'この会話の成果物の固定ID、SHA256、版一覧、確認記録、凍結状態を読む。本文はhistory_readで確認する。',schema:object({id:short()})},
@@ -38,7 +41,7 @@ const definitions = {
   artifact_review: {description:'他Botの成果物の内容を確認し、固定IDとSHA256に対して確認済み/要修正を記録する。自己承認や外部操作の承認には使えない。',schema:object({id:short(),expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'}),verdict:Type.Union([Type.Literal('approved'),Type.Literal('changes_requested')]),note:Type.String({minLength:1,maxLength:1000})})},
   artifact_freeze: {description:'他者による確認済み記録があり未解決の要修正がない、自分の成果物の固定版を凍結する。凍結後は改訂できない。',schema:object({id:short(),expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'})})},
   coordination_read: {description:'この会話の担当・親子タスク・完成条件・待ち理由・次担当・成果物参照を読む。他の会話、私的記憶、思考過程は含まない。',schema:object({})},
-  task_status_update: {description:'自分の仕事の完成条件・停止条件・ブロッカー・対応待ち相手・次担当を更新する。expected_revisionはwork_state.coordinationかcoordination_readから取得。blockerがあれば仕事を保留し、再開操作まで再試行しない。notify=involvedは依頼元/対応待ち相手/次担当だけに阻害理由/受け渡し先の変更を通知、leaderはブロッカー通知に参加できるリーダーも含む。noneは通知なし。waiting_forとnext_agent_idはBot IDまたはadministratorまたはnull。単独で呼ぶ。',schema:coordinationUpdateSchema},
+  task_status_update: {description:'自分の仕事の完成条件・停止条件・ブロッカー・対応待ち相手・次担当を更新する。expected_revisionはwork_state.coordinationかcoordination_readから取得。blockerがあれば仕事を保留し、再開操作まで再試行しない。notify=involvedは依頼元/対応待ち相手/次担当だけに阻害理由の変更を通知、leaderはブロッカー通知に参加できるリーダーも含む。noneは通知なし。waiting_forとnext_agent_idはBot IDまたはadministratorまたはnull。next_agent_idは次担当の予定表示だけで、タスクを生成しない。単独で呼ぶ。',schema:coordinationUpdateSchema},
   conversation_ack: {description:'Botからの会話に新情報のない受領だけを返すとき、本文投稿や相手の再起動なしで受領済みにする。作業の委任を受領だけで完了にすることはできない。成果・質問・判断変更があれば通常の返答を使う。単独で呼ぶ。',schema:object({})},
   browser_request_submit: { description: 'snapshot.requests内のrequest_idとformをそのまま指定し、保留中の同一サイトGET/JSON POSTを管理者の正確な承認後に送信する。成功したJSON応答を保留中のページへ戻す。最大4件、匿名HTTPSのみ。ログイン・任意ヘッダー・別サイト通信は非対応。不明結果を別の呼出しで再送しない。', schema: requestApprovalSchema },
   web_download: { description: '公開URLのファイルを最大8MiBまで匿名取得し、指定した共有相対パスへ保存する。実行・展開はしない。既存更新には現在のexpected_revisionが必要、新規はnull。共有会話限定。認証付きURLや秘密を含むURLは渡さない。', schema: object({ url: Type.String({ minLength: 1, maxLength: 4096 }), path: Type.String({ minLength: 1, maxLength: 512 }), expected_revision: Type.Union([Type.Null(), Type.String({ pattern: '^[a-f0-9]{64}$' })]) }) },
@@ -124,6 +127,9 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
           if(call.name==='artifact_freeze') return runtime.artifactVersions.freeze(actor,args.id!,args.expected_sha256!);
           const {content:_content,...metadata}=runtime.artifactVersions.reference(actor,args.id!,lease.task.id);return JSON.parse(JSON.stringify(metadata));
         }
+        case 'task_acknowledge': return runtime.tasks.acknowledgeWork(actor,lease);
+        case 'task_review_ready': return runtime.reviewReady(actor,lease,args.artifact_id!,args.sha256!);
+        case 'task_handoff': return runtime.handoff(actor,lease,args.prompt!);
         case 'coordination_read': return {tasks:JSON.parse(JSON.stringify(runtime.coordination(actor,lease.task.room_id)))};
         case 'coordination_digest': return JSON.parse(JSON.stringify(runtime.coordinationDigest(actor,lease.task.room_id)));
         case 'task_timebox': return runtime.tasks.timebox(actor,lease,Number(call.arguments.seconds));

@@ -46,6 +46,8 @@ export class Tasks {
     this.#access.room(actor, roomId);
     check(this.#access.participant(agentId, roomId), 'forbidden', 'Recipient cannot access this conversation');
     text(prompt);
+    const duration=prompt.match(/(?:制限時間|タイムボックス|期限)[:：\s]*(\d{1,4})\s*(秒|分|時間)/) ?? prompt.match(/(?<![\d.．-])(\d{1,4})\s*(秒|分|時間)(?:以内|で)/);
+    if(duration) {const seconds=Number(duration[1])*({秒:1,分:60,時間:3600}[duration[2]!] ?? 0);if(seconds>0 && seconds<=86400) deadlineAt=Math.min(deadlineAt,Date.now()+seconds*1000);}
     check(Number.isSafeInteger(deadlineAt) && deadlineAt > Date.now(), 'invalid', 'Task deadline must be in the future');
     return transaction(this.#db, () => {
       if (principal.kind === 'agent') check(!this.#paused(), 'forbidden', 'Runtime is paused');
@@ -141,6 +143,11 @@ export class Tasks {
       check(this.#autonomous(task.id), 'forbidden', 'Only autonomous work can choose rest');
       this.#change(task.id, 'completed', '今回は休息しました。', null, false);
     });
+  }
+  acknowledgeWork(actor:Actor,lease:TaskLease) {
+    const task=this.#owned(actor,lease);
+    if(!this.#db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='work_acknowledged'").get(task.id)) this.#event(task.id,'work_acknowledged');
+    return {acknowledged:true,state:task.state};
   }
   /** Acknowledgment ends a conversational reply, never an assigned deliverable. */
   acknowledge(actor: Actor, lease: TaskLease): void {

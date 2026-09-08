@@ -38,11 +38,11 @@ export function CoordinationBoard({roomId,members,onClose,onArtifact}) {
     <p>{task.prompt}</p>
     <dl><dt>依頼元</dt><dd>{name(task.requester_id)}{task.parent_id ? ` · 親の依頼：${byId.get(task.parent_id)?.prompt || '以前の依頼'}` : ''}</dd>
      <dt>対応待ち</dt><dd>{task.waiting_for ? name(task.waiting_for) : children.length ? [...new Set(children.map(child=>name(child.agent_id)))].join('・') : task.wait_reason || 'なし'}</dd>
-     <dt>次に返す相手</dt><dd>{name(task.next_agent_id || task.requester_id)}</dd>
+     <dt>予定する次担当</dt><dd>{name(task.next_agent_id)}</dd><dt>受け渡し</dt><dd>{task.handoff_child_id ? '配送済み' : task.ready_artifact_id ? '準備完了（明示的な配送待ち）' : '未成立（準備完了の成果物なし）'}</dd>{task.ready_artifact_id ? <><dt>固定版</dt><dd>{task.ready_artifact_id}<br/>{task.ready_sha256}</dd></> : null}{task.work_acknowledged ? <><dt>受領状態</dt><dd>受領済み{task.state==='running'?'・作業中':''}</dd></> : null}
      {task.blocker ? <><dt>阻害理由</dt><dd>{task.blocker}</dd></> : null}
      <dt>完成条件</dt><dd>{task.completion_condition || '未設定'}</dd><dt>停止条件</dt><dd>{task.stop_condition || '未設定'}</dd>
      <dt>開始 / 期限</dt><dd>{date(task.started_at)} / {date(task.deadline_at)}</dd>
-     <dt>成果物の記録</dt><dd>{task.artifact_id ? <button className="text-button" onClick={()=>onArtifact(task.artifact_id)}>最新の成果物を見る（{date(task.last_artifact_at)}）</button> : 'この依頼に紐づく成果物はまだありません'}</dd>
+     {!['completed','failed','cancelled'].includes(task.state) && task.deadline_at<8_640_000_000_000_000 ? <><dt>残り時間</dt><dd>{task.deadline_at>Date.now()?`${Math.ceil((task.deadline_at-Date.now())/60000)}分`:'期限超過'}</dd></> : null}<dt>成果物の記録</dt><dd>{task.artifact_id ? <button className="text-button" onClick={()=>onArtifact(task.artifact_id)}>最新の成果物を見る（{date(task.last_artifact_at)}）</button> : 'この依頼に紐づく成果物はまだありません'}</dd>
      <dt>外部操作</dt><dd>{task.external_operations}件の実行記録（成功とは限りません）</dd>
     </dl>
     {task.approval_pending ? <p>外部操作の承認は「活動」の「承認待ち」で内容を確認してください。</p> : (task.paused || ['waiting_user','waiting_provider'].includes(task.state)) ? <form className="form-stack" onSubmit={e=>{e.preventDefault();void resume(task);}}><label className="field"><span>対応内容・追加指示</span><textarea rows={2} maxLength={2000} value={answers[task.id] || ''} onChange={e=>setAnswers(current=>({...current,[task.id]:e.target.value}))}/></label><button className="button secondary" disabled={busy}>対応して再開</button></form> : null}

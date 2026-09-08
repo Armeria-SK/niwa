@@ -71,12 +71,12 @@ test('schema31 upgrade retains existing work, content and settings without backf
  r.post(actor,room.id,'人工の保存済み会話');r.tasks.wait(actor,lease,'waiting_user','人工の入力待ち');
  r.close();
  const db=new DatabaseSync(join(root,'control.db'));
- db.exec('DROP TABLE external_operation_labels; DROP TABLE artifact_references; DROP TABLE artifact_reviews; DROP TABLE artifact_versions; DROP TABLE task_coordination; DROP TABLE message_acknowledgments; ALTER TABLE tasks DROP COLUMN source_message_id; PRAGMA user_version=31;');
+ db.exec('DROP TABLE task_handoffs; DROP TABLE external_operation_labels; DROP TABLE artifact_references; DROP TABLE artifact_reviews; DROP TABLE artifact_versions; DROP TABLE task_coordination; DROP TABLE message_acknowledgments; ALTER TABLE tasks DROP COLUMN source_message_id; PRAGMA user_version=31;');
  const tables=['settings','tasks','messages','artifacts','external_operations','approval_requests','schedules'];
  const snapshot=(database:InstanceType<typeof DatabaseSync>)=>tables.map(table=>createHash('sha256').update(JSON.stringify(database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map(row=>{const {source_message_id,...original}=row;return original;}))).digest('hex'));
  const before=snapshot(db);db.close();const reopened=new Runtime(root),after=new DatabaseSync(join(root,'control.db'));
  try{
-  assert.equal(after.prepare('PRAGMA user_version').get()!.user_version,33);assert.deepEqual(snapshot(after),before);
+  assert.equal(after.prepare('PRAGMA user_version').get()!.user_version,34);assert.deepEqual(snapshot(after),before);
   assert.equal(reopened.coordination(reopened.administrator(),room.id)[0]!.blocker,'');
   assert.equal(reopened.tasks.get(reopened.administrator(),lease.task.id).state,'waiting_user');
  }finally{after.close();reopened.close();}

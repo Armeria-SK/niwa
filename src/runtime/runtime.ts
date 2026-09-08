@@ -12,6 +12,7 @@ import { controlSchema, memoryMigrations } from '../storage/schema.ts';
 import { taskSchema } from '../storage/task-schema.ts';
 import { Tasks } from './tasks.ts';
 import { coordinationSchema } from '../storage/coordination-schema.ts';
+import { handoffSchema } from '../storage/handoff-schema.ts';
 import { artifactVersionSchema } from '../storage/artifact-version-schema.ts';
 import { ArtifactVersions } from './artifact-versions.ts';
 import { coordinationUpdateSchema, isAcknowledgment, type CoordinationUpdate } from '../domain/coordination.ts';
@@ -71,7 +72,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -631,6 +632,10 @@ export class Runtime {
       (SELECT artifact_id FROM updates WHERE task_id=t.id AND artifact_id IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1) AS artifact_id,
       EXISTS(SELECT 1 FROM approval_requests WHERE task_id=t.id AND status='pending') AS approval_pending,
       (SELECT count(*) FROM external_operations WHERE task_id=t.id) AS external_operations,
+      EXISTS(SELECT 1 FROM task_events WHERE task_id=t.id AND kind='work_acknowledged') AS work_acknowledged,
+      (SELECT artifact_id FROM task_handoffs WHERE task_id=t.id) AS ready_artifact_id,
+      (SELECT sha256 FROM task_handoffs WHERE task_id=t.id) AS ready_sha256,
+      (SELECT child_id FROM task_handoffs WHERE task_id=t.id) AS handoff_child_id,
       EXISTS(SELECT 1 FROM task_events WHERE task_id=t.id AND kind='acknowledged') AS acknowledgment_only
       FROM tasks t LEFT JOIN task_coordination c ON c.task_id=t.id WHERE t.room_id=? ORDER BY t.state IN ('completed','cancelled','failed'),t.updated_at DESC,t.rowid DESC LIMIT 100`).all(roomId);
   }
@@ -651,6 +656,32 @@ export class Runtime {
       approvals:Number(pending.approvals||0),blockers:Number(pending.blockers||0),overdue:Number(pending.overdue||0)+Number(expired),
       revenue:'unverified',customer_contacts:'unverified',operation_note:'送信の実行記録です。記録済みでも業務の成功や入金を意味しません。導入以前の未分類の操作は含みません。'};
   }
+  reviewReady(actor: Actor, lease: TaskLease, artifactId:string, sha256:string) {
+    check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
+    const artifact=this.artifactVersions.inspect(actor,artifactId);
+    check(artifact.room_id===lease.task.room_id && artifact.author_id===lease.task.agent_id,'forbidden','Use your artifact in this conversation');
+    check(artifact.sha256===sha256 && artifact.versions[0]!.id===artifactId,'conflict','Use the latest fixed artifact version');
+    check(this.#db.prepare('SELECT 1 FROM updates WHERE task_id=? AND artifact_id=?').get(lease.task.id,artifactId),'invalid','Artifact must belong to this task');
+    check(!this.#db.prepare('SELECT child_id FROM task_handoffs WHERE task_id=? AND child_id IS NOT NULL').get(lease.task.id),'conflict','This task has already handed off its artifact');
+    this.#db.prepare('INSERT INTO task_handoffs VALUES (?,?,?,NULL) ON CONFLICT(task_id) DO UPDATE SET artifact_id=excluded.artifact_id,sha256=excluded.sha256').run(lease.task.id,artifactId,sha256);
+    return {phase:'review_ready',artifact_id:artifactId,sha256};
+  }
+  handoff(actor: Actor, lease: TaskLease, prompt:string) {
+    check(this.tasks.active(actor,lease),'conflict','Task is no longer active');text(prompt,17_000);
+    return transaction(this.#db,()=>{
+      const ready=this.#db.prepare('SELECT * FROM task_handoffs WHERE task_id=?').get(lease.task.id);
+      check(ready,'conflict','Handoff not ready: register a finished artifact and exact SHA256 first');
+      if(ready.child_id) return {task_id:ready.child_id,reused:true};
+      const next=this.#db.prepare('SELECT next_agent_id FROM task_coordination WHERE task_id=?').get(lease.task.id)?.next_agent_id;
+      check(typeof next==='string' && next!=='administrator','invalid','Choose the next Bot before handing off');
+      const item=this.artifactVersions.inspect(actor,String(ready.artifact_id));
+      check(item.sha256===ready.sha256 && item.versions[0]!.id===ready.artifact_id,'conflict','Prepared artifact changed; prepare the latest version');
+      const child=this.tasks.delegate(actor,lease,next,`成果物の受け渡し\n親タスク：${lease.task.id}\n親の段階：review_ready\n成果物ID：${ready.artifact_id}\nSHA-256：${ready.sha256}\n依頼内容：${prompt}`);
+      this.#db.prepare('UPDATE task_handoffs SET child_id=? WHERE task_id=?').run(child.id,lease.task.id);
+      this.#db.prepare('INSERT INTO artifact_references VALUES (?,?,?,?) ON CONFLICT DO NOTHING').run(child.id,ready.artifact_id!,ready.sha256!,Date.now());
+      return {task_id:child.id,artifact_id:ready.artifact_id,sha256:ready.sha256};
+    });
+  }
   updateCoordination(actor: Actor, lease: TaskLease, input: CoordinationUpdate) {
     check(Value.Check(coordinationUpdateSchema,input),'invalid','Invalid task coordination');
     check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
@@ -668,17 +699,15 @@ export class Runtime {
       const revision=input.expected_revision+1;
       this.#db.prepare('INSERT INTO task_coordination VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET revision=excluded.revision,completion_condition=excluded.completion_condition,stop_condition=excluded.stop_condition,blocker=excluded.blocker,waiting_for=excluded.waiting_for,next_agent_id=excluded.next_agent_id,updated_at=excluded.updated_at')
         .run(lease.task.id,revision,input.completion_condition,input.stop_condition,input.blocker,input.waiting_for,input.next_agent_id,Date.now());
-      const blockerChanged=!!input.blocker && (input.blocker!==old?.blocker || input.waiting_for!==old?.waiting_for || input.next_agent_id!==old?.next_agent_id);
-      const handoffChanged=!input.blocker && !!input.next_agent_id && input.next_agent_id!==old?.next_agent_id;
-      if(input.notify!=='none' && (blockerChanged || handoffChanged)) {
+      const blockerChanged=!!input.blocker && (input.blocker!==old?.blocker || input.waiting_for!==old?.waiting_for);
+      // A planned recipient is metadata, never permission to start another Bot.
+      if(input.notify!=='none' && blockerChanged) {
         const ids=new Set([lease.task.requester_id,input.waiting_for,input.next_agent_id]);
         if(input.notify==='leader' && input.blocker) for(const member of this.agents(actor)) if(member.role==='leader') ids.add(member.id);
         const recipients=[...ids].filter((id):id is string=>!!id && id!=='administrator' && id!==lease.task.agent_id)
           .filter(id=>{try{this.#room(this.agentSession(id),lease.task.room_id);return true;}catch{return false;}});
         const names=recipients.map(id=>`@${this.#agent(id).name}`).join(' ');
-        const body=`${names ? names+'\n' : ''}`+(input.blocker
-          ? `作業を保留しています：${input.blocker}\n再開に必要な対応：${input.waiting_for==='administrator'?'管理者':this.#agent(input.waiting_for!).name}`
-          : `次の受け渡し先を設定しました：${input.next_agent_id==='administrator'?'管理者':this.#agent(input.next_agent_id!).name}\n受領だけの返信は不要です。実際の依頼・成果物を確認してください。`);
+        const body=`${names ? names+'\n' : ''}作業を保留しています：${input.blocker}\n親タスク：${lease.task.id}\n状態：waiting_user\n成果物：通知だけでは受け渡しません\n必要な対応：${input.waiting_for==='administrator'?'管理者':this.#agent(input.waiting_for!).name} — ${input.blocker}`;
         const message=this.post(actor,lease.task.room_id,body);
         for(const id of recipients) this.tasks.address(actor,lease,id,body,message.id);
       }
