@@ -70,6 +70,16 @@ try {
   renameSync(join(stage,'receipt.json'),`${root}/runtime/executor/state/browser-acceptance.json`);
   console.log('PASS: browser rendering, resource policy, form preparation and cleanup; acceptance receipt saved');
   console.log('Browser is not enabled in the application yet; no external form was sent.');
+} catch (error) {
+  if (name) {
+    console.error('Browser acceptance failed; collecting startup diagnostics from the same image.');
+    if (session) { await session.close(); session = undefined; }
+    try {
+      execFileSync(process.execPath,[`${root}/deploy/ubuntu/diagnose-browser.mjs`,image],
+        {cwd:home,env,stdio:'inherit',timeout:70000});
+    } catch { console.error('Startup diagnosis did not pass; see the CDP stage and Chromium error above.'); }
+  }
+  throw error;
 } finally {
   if(session) await session.close();
   if(name) podman('rm','--force','--ignore',name);

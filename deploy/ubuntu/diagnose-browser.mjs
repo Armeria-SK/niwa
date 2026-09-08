@@ -24,30 +24,45 @@ const profile='/tmp/niwa-browser';
 const child=spawn('/usr/bin/chromium',['--headless=new','--remote-debugging-pipe','--user-data-dir='+profile,'--no-first-run',
  '--no-default-browser-check','--disable-background-networking','--disable-extensions','about:blank'],
  {stdio:['ignore','ignore','pipe','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:profile,LANG:'C.UTF-8'}});
-let stderr='',frame='',ready=false;
+let stderr='',ready=false,lastMethod='spawn';
 child.stderr.on('data',chunk=>{if(stderr.length<16384) stderr+=chunk.toString().slice(0,16384-stderr.length)});
-child.stdio[3].on('error',()=>{}); child.stdio[4].on('error',()=>{});
-const timer=setTimeout(()=>child.kill('SIGKILL'),10000);
-child.stdio[4].on('data',chunk=>{
- frame+=chunk.toString();
- for(let end=frame.indexOf('\0');end!==-1;end=frame.indexOf('\0')) {
-  const raw=frame.slice(0,end); frame=frame.slice(end+1);
-  try {const value=JSON.parse(raw); if(value.id===1 && value.result) {
-    ready=true; console.log('PASS: Chromium CDP '+value.result.product);
-    child.stdio[3].write(JSON.stringify({id:2,method:'Browser.close'})+'\0');
-  }} catch{}
- }
- if(frame.length>65536) child.kill('SIGKILL');
-});
+const timer=setTimeout(()=>child.kill('SIGKILL'),45000);
 child.once('error',error=>{clearTimeout(timer); console.error('Chromium spawn failed: '+error.code);process.exitCode=1});
 child.once('exit',(code,signal)=>{
- clearTimeout(timer); console.log('Chromium exit '+JSON.stringify({code,signal,ready}));
+ clearTimeout(timer); console.log('Chromium exit '+JSON.stringify({code,signal,ready,lastMethod}));
  if(!ready) {console.error(stderr);process.exitCode=1;}
 });
-child.stdio[3].write(JSON.stringify({id:1,method:'Browser.getVersion'})+'\0');
+(async()=>{
+ const {CdpPipe}=await import('/app/dist/tools/browser/cdp.js');
+ const {BrowserPage}=await import('/app/dist/tools/browser/page.js');
+ const {BrowserRequests}=await import('/app/dist/tools/browser/requests.js');
+ const cdp=new CdpPipe(child.stdio[4],child.stdio[3]);
+ const originalSend=cdp.send.bind(cdp);
+ cdp.send=async(method,params,options)=>{
+  lastMethod=method; console.log('CDP begin '+method);
+  const value=await originalSend(method,params,{...options,timeoutMs:5000});
+  console.log('CDP ready '+method); return value;
+ };
+ const page=new BrowserPage(cdp,url=>new BrowserRequests(url,async address=>({url:address,content_type:'text/html',
+  body_base64:Buffer.from('<title>Diagnostic</title><p>Local fixture</p>').toString('base64'),fetched_at:new Date().toISOString(),untrusted:true})));
+ try {
+  const version=await cdp.send('Browser.getVersion'); console.log('Chromium '+version.product);
+  await page.open();
+  const snapshot=await page.navigate('https://fixture.example.com/',AbortSignal.timeout(10000));
+  if(snapshot.title!=='Diagnostic') throw Error('Unexpected artificial page');
+  ready=true; console.log('PASS: Chromium CDP, production page initialization and artificial-page rendering');
+ } catch(error) {
+  console.error('Startup failed: '+error.message+'; stderr: '+stderr);process.exitCode=1;
+ } finally {
+  await page.close();
+  try {await cdp.send('Browser.close')} catch{}
+  cdp.close(); if(child.exitCode===null && child.signalCode===null) child.kill();
+ }
+})().catch(error=>{console.error(error.message); child.kill('SIGKILL');process.exitCode=1});
+
 `);
 try {
- const result=spawnSync('/usr/bin/podman',args,{cwd:home,env,stdio:'inherit',timeout:25000});
+ const result=spawnSync('/usr/bin/podman',args,{cwd:home,env,stdio:'inherit',timeout:55000});
  if(result.error) throw result.error;
  process.exitCode=result.status===0?0:1;
 } finally {
