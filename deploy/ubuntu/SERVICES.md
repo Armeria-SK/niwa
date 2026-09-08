@@ -48,3 +48,11 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor-session.sh --apply
 2026-09-08の最新配置は/home/niwa/niwaへ直接cloneする構成です。WorkingDirectoryとExecStartを製品ルート直下へ変更済み。直接clone用定義のverify結果は本書冒頭を参照してください。
 
 2026-09-08のACL判定修正: 対象Ubuntuの外部 `test`（uutils 0.8.0）では、名前付きユーザーACLを無視してother権限から読取可と判定するケースを人工ディレクトリで再現しました。専用主体のアクセス判定を `/bin/sh` の組込み `test` に統一し、権限設定は変更していません。`Executor can list private parent` で停止した場合、この修正版で同じコマンドを再実行します。停止はlinger変更より前です。`python3 tests/executor-session.test.py` は実ACLのread/write/search判定を含む6件成功（skip0）。
+
+## 実コンテナ検証後の設定案（2026-09-08）
+
+固定Pythonイメージの実コンテナ受入が成功しました（[検証結果](PROGRAM.md)）。3定義のsystemd-analyze verifyも再度終了0。Niwaサービスの登録・起動は未実施です。
+
+このホストの設定案を `.local/service-preview/` に準備済みです。`config/niwa.json` は現在のorigin/portを保ち、実UIDからworkspaceExecutorUid/programExecutorUidを追加します。`executor.env` は取得済みローカルimage IDを指定します。適用時はprivateなprogram-acceptance.jsonのimage/referenceとPodmanの実imageを再照合してください。configへのniwa-exec通過ACLとexecutor.envだけの読取権限も必要です。browser/packagesは別受入後に設定します。
+
+本体の初回起動前に、新規環境かWindows実データの移行かを確定します。サービス登録・起動の承認後、executor→workspace→本体の順でsocket接続と実動作を確認します。設定案の生成・構文検査だけでは継続起動や復旧を検証したことにはなりません。

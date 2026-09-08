@@ -28,3 +28,5 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-program.sh --apply
 `--userns=keep-id` では、起動処理中の名前空間rootがホストのniwa-execとは別のsubordinate UIDに対応します。niwa-execだけの親ディレクトリACLでは、crunが保存領域を開く段階で拒否されます（[upstreamの同種報告](https://github.com/containers/crun/issues/1777)）。この準備手順は該当UIDだけに通過権限を付けます。`chmod o+x` や再帰的な所有権変更は不要です。
 
 2026-09-08の実行ではイメージ取得・executor領域のENOSPC確認が成功し、最初のコンテナ起動で上記エラーになりました。人工の二重user namespaceで失敗を再現し、ACL適用後の到達成功、親一覧・私的領域の拒否を検証済み。実環境のACLも適用済みですが、実コンテナ受入は同じprepare-programコマンドで再実行が必要です。
+
+2026-09-08、ACL修正後の実再試験は `status=0/SUCCESS`。上記の隔離・共有書込・executor/workspaceのENOSPC・PID上限・OOM・非ゼロ終了・出力上限・期限・中断がすべてPASSしました。実行UID1001、メモリ512 MiB・swap 0・PID64・CPU1の設定も確認。成功記録の保存まで完了しています。継続サービスとOS再起動の受入は別途必要です。
