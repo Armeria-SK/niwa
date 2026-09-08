@@ -93,4 +93,4 @@ sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
 
 ## ライセンス
 
-Niwaのライセンスの扱いは [LICENSES.md](LICENSES.md) に記載しています。ビルド成果物にも同梱します。Niwa本体のライセンス指定とは区別しています。
+Niwaは [Apache License 2.0](LICENSE) で公開します。利用コードの表記は [LICENSES.md](LICENSES.md) を参照してください。
