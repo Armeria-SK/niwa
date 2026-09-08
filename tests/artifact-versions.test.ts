@@ -63,3 +63,21 @@ test('timebox cannot extend an existing deadline, propagates to child work and p
  const reopened=new Runtime(root);try{assert.equal(reopened.tasks.get(reopened.administrator(),child.task.id).state,'failed');}finally{reopened.close();}
  assert.throws(()=>r.tasks.timebox(r.agentSession(bot.id),child,900),/no longer active/);
 });
+
+test('schema31 upgrade retains existing work, content and settings without backfilling private metadata',async t=>{
+ const {DatabaseSync}=await import('node:sqlite');
+ const {createHash}=await import('node:crypto');
+ const {root,r,admin,actor,room,lease}=fixture(t);
+ r.post(actor,room.id,'人工の保存済み会話');r.tasks.wait(actor,lease,'waiting_user','人工の入力待ち');
+ r.close();
+ const db=new DatabaseSync(join(root,'control.db'));
+ db.exec('DROP TABLE external_operation_labels; DROP TABLE artifact_references; DROP TABLE artifact_reviews; DROP TABLE artifact_versions; DROP TABLE task_coordination; DROP TABLE message_acknowledgments; ALTER TABLE tasks DROP COLUMN source_message_id; PRAGMA user_version=31;');
+ const tables=['settings','tasks','messages','artifacts','external_operations','approval_requests','schedules'];
+ const snapshot=(database:InstanceType<typeof DatabaseSync>)=>tables.map(table=>createHash('sha256').update(JSON.stringify(database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map(row=>{const {source_message_id,...original}=row;return original;}))).digest('hex'));
+ const before=snapshot(db);db.close();const reopened=new Runtime(root),after=new DatabaseSync(join(root,'control.db'));
+ try{
+  assert.equal(after.prepare('PRAGMA user_version').get()!.user_version,33);assert.deepEqual(snapshot(after),before);
+  assert.equal(reopened.coordination(reopened.administrator(),room.id)[0]!.blocker,'');
+  assert.equal(reopened.tasks.get(reopened.administrator(),lease.task.id).state,'waiting_user');
+ }finally{after.close();reopened.close();}
+});
