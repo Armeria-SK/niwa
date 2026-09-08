@@ -63,6 +63,8 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh start
 sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh restart
 ```
 
+`services.sh restart` は、ビルド済みの `dist` を再起動するコマンドです。ソース変更のビルドや新しい版への更新は行いません。更新時はバックアップ後に停止・ビルド・必要な移行確認・起動を行います。
+
 端末のCtrl+Cでサービスは停止しません。`node ...server.js` を別に起動すると二重起動になります。日常操作にセットアップの再実行や `--init` は不要です。上のstopは今回の稼働を停止する操作で、自動起動の登録は残ります。Botの活動停止状態は画面で管理します。
 
 運用ログは `sudo journalctl -u niwa.service -u niwa-workspace.service` で確認できます。`app/` や `logs/` への保存は行いません。共有フォルダー内の `lost+found` はファイルシステムの復旧用なので、画面には表示しません。
