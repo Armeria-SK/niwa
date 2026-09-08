@@ -38,6 +38,6 @@ sudo python3 /home/niwa/niwa/deploy/ubuntu/prepare-disks.py --apply
 
 2026-09-08、`python3 tests/storage-preparation.test.py` の6件が成功。人工ディレクトリの実rsyncコピー/照合、コピー不一致・既存コンテナ/ロック・容量不足の拒否、元ファイル保持、切替順を確認しました。小さい実イメージでfallocate/mkfsと割り当て保持を検証。ext4のオフライン検査と生成mount unitのsystemd-analyze verifyも成功しました。
 
-実loop mount・本番容量の確保・サービス再起動後の依存関係・ENOSPC（容量を使い切ったときの拒否）は未検証です。準備成功後、人工データ専用の場所で容量境界と実コンテナ動作を検証してからプログラム実行を有効化します。
+2026-09-08、ユーザー端末で実準備が成功。workspaceは/dev/loop0、executorは/dev/loop1のext4で、指定容量以下・nosuid/nodevを確認しました。両mountと専用user managerがactiveで、user@1001.serviceのRequires/Afterに両mountが設定されています。OS再起動後とENOSPCの受入は未完了です。次は[実コンテナの一括検証](PROGRAM.md)で容量境界とコンテナ動作を確認します。
 
 2026-09-08: 実行時の未mount判定を修正。util-linuxのmountpointは未mountで32、mount済みで0、呼出し/権限/システムエラーで1を返します。実コマンドで3状態を検証し、32だけを許可します。初回の「Already mounted or inaccessible」での停止はvolumes作成前で、元データを変更していません。

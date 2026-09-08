@@ -1,0 +1,6 @@
+{
+  "reference": "docker.io/library/python@sha256:2f2e5a876c71a6757f55ec57f2add0225ddaf01c802a33fcc29073943f94d907",
+  "resolved_from": "docker.io/library/python:3.13-slim-bookworm",
+  "platform": "linux/amd64",
+  "resolved_on": "2026-09-08"
+}

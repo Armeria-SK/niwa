@@ -4,9 +4,10 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSyn
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { configuredProgramRunner } from '../../dist/sandbox/program.js';
+import { securityProbe, diskProbe, pidProbe } from './program-probes.mjs';
 
 // Run only under the prepared niwa-exec identity with an administrator-selected Python image.
-const { values } = parseArgs({ options: { apply: { type: 'boolean' }, ...Object.fromEntries(['workspace', 'home', 'runtime', 'image'].map(key => [key, { type: 'string' }])) } });
+const { values } = parseArgs({ options: { apply: { type: 'boolean' }, resources: { type: 'boolean' }, ...Object.fromEntries(['workspace', 'home', 'runtime', 'image'].map(key => [key, { type: 'string' }])) } });
 assert.equal(values.apply, true, 'Explicit --apply is required to run the container checks');
 assert.ok(['workspace', 'home', 'runtime', 'image'].every(key => typeof values[key] === 'string'));
 const run = configuredProgramRunner({ ...values, uid: process.getuid?.(), gid: process.getgid?.() });
@@ -31,13 +32,22 @@ finally: s.close()
 limits={name:pathlib.Path('/sys/fs/cgroup/'+name).read_text().strip() for name in ['memory.max','memory.swap.max','pids.max','cpu.max']}
 assert limits['memory.max']=='536870912' and limits['memory.swap.max']=='0' and limits['pids.max']=='64'
 quota,period=map(int,limits['cpu.max'].split()); assert quota==period
-status=pathlib.Path('/proc/self/status').read_text(); assert 'NoNewPrivs:\\t1' in status and 'Seccomp:\\t2' in status
+${securityProbe}
 (work/'result.txt').write_text('synthetic-result')
 print(json.dumps({'uid':os.getuid(),'limits':limits,'shared_write':True,'network_blocked':True,'private_blocked':True}))`;
   const checked = await run({ command: ['python3', '-c', code], seconds: 20 });
   assert.equal(checked.code, 0, checked.stderr); assert.equal(readFileSync(join(shared, 'result.txt'), 'utf8'), 'synthetic-result');
   assert.equal(readFileSync(sentinel, 'utf8'), 'synthetic-private-sentinel');
   const failed = await run({ command: ['python3', '-c', 'import sys;sys.exit(7)'], seconds: 5 }); assert.equal(failed.code, 7);
+  if (values.resources) {
+    for (const probe of [diskProbe('/workspace'), pidProbe]) {
+      const result = await run({ command: ['python3', '-c', probe], seconds: 30 });
+      assert.equal(result.code, 0, result.stderr); process.stdout.write(result.stdout);
+    }
+    const oom = await run({ command: ['python3', '-c', 'data=bytearray(1024*1024*1024)'], seconds: 30 });
+    assert.equal(oom.code, 137, 'The 512 MiB memory limit must kill a 1 GiB allocation');
+    process.stdout.write('PASS: memory limit killed oversized allocation\n');
+  }
   const timeout = await run({ command: ['python3', '-c', 'import time;time.sleep(30)'], seconds: 1 }); assert.notEqual(timeout.code, 0);
   await assert.rejects(run({ command: ['python3', '-c', 'import sys;sys.stdout.write("x"*1048576)'], seconds: 5 }), /interrupted/);
   const cancel = new AbortController(); const timer = setTimeout(() => cancel.abort(), 1000);

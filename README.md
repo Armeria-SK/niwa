@@ -153,6 +153,12 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor-session.sh --apply
 sudo python3 /home/niwa/niwa/deploy/ubuntu/prepare-disks.py --apply
 ```
 
+ディスク準備が成功したら、空の初期workspaceで[実コンテナの一括検証](deploy/ubuntu/PROGRAM.md)を実行します。固定した公式Pythonイメージの取得と、隔離・容量・メモリ・PID上限の人工データ試験をまとめて行います。
+
+```bash
+sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-program.sh --apply
+```
+
 ここではNiwaのサービス登録・起動や実行イメージの取得は行いません。プログラム実行の有効化には、[追加の準備と隔離検証](deploy/ubuntu/README.md)および[サービス設定](deploy/ubuntu/SERVICES.md)が必要です。
 
 ## 5. 初回の設定を作る
