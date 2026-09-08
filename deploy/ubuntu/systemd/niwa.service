@@ -2,6 +2,7 @@
 Description=Niwa application
 Wants=network-online.target
 After=network-online.target niwa-workspace.service
+Requires=niwa-workspace.service
 RequiresMountsFor=/home/niwa/niwa
 
 [Service]
@@ -10,6 +11,7 @@ User=niwa
 Group=niwa
 SupplementaryGroups=niwa-ipc
 WorkingDirectory=/home/niwa/niwa
+ExecStartPre=/usr/bin/node /home/niwa/niwa/deploy/ubuntu/wait-executors.mjs
 ExecStart=/usr/bin/node /home/niwa/niwa/dist/entrypoints/server.js --root /home/niwa/niwa
 Restart=on-failure
 RestartSec=5s

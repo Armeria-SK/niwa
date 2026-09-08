@@ -1,5 +1,5 @@
 // Derived from Carried 1b68bb7c96b97e0c5cfac2dbfdddae8e47c196aa, core/harness/src/context-compaction.ts.
-// Apache-2.0. Modified for Niwa; see THIRD_PARTY_NOTICES.md and provenance/carried-compaction.json.
+// Apache-2.0. Modified for Niwa; upstream revision and source path are recorded above.
 import type { ModelMessage } from '../../contracts/index.ts';
 
 /** Select complete exchanges without changing the stored transcript. Input must be scoped by the caller. */

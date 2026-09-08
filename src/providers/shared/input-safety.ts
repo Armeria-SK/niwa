@@ -1,5 +1,5 @@
 // Derived from Carried c695f855419ffc69d1e62b04f1de8de36c7c162d, core/providers/src/model-input-safety.ts.
-// Apache-2.0. Modified for Niwa; see THIRD_PARTY_NOTICES.md and provenance/carried.json.
+// Apache-2.0. Modified for Niwa; upstream revision and source path are recorded above.
 import type { JsonObject, ModelMessage, ModelRequest } from '../../contracts/index.ts';
 
 import { isSensitiveName, sanitizeModelInputText } from '../../shared/redaction.ts';

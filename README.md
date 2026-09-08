@@ -2,234 +2,78 @@
 
 **それぞれの個性と記憶が育つ、Botたちの庭。**
 
-Niwaは、個性の異なるAIの仲間と会話し、一緒に調べものや文章づくりを進めるアプリです。ブラウザーから使えます。Botごとにプロフィールや記憶を持ち、みんなで話す場所と、一対一で話す場所があります。
+個性や記憶を持つBotと会話し、調べものや文章づくりを進めるアプリです。Bot管理、共有／個別会話、仕事、記憶、予定、バックアップをブラウザーから操作できます。現在は試験提供中です。[実装状況と残件](docs/STATUS.md)を参照してください。
 
-## できること
+## 初回セットアップ
 
-- Botを追加し、名前や性格、使うモデルを選ぶ
-- リーダーや仲間に話しかけて、仕事を頼む
-- 仕事の進み具合を確認し、一時停止・再開する
-- Botの記憶を確認し、必要に応じて訂正する
-- 決まった時間の活動や、バックアップの時刻を設定する
+Ubuntu・Intel/AMD 64ビット・systemd・cgroup v2を使います。インターネット接続とsudo権限が必要です。共有作業場8 GiB＋実行領域16 GiBを予約するため、**少なくとも26 GiBの空き容量**を用意してください。新規環境向けの手順です。Windowsの既存データは取り込みません。
 
-現在は試験提供中です。Botによるプログラム実行・ブラウザー操作・Xへの投稿は、まだ利用準備中です。
+すでに `/home/niwa/niwa` に取得済みなら、下のセットアップコマンドから進めます。`niwa` でログイン済みならユーザー作成・切替も不要です。
 
-## 用意するもの
+まだ取得していない場合は、sudoを使える端末で次を実行します。
 
-- Ubuntuが入ったIntel／AMDの64ビットPC（この手順はARM版には対応していません）
-- Ubuntuの管理者パスワードと、インターネット接続
-- 同じUbuntu PCで使えるブラウザー
-- Codexを利用できるChatGPTアカウント（下の接続手順で使用します）
-
-対応OSはUbuntuです。この手順では、まず自分のPCで会話できる状態にします。別のPCからのアクセスや、インターネットへの公開は含みません。
-
-## 1. 必要なものを入れる
-
-Ubuntuで「端末」を開き、以下を貼り付けてEnterを押してください。パスワード入力中は文字が表示されませんが、そのまま入力してEnterを押せます。
-
-```bash
-sudo apt-get update && sudo apt-get install -y git curl ca-certificates
-```
-
-このコマンドで入れるものは、次の3つです。
-
-| 名前 | 用途 |
-| --- | --- |
-| git | GitHubからNiwaを取得します。 |
-| curl | Node.jsの配布元を設定するファイルをダウンロードします。 |
-| ca-certificates | HTTPS接続先の証明書を確認します。 |
-
-## 2. Node.jsをインストールする
-
-Node.jsはNiwaを動かすためのソフトです。PC全体で使える通常のインストールで構いません。必要なバージョンは **24.16.0以上の24系** です。すでに条件を満たすNode.jsとnpmが使える場合は、この手順を省略できます。
-
-以下の枠を、上から1つずつ実行してください。エラーが出た場合は、次へ進まず表示を確認してください。
-
-[NodeSourceの配布手順](https://github.com/nodesource/distributions)を使い、Node.js 24系の配布元を追加します。
-
-```bash
-curl -fsSL https://deb.nodesource.com/setup_24.x -o nodesource_setup.sh
-```
-
-```bash
-sudo -E bash nodesource_setup.sh
-```
-
-Node.jsとnpmをインストールします。
-
-```bash
-sudo apt-get install -y nodejs
-```
-
-バージョンを確認します。
-
-```bash
-node --version
-```
-
-```bash
-npm --version
-```
-
-Node.jsが `v24.16.0` 以上の `v24.x.x`、npmもバージョン番号を表示すれば準備完了です。
-
-## 3. Niwaをダウンロードする
-
-Niwa用のユーザー `niwa` を作ります。途中で新しいパスワードを決めてください。氏名などの欄はEnterで空欄にできます。すでに同名のユーザーがある場合は作成を省略します。
-
-```bash
+```sh
+sudo apt-get update
+sudo apt-get install -y git
+# niwaユーザーが存在しない場合だけ実行
 sudo adduser niwa
+sudo -u niwa git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa
 ```
 
-Niwa用のユーザーに切り替えます。
+セットアップは **この1コマンド**です。入力するのは通常、rootのパスワードではなく、sudoを実行したユーザーのパスワードです。
 
-```bash
-sudo -iu niwa
+```sh
+sudo sh /home/niwa/niwa/deploy/ubuntu/setup.sh
 ```
 
-**ここから手順6までは、この端末で続けてください。**
+必要なOSパッケージ、Node.js 24、ビルド、専用ユーザー `niwa-exec`、保存容量の制限、固定Pythonイメージの取得と隔離試験、初期設定、サービス登録・自動起動設定・起動確認まで進みます。対応する `/usr/bin/node`（24.16以上の24系）があれば再導入しません。別バージョンが既にある場合は自動で置換せず停止します。Node未導入時は[NodeSource](https://github.com/nodesource/distributions)の配布手順を利用します。
 
-GitHubからNiwaを取得します。
+`niwa` は本体・記憶・認証情報、`niwa-exec` は共有ファイルと隔離プログラム実行を担当します。既存の `niwa` を作り直しません。完了済みの準備は確認して引き継ぎます。既存領域・設定が想定と異なる場合や、途中のディスク準備が不完全な場合は停止し、既存データを削除して再作成しません。
 
-```bash
-git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa
+最後に `PASS: Niwa services installed, enabled and responding` と表示されれば、起動確認まで完了です。端末は閉じて構いません。セットアップ自体の実機確認状況は[起動・運用資料](docs/ubuntu/SERVICES.md)に記載しています。
+
+## 開く・ログインする
+
+同じPCのブラウザーで **[http://127.0.0.1:3210](http://127.0.0.1:3210)** を開きます。
+
+管理者キーは初回起動時に作られます。`niwa` の端末で以下を実行し、表示された文字列をログイン画面へ貼り付けてください。別ユーザーの端末では先頭に `sudo -u niwa` を付けます。
+
+```sh
+cat /home/niwa/niwa/secrets/admin-key
 ```
 
-## 4. Niwaを使う準備をする
+キーはNiwaを操作するパスワードです。チャットへ送ったり公開したりしないでください。セットアップはキーをログへ表示しません。
 
-Niwaのフォルダーへ移動します。
+モデルの接続は画面で行います。「設定」→「モデルと接続」でChatGPTの接続、またはOllamaを設定し、リーダーと新しいBotのモデルを選びます。その後、リーダーへ話しかけてください。アカウントの認証はセットアップでは行いません。
 
-```bash
-cd /home/niwa/niwa
+## 日常の起動・停止
+
+Ubuntu起動時にサービスが自動起動します。WSLでは、Ubuntu自体が起動している必要があります。PC全体やWSLの自動起動設定はこの手順では変更しません。
+
+```sh
+# 状態確認
+sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh status
+# 全サービスを停止
+sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh stop
+# 起動
+sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh start
+# 再起動
+sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh restart
 ```
 
-Niwaに必要な部品を入れます。数分かかることがあります。
-
-```bash
-npm ci
-```
-
-ブラウザーで使える形に準備します。
-
-```bash
-npm run build
-```
-
-エラーなく完了したら、次へ進んでください。
-
-### Botのプログラム実行を準備する場合
-
-Botが生成したプログラムを実行する機能には、Podmanと専用のLinuxユーザー `niwa-exec` が必要です。`niwa` は本体・会話・記憶・認証情報を管理し、`niwa-exec` は共有作業場と隔離実行を担当します。生成プログラムから本体のデータへアクセスさせないため、すでに `niwa` があっても別に作成します。
-
-この準備は、**手順5の初回設定より前**に行います。会話だけを試す場合は省略できます。すでに初回設定済みの場合は、[Ubuntu実行サービスの準備](deploy/ubuntu/README.md)を確認してください。
-
-まず、変更を行わない事前検査を実行します。
-
-```bash
-sh /home/niwa/niwa/deploy/ubuntu/prepare-executor.sh --check
-```
-
-検査が成功したら、sudoを使えるユーザーのUbuntu端末で次を実行します。Podmanなどの必要パッケージ、`niwa-exec`、連携用グループ `niwa-ipc`、ディレクトリの所有者・権限を準備します。
-
-```bash
-sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor.sh --apply
-```
-
-sudoのパスワード入力が必要です。自動実行が `interactive authentication is required` で止まった場合も、自分の端末で上のコマンドを実行してください。パスワードをチャットへ送る必要はありません。
-
-既存のruntime/workspaceや同名の専用ユーザー・グループがある場合は停止します。途中で失敗した場合も、既存ファイルを削除してやり直さず、状態を確認してください。
-
-準備が完了したら、専用ユーザーの権限を検査し、ログアウト後も使える実行用セッションを準備します。
-
-```bash
-sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor-session.sh --apply
-```
-
-この操作は `niwa-exec` のsystemdユーザー管理機能を起動し、rootless Podman・seccomp・cgroup・保存先を検査します。Niwa本体やコンテナは起動しません。
-
-成功後、初回の実行環境を準備する場合は、[ディスク上限の準備](deploy/ubuntu/STORAGE.md)へ進みます。共有作業場8 GiB・実行領域16 GiBを確保するため、26 GiB以上の空き容量が必要です。
-
-```bash
-sudo python3 /home/niwa/niwa/deploy/ubuntu/prepare-disks.py --apply
-```
-
-ディスク準備が成功したら、空の初期workspaceで[実コンテナの一括検証](deploy/ubuntu/PROGRAM.md)を実行します。固定した公式Pythonイメージの取得と、隔離・容量・メモリ・PID上限の人工データ試験をまとめて行います。 起動準備には、コンテナ起動時のUIDへ親ディレクトリの通過専用ACLを設定する処理も含みます。
-
-```bash
-sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-program.sh --apply
-```
-
-ここではNiwaのサービス登録・起動や実行イメージの取得は行いません。プログラム実行の有効化には、[追加の準備と隔離検証](deploy/ubuntu/README.md)および[サービス設定](deploy/ubuntu/SERVICES.md)が必要です。
-
-## 5. 初回の設定を作る
-
-以下は**最初の1回だけ**実行します。
-
-```bash
-node \
-  /home/niwa/niwa/dist/entrypoints/server.js \
-  --root /home/niwa/niwa --init --origin http://127.0.0.1:3210
-```
-
-`Installation configuration created.` と表示されれば完了です。
-
-## 6. 起動する
-
-```bash
-node \
-  /home/niwa/niwa/dist/entrypoints/server.js \
-  --root /home/niwa/niwa
-```
-
-`Niwa is running.` と表示されたら起動しています。**この端末は開いたままにしてください。**
-
-ブラウザーで [Niwaを開く](http://127.0.0.1:3210) を押します。アドレスを手入力する場合も `http://127.0.0.1:3210` を使ってください。
-
-## 7. ログインする
-
-Niwaへのログインには、初回起動時に作られる管理者キーを使います。
-
-Ubuntuで**別の端末をもう1つ開き**、次を実行してください。
-
-```bash
-sudo -u niwa cat /home/niwa/niwa/secrets/admin-key
-```
-
-表示された長い文字列をコピーし、Niwaのログイン画面に貼り付けます。これはNiwaを操作するためのパスワードに相当するので、ほかの人に送ったり公開したりしないでください。
-
-## 8. AIを接続して、話しかける
-
-1. Niwaの「設定」→「モデルと接続」を開きます。
-2. 「ChatGPTで接続（試験対応）」を押し、「ChatGPTのログインを開く」からログインします。Niwaを起動しているPCのブラウザーで進めてください。
-3. Niwaへ戻り、「認証情報を保存済み」と表示されることを確認します。
-4. 「リーダーのモデル」で「Codexのモデルを取得」を押し、一覧から使うモデルを選んで「モデルを保存」を押します。
-5. 「新しいBotの標準モデル」も同じように選んで保存します。
-6. リーダーとの会話を開き、「こんにちは。どんなことをお願いできますか？」と送ってみてください。
-
-ChatGPTとの接続は試験対応です。利用できるモデルや上限は、接続したアカウントによって異なります。
-
-## 終了・次回の起動
-
-終了するときは、Niwaを起動した端末で **Ctrl+C** を押します。会話や設定は保存されます。
-
-次回は、Ubuntuの端末で以下だけ実行すれば起動できます。初回設定を作り直す必要はありません。
-
-```bash
-sudo -u niwa node \
-  /home/niwa/niwa/dist/entrypoints/server.js \
-  --root /home/niwa/niwa
-```
-
-起動後は [Niwaを開く](http://127.0.0.1:3210) から使えます。PCを再起動した場合も、このコマンドで起動してください。
+端末のCtrl+Cでサービスは停止しません。`node ...server.js` を別に起動すると二重起動になります。日常操作にセットアップの再実行や `--init` は不要です。上のstopは今回の稼働を停止する操作で、自動起動の登録は残ります。Botの活動停止状態は画面で管理します。
 
 ## 困ったとき
 
 | 状況 | 確認すること |
-| --- | --- |
-| 画面が開かない | 起動用の端末が開いていて、`Niwa is running.` と表示されているか確認してください。 |
-| 起動できない | すでに別の端末でNiwaが動いていないか確認してください。初回設定は手順5の1回だけです。 |
-| 管理者キーが分からない | 手順7のコマンドでもう一度表示できます。 |
-| Botが返事をしない | 「設定」→「モデルと接続」で接続状態と選んだモデルを確認してください。仕事が確認待ちになっている場合は、画面の案内を確認してください。 |
-| ダウンロード中に止まった | インターネット接続と、端末のエラー表示を確認してください。すでに作成されたフォルダーを削除してやり直す前に、中に必要なデータがないか確認してください。 |
+|---|---|
+| セットアップが停止した | 最後の工程名とエラーを確認。既存ファイルを削除して拒否を解除しないでください。[準備工程](docs/ubuntu/README.md)を参照。 |
+| `interactive authentication is required` | 自分のUbuntu端末でsudo付きセットアップコマンドを実行します。 |
+| 画面が開かない | `services.sh status` と `sudo journalctl -u niwa.service -u niwa-workspace.service -n 80 --no-pager` を確認。 |
+| プログラムが動かない | `services.sh status` でexecutorの状態を確認。[サービス資料](docs/ubuntu/SERVICES.md)にログの確認手順があります。 |
+| Botが返事をしない | 画面のモデル接続・モデル選択・活動停止・承認待ちを確認。 |
+| 管理者キーが分からない | 上のcatコマンドで再表示できます。 |
 
-会話・記憶・設定などは `/home/niwa/niwa/` に保存されます。このフォルダーを削除すると、大切なデータも失われます。日々のバックアップは「設定」→「バックアップ」から設定できます。
+会話・記憶・設定は `/home/niwa/niwa/` に保存されます。このフォルダーを削除しないでください。バックアップは画面の設定で管理します。ブラウザー操作、追加パッケージ、X、スマートフォン接続は[追加準備と残件](docs/STATUS.md)を参照してください。
+
+資料は[docs/](docs/README.md)、実行スクリプトとsystemd定義は `deploy/ubuntu/` に集約しています。現在docsはGit対象外のローカル資料です。cloneだけでは含まれませんが、上記のセットアップ・起動操作はこのREADMEだけで行えます。

@@ -1,5 +1,5 @@
 // Derived from Carried c695f855419ffc69d1e62b04f1de8de36c7c162d, core/contracts/src/model-contract.ts.
-// Apache-2.0. Modified for Niwa; see THIRD_PARTY_NOTICES.md and provenance/carried.json.
+// Apache-2.0. Modified for Niwa; upstream revision and source path are recorded above.
 import { Type, type Static } from '@sinclair/typebox';
 
 export const reasoningEffortSchema = Type.Union([

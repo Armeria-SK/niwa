@@ -1,5 +1,5 @@
 // Derived from Carried c695f855419ffc69d1e62b04f1de8de36c7c162d, core/providers/src/redaction.ts.
-// Apache-2.0. Modified for Niwa; see THIRD_PARTY_NOTICES.md and provenance/carried.json.
+// Apache-2.0. Modified for Niwa; upstream revision and source path are recorded above.
 const SECRET_PATTERNS = [
   /Bearer\s+[A-Za-z0-9._~+/-]+=*/gi,
   /\b(?:sk|or-v1)-[A-Za-z0-9_-]{8,}\b/g,

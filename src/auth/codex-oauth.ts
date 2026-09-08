@@ -1,5 +1,5 @@
 // Derived from Carried c695f855419ffc69d1e62b04f1de8de36c7c162d, core/auth/src/oauth.ts.
-// Apache-2.0. Modified for Niwa; see THIRD_PARTY_NOTICES.md and provenance/carried.json.
+// Apache-2.0. Modified for Niwa; upstream revision and source path are recorded above.
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { OAuthCredential } from './credential-store.ts';
