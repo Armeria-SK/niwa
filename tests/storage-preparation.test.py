@@ -53,7 +53,9 @@ class StorageTests(unittest.TestCase):
         self.temp.cleanup()
 
     def process(self, args, **kwargs):
-        if args[0] in ('mountpoint', 'pgrep'):
+        if args[0] == 'mountpoint':
+            return real_run(args, **kwargs)
+        if args[0] == 'pgrep':
             return SimpleNamespace(returncode=1)
         if args[:2] == ['systemctl', 'is-active']:
             return SimpleNamespace(stdout='inactive\n')
@@ -120,6 +122,16 @@ class StorageTests(unittest.TestCase):
             storage.prepare()
         self.assertEqual(lock.read_text(), 'existing lock')
         self.assertFalse((self.root / 'runtime/volumes').exists())
+
+
+class MountpointTests(unittest.TestCase):
+    def test_real_mountpoint_distinguishes_plain_directory_mount_and_error(self):
+        with tempfile.TemporaryDirectory(prefix='niwa-mountpoint-') as temp:
+            storage.require_unmounted(Path(temp))
+            with self.assertRaisesRegex(RuntimeError, 'mountpoint exit 0'):
+                storage.require_unmounted(Path('/'))
+            with self.assertRaisesRegex(RuntimeError, 'mountpoint exit 1'):
+                storage.require_unmounted(Path(temp) / 'missing')
 
 
 if __name__ == '__main__':

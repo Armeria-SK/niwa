@@ -33,6 +33,12 @@ def directory(path):
         require(stat.S_ISDIR(item.lstat().st_mode), f'Not a real directory: {item}')
 
 
+def require_unmounted(path):
+    # util-linux: 0 = mounted, 32 = not mounted, 1 = invocation/permission/system error.
+    status = subprocess.run(['mountpoint', '-q', str(path)], capture_output=True).returncode
+    require(status == 32, f'Already mounted or inaccessible (mountpoint exit {status}): {path}')
+
+
 def mount_unit(image, target):
     return f'''[Unit]
 Description=Niwa bounded storage for {target.name}
@@ -81,7 +87,7 @@ def prepare():
         directory(target)
         info = target.stat()
         require((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) == (uid, gid, 0o700), f'Unexpected ownership/mode: {target}')
-        require(subprocess.run(['mountpoint', '-q', str(target)]).returncode == 1, f'Already mounted or inaccessible: {target}')
+        require_unmounted(target)
         require(not any(path.startswith(str(target) + '/') for path in mounts), f'Nested mount requires review: {target}')
         require(not os.path.lexists(units / names[key]), f'Existing mount unit: {names[key]}')
         used = int(run('du', '-sx', '-B1', target).split()[0])
