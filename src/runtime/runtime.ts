@@ -11,6 +11,7 @@ import { openDatabase, transaction } from '../storage/database.ts';
 import { controlSchema, memoryMigrations } from '../storage/schema.ts';
 import { taskSchema } from '../storage/task-schema.ts';
 import { Tasks } from './tasks.ts';
+import { workNoteSchema } from '../storage/work-note-schema.ts';
 import { coordinationSchema } from '../storage/coordination-schema.ts';
 import { handoffSchema } from '../storage/handoff-schema.ts';
 import { artifactVersionSchema } from '../storage/artifact-version-schema.ts';
@@ -72,7 +73,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -578,7 +579,7 @@ export class Runtime {
           this.#db.prepare("UPDATE rooms SET title='' WHERE id=?").run(record.id);
           this.#db.prepare('DELETE FROM task_coordination WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
           this.#db.prepare("UPDATE tasks SET prompt='',result=NULL,wait_reason=NULL,source_message_id=NULL WHERE room_id=?").run(record.id);
-          for (const table of ['task_replies', 'tool_receipts', 'business_tasks', 'approval_requests']) this.#db.prepare('DELETE FROM ' + table + ' WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
+          for (const table of ['work_notes', 'task_replies', 'tool_receipts', 'business_tasks', 'approval_requests']) this.#db.prepare('DELETE FROM ' + table + ' WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
         } else {
           this.#db.prepare('DELETE FROM updates WHERE artifact_id=?').run(record.id);
           this.#db.prepare('DELETE FROM artifacts WHERE id=?').run(record.id);
@@ -620,6 +621,24 @@ export class Runtime {
   acknowledgments(actor: Actor, roomId: string) {
     this.#room(actor, roomId);
     return this.#db.prepare(`SELECT a.message_id,a.agent_id,a.created_at FROM message_acknowledgments a JOIN messages m ON m.id=a.message_id WHERE m.room_id=? ORDER BY a.created_at`).all(roomId);
+  }
+  /** Explicit public progress only; model reasoning and private transcripts are never read. */
+  workNotes(actor: Actor, roomId: string) {
+    this.#room(actor, roomId);
+    return this.#db.prepare(`SELECT n.*,t.agent_id,t.state FROM work_notes n JOIN tasks t ON t.id=n.task_id
+      WHERE t.room_id=? ORDER BY n.created_at DESC,n.rowid DESC LIMIT 200`).all(roomId).reverse();
+  }
+  addWorkNote(actor: Actor, lease: TaskLease, body: string) {
+    check(this.tasks.active(actor, lease), 'conflict', 'Task lease is no longer active');
+    const task = this.tasks.get(actor, lease.task.id);
+    this.#room(actor, task.room_id);
+    check(typeof body === 'string' && body.trim().length > 0 && body.length <= 300, 'invalid', 'Write a short public progress note');
+    const previous = this.#db.prepare('SELECT body FROM work_notes WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(task.id);
+    if (previous?.body === body.trim()) return { saved: false };
+    const count = Number(this.#db.prepare('SELECT count(*) AS n FROM work_notes WHERE task_id=?').get(task.id)!.n);
+    check(count < 50, 'invalid', 'Progress note limit reached; continue the actual work');
+    this.#db.prepare('INSERT INTO work_notes(id,task_id,body,created_at) VALUES (?,?,?,?)').run(randomUUID(),task.id,body.trim(),Date.now());
+    return { saved: true };
   }
   /** Share operational facts in this room only; never expose another Bot's memory or model transcript. */
   coordination(actor: Actor, roomId: string) {
@@ -778,6 +797,7 @@ export class Runtime {
         catch (error) { if (!(error instanceof DomainError)) throw error; }
       }
       const message = body ? this.post(actor, lease.task.room_id, body) : undefined;
+      if (message) this.#db.prepare('UPDATE work_notes SET reply_id=? WHERE task_id=?').run(message.id, lease.task.id);
       for (const id of new Set(recipients.map(item => item.id))) {
         if (id === lease.task.agent_id) continue;
         if (lease.task.parent_id && id === lease.task.requester_id && this.tasks.get(actor, lease.task.parent_id).state === 'waiting_child') continue;

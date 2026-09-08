@@ -31,6 +31,7 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  work_note: { description: 'この会話のユーザー向け作業メモを1〜2文で残す。確認できた事実・進捗・方針変更だけを簡潔に書く。内部思考・秘密・内部IDは書かない。新しい気付きがあるときだけ使い、実作業を続ける。本文投稿、返信要求、他Bot起動、完了は発生しない。', schema: object({ body: Type.String({minLength:1,maxLength:300}) }) },
   task_review_ready: {description:'自分の仕事で作成した最新成果物をreview_ready（受け渡し準備完了）にする。固定IDとSHA256が必要。これだけでは他Botを起動しない。',schema:object({artifact_id:short(),sha256:Type.String({pattern:'^[a-f0-9]{64}$'})})},
   task_handoff: {description:'準備済みの固定成果物を、予定した次担当に明示的に渡して結果を待つ。task_review_readyの登録と具体的な依頼内容が必要。1タスクからの受け渡しは1回だけ。単独で呼ぶ。',schema:object({prompt:Type.String({minLength:1,maxLength:17000})})},
   task_acknowledge: {description:'実作業の依頼を受領済みとして状態だけ記録する。本文・別Botの起動・作業の完了は発生しない。そのまま作業を続ける。',schema:object({})},
@@ -134,6 +135,7 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
         case 'coordination_digest': return JSON.parse(JSON.stringify(runtime.coordinationDigest(actor,lease.task.room_id)));
         case 'task_timebox': return runtime.tasks.timebox(actor,lease,Number(call.arguments.seconds));
         case 'task_status_update': return runtime.updateCoordination(actor,lease,call.arguments as CoordinationUpdate);
+        case 'work_note': return runtime.addWorkNote(actor,lease,args.body!);
         case 'conversation_ack': runtime.tasks.acknowledge(actor,lease); return {acknowledged:true};
         case 'conversation_send': runtime.respond(actor, lease, args.body!, call.arguments.recipient_ids as string[]); return { sent: true };
         case 'task_rest': runtime.tasks.rest(actor, lease); return { rested: true };

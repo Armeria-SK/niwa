@@ -760,3 +760,21 @@ for (const shared of [false, true]) test(`model instructions reflect room permis
   f.runtime.tasks.create(f.admin, f.leader.id, room.id, '実行環境を説明してください');
   await runner.run(f.runtime.tasks.claim(f.admin)!); assert.equal(observed, 1);
 });
+
+test('public progress tool continues work and a final reply closes its notes without reading model reasoning', async t => {
+  const f = fixture(t); let calls = 0;
+  const runner = new TurnRunner(f.runtime, async () => model(request => {
+    assert.match(request.system_instructions, /公開用の作業メモ/);
+    assert.ok(request.tools.some(tool => tool.name === 'work_note'));
+    if (calls++ === 0) return tool('work_note', { body: '公開資料の更新日を確認しています。' });
+    assert.equal(f.runtime.messages(f.admin, f.room.id).length, 0);
+    return complete('確認した更新日は今日です。');
+  }));
+  f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '進捗を残して回答');
+  await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(calls, 2);
+  assert.equal(f.runtime.tasks.list(f.admin).length, 1);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).length, 1);
+  const notes = f.runtime.workNotes(f.admin, f.room.id);
+  assert.equal(notes.length, 1); assert.ok(notes[0]!.reply_id);
+});
