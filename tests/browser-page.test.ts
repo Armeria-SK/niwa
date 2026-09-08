@@ -30,7 +30,9 @@ test('dedicated browser renders broker resources, blocks unknown writes, and fol
     fetched.push(address);
     const body = address.endsWith('/next') ? '<title>Next</title><p>Second page</p>' :
       `<title>Fixture</title><p>Public document</p><a href="/next" onclick="throw Error('must not click')">Continue</a>
-      <a href="/download" download>Download</a><button>Submit</button><input placeholder="Query">
+      <a href="/download" download>Download</a><button>Submit</button><input placeholder="Query" oninput="document.getElementById('echo').textContent=this.value"><p id="echo"></p>
+      <button type="button" onclick="document.getElementById('detail').hidden=false;fetch('/click-write',{method:'POST'}).catch(()=>{});">Expand</button><p id="detail" hidden>Expanded locally</p>
+      <input type="password" placeholder="Secret"><input type="file" aria-label="Upload">
       <script>fetch('/write', {method:'POST',body:'forbidden'}).catch(()=>{});</script>`;
     return { url: address, content_type: 'text/html', body_base64: Buffer.from(body).toString('base64'), fetched_at: new Date().toISOString(), untrusted: true };
   }));
@@ -47,7 +49,17 @@ test('dedicated browser renders broker resources, blocks unknown writes, and fol
     await cdp.send('Runtime.evaluate', { expression: "document.querySelector('a').href='/changed'" }, { sessionId: ownedSession });
     await assert.rejects(page.follow(first.revision, first.elements.find(el => el.name === 'Continue')!.ref), /changed/);
     await cdp.send('Runtime.evaluate', { expression: "document.querySelector('a').href='/next'" }, { sessionId: ownedSession });
-    const refreshed = await page.snapshot();
+    let interaction = await page.snapshot();
+    await assert.rejects(page.interact({ action: 'fill', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Secret')!.ref, value: 'not-a-real-secret' }));
+    await assert.rejects(page.interact({ action: 'fill', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Upload')!.ref, value: 'file' }));
+    await assert.rejects(page.interact({ action: 'click', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Submit')!.ref }));
+    interaction = await page.interact({ action: 'fill', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Query')!.ref, value: 'Synthetic typed value' });
+    assert.match(interaction.text, /Synthetic typed value/);
+    interaction = await page.interact({ action: 'click', revision: interaction.revision, ref: interaction.elements.find(el => el.name === 'Expand')!.ref });
+    assert.match(interaction.text, /Expanded locally/); assert.ok(interaction.blocked.includes('network_disabled_during_interaction'));
+    assert.deepEqual(fetched, ['https://fixture.invalid/']);
+    await assert.rejects(page.interact({ action: 'scroll', revision: first.revision, pixels: 100 }), /stale/);
+    const refreshed = await page.interact({ action: 'scroll', revision: interaction.revision, pixels: 100 });
     await assert.rejects(page.follow(first.revision, 0), /stale/);
     const next = await page.follow(refreshed.revision, refreshed.elements.find(el => el.name === 'Continue')!.ref);
     assert.equal(next.title, 'Next'); assert.match(next.text, /Second page/);

@@ -1,3 +1,4 @@
+import { interactionSchema } from './interaction.ts';
 import { request } from 'node:http';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
@@ -14,6 +15,7 @@ export const browserOperationSchema = Type.Object({ agent_id: identity, room_id:
     Type.Object({ kind: Type.Literal('snapshot') }, { additionalProperties: false }),
     Type.Object({ kind: Type.Literal('follow'), revision: Type.String({ minLength: 1, maxLength: 64 }), ref: Type.Integer({ minimum: 0, maximum: 99 }) }, { additionalProperties: false }),
     Type.Object({ kind: Type.Literal('form'), ...formPreparationSchema.properties }, { additionalProperties: false }),
+    Type.Object({ kind: Type.Literal('interact'), input: interactionSchema }, { additionalProperties: false }),
   ]),
 }, { additionalProperties: false });
 export type BrowserOperation = Static<typeof browserOperationSchema>;

@@ -1,3 +1,4 @@
+import { interactionSchema } from './interaction.ts';
 import { spawn } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 import { Type } from '@sinclair/typebox';
@@ -37,6 +38,7 @@ export async function browserWorker(input: Readable, output: Writable, executabl
       await ready;
       if (method === 'browser.navigate' && Value.Check(navigateSchema, args)) return await page.navigate(args.url, signal);
       if (method === 'browser.follow' && Value.Check(followSchema, args)) return await page.follow(args.revision, args.ref, signal);
+      if (method === 'browser.interact' && Value.Check(interactionSchema, args)) return await page.interact(args, signal);
       if (method === 'browser.form' && Value.Check(formPreparationSchema, args)) return await page.prepareForm(args.revision, args.ref, args.fields, signal);
       if (method === 'browser.snapshot' && args && typeof args === 'object' && !Array.isArray(args) && !Object.keys(args).length)
         return await page.snapshot(signal);

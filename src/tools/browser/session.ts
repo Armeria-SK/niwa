@@ -1,3 +1,4 @@
+import type { BrowserInteraction } from './interaction.ts';
 import type { Readable, Writable } from 'node:stream';
 import { Type } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
@@ -47,6 +48,10 @@ export class BrowserSession {
     const element = this.#snapshot?.elements.find(item => item.ref === ref);
     if (!revision || revision !== this.#snapshot?.revision || !element?.href) throw new Error('Browser reference is stale or is not a link');
     return this.#action('browser.follow', { revision, ref }, element.href, signal);
+  }
+  interact(input: BrowserInteraction, signal?: AbortSignal) {
+    if (!input.revision || input.revision !== this.#snapshot?.revision) throw new Error('Stale interaction reference');
+    return this.#action('browser.interact', input, undefined, signal);
   }
   prepareForm(revision: string, ref: number, fields: { ref: number; value: string }[], signal?: AbortSignal) {
     if (!revision || revision !== this.#snapshot?.revision || !this.#snapshot.elements.some(element => element.ref === ref)) throw new Error('Stale form reference');

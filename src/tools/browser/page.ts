@@ -1,3 +1,4 @@
+import type { BrowserInteraction } from './interaction.ts';
 import { randomUUID } from 'node:crypto';
 import { CdpPipe, type CdpEvent } from './cdp.ts';
 import { BrowserRequests, BrowserRequestBlocked } from './requests.ts';
@@ -145,6 +146,36 @@ export class BrowserPage {
     } finally { this.#busy = false; }
     if (typeof href !== 'string') throw new Error('Browser reference changed or action requires approval');
     return this.navigate(href, signal);
+  }
+  /** Local DOM interaction only: the parent broker remains closed for every network request. */
+  async interact(input: BrowserInteraction, signal?: AbortSignal): Promise<BrowserSnapshot> {
+    if (this.#busy || this.#closed || input.revision !== this.#revision) throw new Error('Browser reference is stale');
+    this.#busy = true;
+    const cancellation = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]);
+    try {
+      await this.#evaluate(`(() => {
+        const action = ${JSON.stringify(input)}, s = globalThis.niwaObservation;
+        if (s?.revision !== action.revision) throw Error('Stale observation');
+        if (action.action === 'scroll') { window.scrollBy(0, action.pixels); return; }
+        const el = s.nodes[action.ref];
+        if (!el?.isConnected || !el.getClientRects().length || el.matches(':disabled')) throw Error('Unavailable control');
+        if (action.action === 'fill') {
+          if (!['INPUT','TEXTAREA','SELECT'].includes(el.tagName) ||
+              (el.tagName === 'INPUT' && !['text','search','email','url','tel','number','date'].includes(el.type)) || el.readOnly || el.multiple)
+            throw Error('Credentials and files require a dedicated operation');
+          el.value = action.value;
+          if (el.value !== action.value) throw Error('Invalid field value');
+          el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+        } else {
+          if (!(el.matches('button[type="button"],input[type="button"],input[type="checkbox"],input[type="radio"],[role="button"]')) ||
+              el.tagName === 'A' || el.type === 'submit' || el.type === 'image' || el.type === 'file')
+            throw Error('Use follow or prepare an approved form');
+          HTMLElement.prototype.click.call(el);
+        }
+      })()`, cancellation);
+      // Snapshot recreates the observation world after DOM changes; old refs are invalidated.
+      return { ...await this.#snapshot(cancellation), blocked: ['network_disabled_during_interaction'] };
+    } finally { this.#busy = false; }
   }
   async close() {
     if (this.#closed) return;

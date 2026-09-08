@@ -1,3 +1,4 @@
+import { interactionSchema, type BrowserInteraction } from '../tools/browser/interaction.ts';
 import { Type, type TSchema } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { ModelToolDefinition, ModelToolCall, JsonObject } from '../contracts/model.ts';
@@ -27,6 +28,7 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  browser_interact: { description: '公開ページ上のローカル操作。現在のrevisionとrefを使い、通常button/checkbox/radioのclick、非秘密項目のfill、縦scrollを行う。通信は全拒否するため外部送信やログインは成立しない。操作後のsnapshotで結果を確認し、送信は専用フォーム準備と承認を使う。', schema: interactionSchema },
   browser_form_prepare: { description: '直近画面の送信ボタンrefとテキスト項目ref/valueから通常HTMLフォームの送信内容を準備する。送信はしない。返されたformをbrowser_form_submitへ渡す。ファイル・ログイン情報・独自JavaScript送信は非対応。', schema: formPreparationSchema },
   browser_form_submit: { description: '準備したHTTPSフォームを送信する。必ず完全な宛先・方式・項目を管理者へ提示して承認待ちになり、同じ操作の承認後だけ送る。Cookie/認証/転送先への追送は行わない。HTTP応答だけで購入等の成功を断定せず内容を確認する。不明結果を別の呼出しで再送しない。', schema: formSchema },
   packages_list: { description: '管理者が導入を許可したパッケージ名と版、導入済みの記録を確認する。必要な依存も許可一覧から選ぶ。', schema: object({}) },
@@ -192,7 +194,7 @@ export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease
     }, signal));
   }
   if (call.name !== 'web_read' && call.name !== 'web_search' && call.name !== 'workspace_list' && call.name !== 'workspace_read' &&
-      call.name !== 'browser_navigate' && call.name !== 'browser_snapshot' && call.name !== 'browser_follow' && call.name !== 'browser_form_prepare' &&
+      call.name !== 'browser_navigate' && call.name !== 'browser_snapshot' && call.name !== 'browser_follow' && call.name !== 'browser_form_prepare' && call.name !== 'browser_interact' &&
       call.name !== 'x_read' && call.name !== 'x_mentions') return executeTurnTool(runtime, actor, lease, call, operationId);
   if (!Value.Check(definitions[call.name].schema, call.arguments)) return { error: 'Invalid tool arguments' };
   if (call.name === 'web_search' && !external.search) return { error: 'Web search is not configured' };
@@ -208,6 +210,7 @@ export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease
         call.name === 'x_mentions' ? await external.x!.api.mentions(call.arguments.since_id as string | null ?? undefined, signal) :
         call.name.startsWith('browser_') ? await external.browser!({ agent_id: lease.task.agent_id, room_id: lease.task.room_id, task_id: lease.task.id,
           action: call.name === 'browser_navigate' ? { kind: 'navigate', url: call.arguments.url as string } :
+            call.name === 'browser_interact' ? { kind: 'interact', input: call.arguments as BrowserInteraction } :
             call.name === 'browser_form_prepare' ? { kind: 'form', revision: call.arguments.revision as string, ref: call.arguments.ref as number, fields: call.arguments.fields as { ref: number; value: string }[] } :
             call.name === 'browser_follow' ? { kind: 'follow', revision: call.arguments.revision as string, ref: call.arguments.ref as number } : { kind: 'snapshot' } }, signal)
         : call.name.startsWith('workspace_') ? await external.workspace!(call.name === 'workspace_list' ? 'list' : 'read', call.arguments.path as string, signal)

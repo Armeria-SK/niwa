@@ -7,15 +7,19 @@ export async function verifyBrowserSession(create) {
   let requests = 0;
   const session = create(url => new BrowserRequests(url, async address => {
     requests++;
-    const html = `<title>Niwa acceptance</title><p>Artificial page</p><a href="/next">Next</a>
+    const html = `<title>Niwa acceptance</title><p>Artificial page</p><button type="button" onclick="document.getElementById('detail').hidden=false;fetch('/click-send',{method:'POST'}).catch(()=>{});">Expand</button><p id="detail" hidden>Expanded locally</p><a href="/next">Next</a>
       <form method="post" action="https://forms.example.com/send"><input name="message" placeholder="Message" value="original"><button>Send</button></form>
       <script>fetch('/forbidden',{method:'POST',body:'artificial'}).catch(()=>{});</script>`;
     return {url:address,content_type:'text/html',body_base64:Buffer.from(html).toString('base64'),fetched_at:new Date().toISOString(),untrusted:true};
   }));
   try {
     const cancel = AbortSignal.timeout(60_000);
-    const page = await session.navigate('https://fixture.example.com/', cancel);
+    let page = await session.navigate('https://fixture.example.com/', cancel);
     assert.equal(page.title,'Niwa acceptance'); assert.ok(page.blocked.includes('approval_required'));
+    page = await session.interact({action:'click',revision:page.revision,ref:page.elements.find(el=>el.name==='Expand').ref},cancel);
+    assert.match(page.text,/Expanded locally/); assert.equal(requests,1);
+    page = await session.interact({action:'fill',revision:page.revision,ref:page.elements.find(el=>el.name==='Message').ref,value:'local value'},cancel);
+    page = await session.interact({action:'scroll',revision:page.revision,pixels:100},cancel);
     const prepared = await session.prepareForm(page.revision,page.elements.find(el=>el.name==='Send').ref,
       [{ref:page.elements.find(el=>el.name==='Message').ref,value:'artificial & 日本語'}],cancel);
     assert.deepEqual(prepared.form, {url:'https://forms.example.com/send',method:'POST',fields:[{name:'message',value:'artificial & 日本語'}]});

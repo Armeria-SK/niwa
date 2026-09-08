@@ -50,7 +50,7 @@ test('browser tool supplies runtime identity, caches completed reads and refuses
   const external = { browser: f.execute };
   assert.equal(turnTools(true).some(tool => tool.name.startsWith('browser_')), false);
   assert.deepEqual(turnTools(false, external).filter(tool => tool.name.startsWith('browser_')).map(tool => tool.name).sort(),
-    ['browser_follow', 'browser_form_prepare', 'browser_navigate', 'browser_snapshot']);
+    ['browser_follow', 'browser_form_prepare', 'browser_interact', 'browser_navigate', 'browser_snapshot']);
   const call = { name: 'browser_navigate', tool_call_id: 'synthetic', arguments: { url: 'https://fixture.invalid/' } };
   assert.equal((await executeAsyncTurnTool(runtime, actor, lease, { ...call, arguments: { ...call.arguments, agent_id: 'other' } }, 'bad', undefined, external)).error, 'Invalid tool arguments');
   const first = await executeAsyncTurnTool(runtime, actor, lease, call, 'read', undefined, external);
