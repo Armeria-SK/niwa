@@ -46,3 +46,5 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor-session.sh --apply
 仕様参照: [systemdの実行環境設定](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)、[cgroupの委譲](https://systemd.io/CGROUP_DELEGATION/)。
 
 2026-09-08の最新配置は/home/niwa/niwaへ直接cloneする構成です。WorkingDirectoryとExecStartを製品ルート直下へ変更済み。直接clone用定義のverify結果は本書冒頭を参照してください。
+
+2026-09-08のACL判定修正: 対象Ubuntuの外部 `test`（uutils 0.8.0）では、名前付きユーザーACLを無視してother権限から読取可と判定するケースを人工ディレクトリで再現しました。専用主体のアクセス判定を `/bin/sh` の組込み `test` に統一し、権限設定は変更していません。`Executor can list private parent` で停止した場合、この修正版で同じコマンドを再実行します。停止はlinger変更より前です。`python3 tests/executor-session.test.py` は実ACLのread/write/search判定を含む6件成功（skip0）。

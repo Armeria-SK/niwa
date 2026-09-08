@@ -3,6 +3,10 @@
 set -eu
 test "$#" -eq 1 && test "$1" = --apply || { echo 'Usage: sudo sh prepare-executor-session.sh --apply'; exit 2; }
 test "$(id -u)" -eq 0 || { echo 'Administrator authentication is required.' >&2; exit 1; }
+# Use the shell builtin: Ubuntu's uutils test 0.8.0 ignores named ACL entries.
+executor_access() {
+  runuser -u niwa-exec -- /bin/sh -c 'test "$1" "$2"' access-check "$@"
+}
 root=/home/niwa/niwa
 executor_uid=$(id -u niwa-exec)
 executor_gid=$(id -g niwa-exec)
@@ -25,18 +29,18 @@ for user in niwa niwa-exec; do
   case " $(id -G "$user") " in *" $ipc_gid "*) ;; *) echo "Missing IPC membership: $user" >&2; exit 1 ;; esac
 done
 for path in "$root" "$root/dist" "$root/node_modules"; do
-  runuser -u niwa-exec -- test -x "$path"
-  if runuser -u niwa-exec -- test -w "$path"; then echo "Executor can modify application path: $path" >&2; exit 1; fi
+  executor_access -x "$path"
+  if executor_access -w "$path"; then echo "Executor can modify application path: $path" >&2; exit 1; fi
 done
 for path in "$root/dist/entrypoints/executor.js" "$root/dist/sandbox/preflight.js"; do
-  runuser -u niwa-exec -- test -r "$path"
+  executor_access -r "$path"
 done
 for path in /home/niwa "$root"; do
-  if runuser -u niwa-exec -- test -r "$path"; then echo "Executor can list private parent: $path" >&2; exit 1; fi
+  if executor_access -r "$path"; then echo "Executor can list private parent: $path" >&2; exit 1; fi
 done
 for path in "$root/state" "$root/secrets" "$root/backups"; do
   if test -e "$path"; then
-    if runuser -u niwa-exec -- test -r "$path" || runuser -u niwa-exec -- test -x "$path"; then
+    if executor_access -r "$path" || executor_access -x "$path"; then
       echo "Executor can access private data: $path" >&2; exit 1
     fi
   fi

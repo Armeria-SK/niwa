@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import shutil
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'deploy/ubuntu/prepare-executor-session.sh'
 
@@ -30,9 +31,9 @@ class SessionTests(unittest.TestCase):
         self.stub('getent', f'echo niwa-ipc:x:{os.getgid()}:niwa,niwa-exec')
         self.stub('runuser', '''
 if test "$4" = env; then exit "${PODMAN_STATUS:-0}"; fi
-case "$5" in
+case "$8" in
   -w) test "${WRITABLE_APP:-0}" = 1 ;;
-  -r) case "$6" in *.js) exit "${MISSING_CODE:-0}";; *) test "${READABLE_PRIVATE:-0}" = 1;; esac ;;
+  -r) case "$9" in *.js) exit "${MISSING_CODE:-0}";; *) test "${READABLE_PRIVATE:-0}" = 1;; esac ;;
   -x) exit 0 ;;
   *) exit 99 ;;
 esac''')
@@ -74,6 +75,36 @@ esac''')
     def test_podman_failure_is_not_reported_as_success(self):
         self.env['PODMAN_STATUS'] = '1'
         self.run_script(False, mutations=True)
+
+
+class AclAccessTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('unshare') and shutil.which('setfacl'), 'Linux user namespaces and ACL tools required')
+    def test_real_named_acl_overrides_other_permissions(self):
+        # Only synthetic /tmp files and mapped subordinate IDs; no host root or niwa-exec needed.
+        probe = subprocess.run(['unshare', '--user', '--map-auto', '--map-root-user', 'true'], capture_output=True)
+        if probe.returncode:
+            self.skipTest('Unprivileged subordinate UID/GID mapping unavailable')
+        result = subprocess.run(['unshare', '--user', '--map-auto', '--map-root-user', 'python3', '-', str(SCRIPT)],
+                                input=r'''
+import os, subprocess, sys, tempfile
+from pathlib import Path
+source = Path(sys.argv[1]).read_text()
+helper = source[source.index('executor_access() {'):source.index('\nroot=')]
+with tempfile.TemporaryDirectory(prefix='niwa-real-acl-') as temp:
+    root = Path(temp); root.chmod(0o755)
+    target = root / 'target'; target.mkdir(mode=0o777); target.chmod(0o777)
+    subprocess.run(['setfacl', '-m', 'u:1:--x', str(target)], check=True)
+    shim = root / 'runuser'
+    shim.write_text('#!/bin/sh\nshift 3\nexec "$@"\n'); shim.chmod(0o755)
+    def drop_identity():
+        os.setgid(1); os.setuid(1)
+    for flag, expected in [('-r', 1), ('-w', 1), ('-x', 0)]:
+        checked = subprocess.run(['/bin/sh', '-c', helper + '\nexecutor_access "$1" "$2"',
+                                  'acl-check', flag, str(target)], preexec_fn=drop_identity,
+                                 env={'PATH': str(root) + ':/usr/bin:/bin'})
+        assert checked.returncode == expected, (flag, checked.returncode, expected)
+''', text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == '__main__':
