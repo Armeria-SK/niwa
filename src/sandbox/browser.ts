@@ -8,7 +8,7 @@ export function browserArguments(environment: Pick<ProgramEnvironment, 'image' |
       !/^niwa-browser-[a-f0-9-]{36}$/.test(name)) throw new Error('Invalid browser container configuration');
   return ['run', '--rm', '--interactive', '--name', name, '--pull=never', '--network=none', '--http-proxy=false',
     '--read-only', '--read-only-tmpfs=false', '--tmpfs=/tmp:rw,nosuid,nodev,size=256m', '--shm-size=64m',
-    '--cap-drop=ALL', '--security-opt=no-new-privileges', '--userns=keep-id', `--user=${environment.uid}:${environment.gid}`,
+    '--cap-drop=ALL', '--security-opt=seccomp=/home/niwa/niwa/config/browser-seccomp.json', '--security-opt=no-new-privileges', '--userns=keep-id', `--user=${environment.uid}:${environment.gid}`,
     '--pid=private', '--ipc=private', '--uts=private', '--pids-limit=128', '--memory=1g', '--memory-swap=1g', '--cpus=1',
     '--ulimit=nofile=512:512', '--ulimit=core=0:0', '--log-driver=none', '--systemd=false', '--health-cmd=none', '--image-volume=ignore',
     '--timeout=900', '--stop-timeout=1', '--workdir=/app', '--env=HOME=/tmp', '--entrypoint=/usr/local/bin/node',

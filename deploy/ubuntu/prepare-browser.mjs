@@ -7,7 +7,11 @@ import { browserArguments } from '../../dist/sandbox/browser.js';
 import { configuredProgramRunner } from '../../dist/sandbox/program.js';
 import { BrowserSession } from '../../dist/tools/browser/session.js';
 import { verifyBrowserSession } from './browser-acceptance.mjs';
-assert.deepEqual(process.argv.slice(2), ['--apply']);
+assert.equal(process.argv[2], '--apply');
+assert.ok(process.argv.length === 3 || process.argv.length === 4);
+let image = process.argv[3];
+const suppliedImage = Boolean(image);
+if (image) assert.match(image, /^sha256:[a-f0-9]{64}$/);
 const root = '/home/niwa/niwa', uid = Number(execFileSync('id',['-u','niwa-exec'],{encoding:'utf8'}).trim());
 assert.equal(process.getuid(),uid); assert.ok(uid > 0);
 const home = `${root}/runtime/executor/home`, runtime = `/run/user/${uid}`;
@@ -18,20 +22,22 @@ const env = {PATH:'/usr/bin:/bin',HOME:home,XDG_RUNTIME_DIR:runtime,TMPDIR:stage
 const podman = (...args) => execFileSync('/usr/bin/podman',args,{cwd:home,env,encoding:'utf8',timeout:1200_000,maxBuffer:2*1024*1024});
 let session, name;
 try {
-  // Only the worker's required build inputs enter the context; never send the product root.
-  const context = join(stage,'context'); mkdirSync(context);
-  for (const path of ['package.json','node_modules/@sinclair/typebox','dist/tools/browser',
-    'dist/tools/web/public-page.js','dist/entrypoints/browser-worker.js','dist/config/executor-endpoint.js','dist/config/paths.js']) {
-    const destination = join(context,path); mkdirSync(join(destination,'..'),{recursive:true});
-    cpSync(join(root,path),destination,{recursive:true});
-  }
-  cpSync(`${root}/deploy/ubuntu/Containerfile.browser`,join(context,'Containerfile'));
   const lock = JSON.parse(readFileSync(`${root}/deploy/ubuntu/browser-image.json`,'utf8'));
   assert.match(lock.reference,/^docker\.io\/library\/node@sha256:[a-f0-9]{64}$/);
-  console.log(`Building browser image from ${lock.reference}`);
-  execFileSync('/usr/bin/podman',['build','--pull=missing','--iidfile',join(stage,'image.id'),'--build-arg',`NIWA_BROWSER_BASE=${lock.reference}`,context],
-    {cwd:home,env,stdio:'inherit',timeout:1200_000});
-  const image = readFileSync(join(stage,'image.id'),'utf8').trim(); assert.match(image,/^sha256:[a-f0-9]{64}$/);
+  if (!image) {
+    // Only the worker's required build inputs enter the context; never send the product root.
+    const context = join(stage,'context'); mkdirSync(context);
+    for (const path of ['package.json','node_modules/@sinclair/typebox','dist/tools/browser',
+      'dist/tools/web/public-page.js','dist/entrypoints/browser-worker.js','dist/config/executor-endpoint.js','dist/config/paths.js']) {
+      const destination = join(context,path); mkdirSync(join(destination,'..'),{recursive:true});
+      cpSync(join(root,path),destination,{recursive:true});
+    }
+    cpSync(`${root}/deploy/ubuntu/Containerfile.browser`,join(context,'Containerfile'));
+    console.log(`Building browser image from ${lock.reference}`);
+    execFileSync('/usr/bin/podman',['build','--pull=missing','--iidfile',join(stage,'image.id'),'--build-arg',`NIWA_BROWSER_BASE=${lock.reference}`,context],
+      {cwd:home,env,stdio:'inherit',timeout:1200_000});
+    image = readFileSync(join(stage,'image.id'),'utf8').trim(); assert.match(image,/^sha256:[a-f0-9]{64}$/);
+  } else { console.log(`Reusing browser image: ${image}`); }
   const environment = {workspace:`${root}/workspace`,image,uid,gid:process.getgid(),home,runtime};
   await configuredProgramRunner(environment).verify();
   // Same production browser flags, with a trusted Node probe in place of the worker.
@@ -58,8 +64,8 @@ try {
   });
   session = undefined;
   assert.equal(podman('ps','-aq','--filter',`name=${name}`).trim(),'');
-  const receipt = {image,reference:lock.reference,verified_at:new Date().toISOString(),
-    checks:['container-boundaries','sandbox-render','broker-only-resources','form-prepare-no-send','stale-reference','cleanup']};
+  const receipt = {image,reference:suppliedImage ? image : lock.reference,verified_at:new Date().toISOString(),
+    checks:['browser-chroot-seccomp','container-boundaries','sandbox-render','broker-only-resources','form-prepare-no-send','stale-reference','cleanup']};
   writeFileSync(join(stage,'receipt.json'),JSON.stringify(receipt,null,2)+'\n',{mode:0o600});
   renameSync(join(stage,'receipt.json'),`${root}/runtime/executor/state/browser-acceptance.json`);
   console.log('PASS: browser rendering, resource policy, form preparation and cleanup; acceptance receipt saved');

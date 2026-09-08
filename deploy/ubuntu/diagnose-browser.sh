@@ -4,6 +4,7 @@ test "$#" -eq 1 || { echo 'Usage: sudo sh diagnose-browser.sh sha256:IMAGE_ID' >
 test "$(id -u)" -eq 0 || { echo 'Run with sudo.' >&2; exit 1; }
 root=/home/niwa/niwa
 executor_uid=$(id -u niwa-exec)
+python3 "$root/deploy/ubuntu/prepare-browser-seccomp.py" --apply
 exec runuser -u niwa-exec -- env -i PATH=/usr/bin:/bin HOME="$root/runtime/executor/home" \
  XDG_RUNTIME_DIR="/run/user/$executor_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$executor_uid/bus" \
  systemd-run --user --wait --pipe --collect --property=Delegate=yes --property=MemoryMax=2G --property=TasksMax=512 \
