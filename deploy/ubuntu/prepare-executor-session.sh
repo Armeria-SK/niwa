@@ -19,10 +19,22 @@ executor_runtime=/run/user/$executor_uid
 for path in /home /home/niwa "$root" "$root/runtime"; do
   test -d "$path" && test ! -L "$path"
 done
-for path in "$root/runtime/executor" "$executor_home" "$root/runtime/executor/state" "$root/workspace"; do
+for path in "$root/runtime/executor" "$executor_home" "$root/runtime/executor/state"; do
   test -d "$path" && test ! -L "$path"
   test "$(stat -c '%u:%g:%a' "$path")" = "$executor_uid:$executor_gid:700"
 done
+# The shared volume may additionally grant the host login read-only access.
+test -d "$root/workspace" && test ! -L "$root/workspace"
+workspace_identity=$(stat -c '%u:%g:%a' "$root/workspace")
+if test "$workspace_identity" != "$executor_uid:$executor_gid:700"; then
+  test "$workspace_identity" = "$executor_uid:$executor_gid:750"
+  python3 - "$root/workspace" "$(id -u niwa)" <<'PYACL'
+import subprocess, sys
+lines = subprocess.check_output(['getfacl', '-c', '-n', sys.argv[1]], text=True).splitlines()
+access = {line for line in lines if line and not line.startswith(('default:', '#'))}
+assert access == {'user::rwx', f'user:{sys.argv[2]}:r-x', 'group::---', 'mask::r-x', 'other::---'}, 'Unexpected shared workspace ACL'
+PYACL
+fi
 test ! -L "$root/runtime/sockets"
 test "$(stat -c '%u:%g:%a' "$root/runtime/sockets")" = "$executor_uid:$ipc_gid:2770"
 for user in niwa niwa-exec; do
