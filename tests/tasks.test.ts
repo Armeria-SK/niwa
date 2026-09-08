@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Runtime } from '../src/runtime/runtime.ts';
+import { executeTurnTool } from '../src/runtime/turn-tools.ts';
 import { openDatabase } from '../src/storage/database.ts';
 import { controlSchema, memoryMigrations } from '../src/storage/schema.ts';
 
@@ -289,6 +290,7 @@ test('task reads, delegation, and lease ownership respect private conversation a
   assert.throws(() => f.tasks.finish(f.childActor, lease, '偽の完了'), /another agent/);
   assert.equal(f.tasks.events(f.childActor).length, 0);
   assert.equal(f.tasks.get(f.admin, parent.id).state, 'running');
+  assert.equal(f.runtime.messages(f.admin, privateRoom.id).length, 0);
 });
 
 test('failed or cancelled children notify their parent; parent cancellation cancels its descendants', t => {
@@ -410,4 +412,33 @@ test('task history is scoped, chronological, bounded and survives restart', t =>
   assert.equal(items.at(-1)?.kind, 'resumed');
   const reopened = new Runtime(f.root);
   try { assert.deepEqual(reopened.tasks.history(reopened.administrator(), task.id), items); } finally { reopened.close(); }
+});
+
+
+test('delegation posts once in its own room, survives reopen and rolls back if the message fails', t => {
+  const f = fixture(t);
+  const room = f.runtime.createRoom(f.admin, '非公開の共同作業', [f.leader.id, f.child.id]);
+  const parent = f.tasks.create(f.admin, f.leader.id, room.id, '共同作業');
+  let lease = f.tasks.claim(f.admin)!;
+  const call = {name:'task_delegate',tool_call_id:'delegate',arguments:{agent_id:f.child.id,prompt:'全文の依頼\n条件も共有する'}};
+  const original = f.runtime.post;
+  f.runtime.post = () => { throw Error('Artificial message write failure'); };
+  assert.throws(() => executeTurnTool(f.runtime,f.parentActor,lease,call,'0:0'),/write failure/);
+  f.runtime.post = original;
+  assert.equal(f.tasks.list(f.admin).length,1);
+  assert.equal(f.tasks.get(f.admin,parent.id).state,'running');
+  assert.equal(f.runtime.messages(f.admin,room.id).length,0);
+  const result = executeTurnTool(f.runtime,f.parentActor,lease,call,'0:0');
+  const messages = f.runtime.messages(f.admin,room.id);
+  assert.equal(messages.length,1);assert.equal(messages[0]!.author_id,f.leader.id);
+  assert.equal(messages[0]!.body,'@人工の子 への依頼\n全文の依頼\n条件も共有する');
+  assert.equal(f.runtime.messages(f.admin,f.room.id).length,0);
+  f.tasks.finish(f.childActor,f.tasks.claim(f.admin)!,'結果');
+  lease = f.tasks.claim(f.admin)!;
+  assert.deepEqual(executeTurnTool(f.runtime,f.parentActor,lease,call,'0:0'),result);
+  assert.equal(f.tasks.list(f.admin).length,2);
+  assert.equal(f.runtime.messages(f.admin,room.id).length,1);
+  const reopened = new Runtime(f.root);
+  try {assert.deepEqual(reopened.messages(reopened.administrator(),room.id),messages);}
+  finally {reopened.close();}
 });

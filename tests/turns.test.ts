@@ -586,6 +586,10 @@ test('model tool loop creates one child, delegates, resumes parent and recalls t
   assert.equal(f.runtime.agents(f.admin).length, 2);
   assert.equal(f.runtime.agents(f.admin)[1]?.status, 'active');
   assert.equal(f.runtime.messages(f.admin, f.room.id).filter(message => message.body === '親も結果を確認しました').length, 1);
+  const messages = f.runtime.messages(f.admin, f.room.id);
+  assert.equal(messages.filter(message => message.body === '@人工の子 への依頼\n担当分を調べる' && message.author_id === f.leader.id).length, 1);
+  assert.equal(messages.filter(message => message.body === '子が担当分を完了しました').length, 1);
+  assert.equal(f.runtime.tasks.list(f.admin).filter(item => item.parent_id === task.id).length, 1);
 });
 
 test('an instruction arriving during generation rejects the old response and reaches the next model call', async t => {

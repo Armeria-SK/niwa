@@ -74,6 +74,9 @@ export class Runtime {
       principal: actor => this.#principal(actor),
       room: (actor, id) => this.#room(actor, id),
       memory: (actor, id) => this.#memory(actor, id),
+      announceDelegation: (actor, roomId, agentId, prompt) => {
+        this.post(actor, roomId, `@${this.#agent(agentId).name} への依頼\n${prompt}`);
+      },
       participant: (agentId, roomId) => {
         const agent = this.#agent(agentId);
         const room = this.#db.prepare("SELECT visibility FROM rooms WHERE id=? AND id NOT IN (SELECT id FROM deleted_content WHERE kind='room')").get(roomId);

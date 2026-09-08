@@ -65,7 +65,7 @@ const definitions = {
   agents_create: { description: '新しいBotを1体登録する。リーダーだけが利用できる。希望された役割・性格・見た目をprofileへ渡す。roleは説明であり権限ではない。モデルと上限は管理者設定を使う。', schema: object({ name: short(), profile: Type.Optional(creationProfileSchema) }) },
   agents_sleep: { description: 'Botを休眠させる。リーダーだけが利用できる。', schema: object({ agent_id: short() }) },
   agents_recall: { description: '休眠Botを同じ記憶で再招集する。リーダーだけが利用できる。', schema: object({ agent_id: short() }) },
-  task_delegate: { description: 'この会話を読める別Botへ仕事を依頼し、結果を待つ。この呼び出しは単独で行う。', schema: object({ agent_id: short(), prompt: body() }) },
+  task_delegate: { description: 'この会話を読める別Botへ仕事を依頼し、結果を待つ。宛先と依頼全文は自動でこのチャットに投稿される。同じ依頼をconversation_sendで重ねて送らない。この呼び出しは単独で行う。', schema: object({ agent_id: short(), prompt: Type.String({ minLength: 1, maxLength: 19_000 }) }) },
   ask_user: { description: '管理者へ質問し、回答を待つ。この呼び出しは単独で行う。', schema: object({ question: body() }) },
   memory_remember: { description: '現在の会話で読んだメッセージを出所に、自分の記憶を保存する。', schema: object({ source_message_id: short(), body: body() }) },
   memory_review: { description: '会話のうち今後も役立つ好み・合意・経験・関心を出所付きで選び、自分の記憶として保存する。既存記憶と重なる情報や挨拶は省き、保存不要ならmemoriesを空配列にする。', schema: object(memoryReviewSchema.properties) },

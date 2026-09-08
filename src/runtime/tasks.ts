@@ -12,6 +12,7 @@ interface Access {
   room(actor: Actor, roomId: string): unknown;
   participant(agentId: string, roomId: string): boolean;
   memory(actor: Actor, agentId: string): DatabaseSync;
+  announceDelegation(actor: Actor, roomId: string, agentId: string, prompt: string): void;
 }
 type RecordWithLease = Task & { lease_token: string | null };
 const publicTask = ({ lease_token: _token, ...task }: RecordWithLease): Task => task;
@@ -319,9 +320,11 @@ export class Tasks {
   delegate(actor: Actor, lease: TaskLease, agentId: string, prompt: string): Task {
     return transaction(this.#db, () => {
       const parent = this.#owned(actor, lease);
+      text(prompt, 19_000); // Leave room for the recipient in the visible chat message.
       check(parent.agent_id !== agentId, 'invalid', 'Use the current task instead of delegating to yourself');
       const child = this.create(actor, agentId, parent.room_id, prompt, parent.deadline_at);
       this.#db.prepare('UPDATE tasks SET parent_id=? WHERE id=?').run(parent.id, child.id);
+      this.#access.announceDelegation(actor, parent.room_id, agentId, prompt);
       this.#change(parent.id, 'waiting_child');
       return publicTask(this.#read(child.id));
     });
