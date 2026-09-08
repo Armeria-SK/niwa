@@ -12,7 +12,7 @@ interface Access {
   room(actor: Actor, roomId: string): unknown;
   participant(agentId: string, roomId: string): boolean;
   memory(actor: Actor, agentId: string): DatabaseSync;
-  announceDelegation(actor: Actor, roomId: string, agentId: string, prompt: string): void;
+  announceDelegation(actor: Actor, roomId: string, agentId: string, prompt: string): string;
 }
 type RecordWithLease = Task & { lease_token: string | null };
 const publicTask = ({ lease_token: _token, ...task }: RecordWithLease): Task => task;
@@ -142,6 +142,21 @@ export class Tasks {
       this.#change(task.id, 'completed', '今回は休息しました。', null, false);
     });
   }
+  /** Acknowledgment ends a conversational reply, never an assigned deliverable. */
+  acknowledge(actor: Actor, lease: TaskLease): void {
+    transaction(this.#db, () => {
+      const task = this.#owned(actor, lease);
+      check(task.conversation_reply === 1, 'forbidden', 'Assigned work needs a result; acknowledgment cannot complete it');
+      check(!this.#db.prepare('SELECT 1 FROM external_operations WHERE task_id=?').get(task.id) &&
+        !this.#db.prepare('SELECT 1 FROM updates WHERE task_id=? AND artifact_id IS NOT NULL').get(task.id), 'conflict', 'Report the work result instead of acknowledgment');
+      const message = task.source_message_id
+        ? this.#db.prepare('SELECT id FROM messages WHERE id=? AND room_id=? AND author_id=?').get(task.source_message_id, task.room_id, task.requester_id)
+        : this.#db.prepare('SELECT id FROM messages WHERE room_id=? AND author_id=? AND body=? ORDER BY rowid DESC LIMIT 1').get(task.room_id, task.requester_id, task.prompt);
+      if (message) this.#db.prepare('INSERT INTO message_acknowledgments VALUES (?,?,?) ON CONFLICT DO NOTHING').run(message.id!, task.agent_id, Date.now());
+      this.#change(task.id, 'completed', '受領済み（返信不要）', null, false);
+      this.#event(task.id, 'acknowledged'); this.#resumeParent(task.parent_id);
+    });
+  }
   /** Reserve before transport; failures and interruptions conservatively consume the reservation. */
   reserveModelCall(actor: Actor, lease: TaskLease): boolean {
     return transaction(this.#db, () => {
@@ -169,6 +184,7 @@ export class Tasks {
     const memory = this.#access.memory(actor, task.agent_id);
     const plan = memory.prepare('SELECT revision,remaining FROM task_plans WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)').get(task.id);
     return {
+      coordination: this.#db.prepare('SELECT * FROM task_coordination WHERE task_id=?').get(task.id) ?? {revision:0},
       task: publicTask(task), runtime_paused: this.#paused(), autonomous: this.#autonomous(task.id),
       remaining_plan: { revision: plan ? Number(plan.revision) : 0, remaining: plan ? JSON.parse(String(plan.remaining)) as string[] : [] },
       applied_procedures: memory.prepare('SELECT procedure_id,revision,applicability FROM procedure_uses WHERE task_id=? ORDER BY created_at,operation_id').all(task.id),
@@ -324,12 +340,13 @@ export class Tasks {
       check(parent.agent_id !== agentId, 'invalid', 'Use the current task instead of delegating to yourself');
       const child = this.create(actor, agentId, parent.room_id, prompt, parent.deadline_at);
       this.#db.prepare('UPDATE tasks SET parent_id=? WHERE id=?').run(parent.id, child.id);
-      this.#access.announceDelegation(actor, parent.room_id, agentId, prompt);
+      const messageId = this.#access.announceDelegation(actor, parent.room_id, agentId, prompt);
+      this.#db.prepare('UPDATE tasks SET source_message_id=? WHERE id=?').run(messageId, child.id);
       this.#change(parent.id, 'waiting_child');
       return publicTask(this.#read(child.id));
     });
   }
-  address(actor: Actor, lease: TaskLease, agentId: string, prompt: string): void {
+  address(actor: Actor, lease: TaskLease, agentId: string, prompt: string, sourceMessageId?: string): void {
     const task = this.#owned(actor, lease);
     if (!this.#access.participant(agentId, task.room_id)) {
       this.#db.prepare(`INSERT INTO updates(room_id,author_id,kind,title,detail,task_id,created_at)
@@ -337,7 +354,7 @@ export class Tasks {
       return;
     }
     const next = this.create(actor, agentId, task.room_id, prompt, task.deadline_at);
-    this.#db.prepare('UPDATE tasks SET parent_id=?,conversation_reply=1 WHERE id=?').run(task.id, next.id);
+    this.#db.prepare('UPDATE tasks SET parent_id=?,conversation_reply=1,source_message_id=? WHERE id=?').run(task.id, sourceMessageId ?? null, next.id);
   }
   finish(actor: Actor, lease: TaskLease, result: string, state: 'completed' | 'failed' = 'completed'): Task {
     text(result);

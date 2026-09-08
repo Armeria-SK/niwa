@@ -21,6 +21,7 @@ import { formPreparationSchema } from '../tools/browser/client.ts';
 import { formSchema, normalizeForm } from '../tools/browser/form.ts';
 import type { FormLog } from '../tools/browser/form-log.ts';
 import { requestApprovalSchema } from '../tools/browser/pending-request.ts';
+import { coordinationUpdateSchema, type CoordinationUpdate } from '../domain/coordination.ts';
 
 export interface ExternalTools { readPage?: typeof readPublicPage; readFile?: typeof readPublicFile; search?: WebSearch; workspace?: WorkspaceRead; workspaceWrite?: WorkspaceWriter; program?: ProgramExecutor; browser?: BrowserExecutor;
   forms?: Pick<FormLog, 'execute'>; packages?: PackageExecutor; x?: { api: Pick<XApi, 'read' | 'mentions'>; posts: Pick<XPostLog, 'execute'> } }
@@ -30,6 +31,9 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  coordination_read: {description:'この会話の担当・親子タスク・完成条件・待ち理由・次担当・成果物参照を読む。他の会話、私的記憶、思考過程は含まない。',schema:object({})},
+  task_status_update: {description:'自分の仕事の完成条件・停止条件・ブロッカー・対応待ち相手・次担当を更新する。expected_revisionはwork_state.coordinationかcoordination_readから取得。blockerがあれば仕事を保留し、再開操作まで再試行しない。notify=involvedは依頼元/対応待ち相手/次担当だけに変更した阻害理由を通知、leaderは参加できるリーダーも含む。noneは通知なし。waiting_forとnext_agent_idはBot IDまたはadministratorまたはnull。単独で呼ぶ。',schema:coordinationUpdateSchema},
+  conversation_ack: {description:'Botからの会話に新情報のない受領だけを返すとき、本文投稿や相手の再起動なしで受領済みにする。作業の委任を受領だけで完了にすることはできない。成果・質問・判断変更があれば通常の返答を使う。単独で呼ぶ。',schema:object({})},
   browser_request_submit: { description: 'snapshot.requests内のrequest_idとformをそのまま指定し、保留中の同一サイトGET/JSON POSTを管理者の正確な承認後に送信する。成功したJSON応答を保留中のページへ戻す。最大4件、匿名HTTPSのみ。ログイン・任意ヘッダー・別サイト通信は非対応。不明結果を別の呼出しで再送しない。', schema: requestApprovalSchema },
   web_download: { description: '公開URLのファイルを最大8MiBまで匿名取得し、指定した共有相対パスへ保存する。実行・展開はしない。既存更新には現在のexpected_revisionが必要、新規はnull。共有会話限定。認証付きURLや秘密を含むURLは渡さない。', schema: object({ url: Type.String({ minLength: 1, maxLength: 4096 }), path: Type.String({ minLength: 1, maxLength: 512 }), expected_revision: Type.Union([Type.Null(), Type.String({ pattern: '^[a-f0-9]{64}$' })]) }) },
   browser_interact: { description: '公開ページ上のローカル操作。現在のrevisionとrefを使い、通常button/checkbox/radioのclick、非秘密項目のfill、縦scrollを行う。通信は保留または拒否する。requestsに出た同一サイトのJSON通信はbrowser_request_submitで承認する。ログインは非対応。操作後のsnapshotで結果を確認し、送信は専用フォーム準備と承認を使う。', schema: interactionSchema },
@@ -106,6 +110,9 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
   try {
     return runtime.tasks.once(actor, lease, operationId, { name: call.name, arguments: call.arguments }, () => {
       switch (call.name) {
+        case 'coordination_read': return {tasks:JSON.parse(JSON.stringify(runtime.coordination(actor,lease.task.room_id)))};
+        case 'task_status_update': return runtime.updateCoordination(actor,lease,call.arguments as CoordinationUpdate);
+        case 'conversation_ack': runtime.tasks.acknowledge(actor,lease); return {acknowledged:true};
         case 'conversation_send': runtime.respond(actor, lease, args.body!, call.arguments.recipient_ids as string[]); return { sent: true };
         case 'task_rest': runtime.tasks.rest(actor, lease); return { rested: true };
         case 'task_summary_save': return runtime.saveSummary(actor, lease, operationId, call.arguments as WorkSummary);

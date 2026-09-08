@@ -6,6 +6,7 @@ export interface Task {
   room_id: string;
   parent_id: string | null;
   conversation_reply: number;
+  source_message_id?: string | null;
   prompt: string;
   state: TaskState;
   paused: number;

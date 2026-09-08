@@ -5,22 +5,30 @@ import { uid } from '../data.js';
 import { MentionText } from '../MentionText.jsx';
 import { useConversationMessages } from '../useConversationMessages.js';
 import './Conversation.css';
+import {CoordinationBoard} from '../CoordinationBoard.jsx';
 
 export function Conversation({ thread, tasks, onWork, onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
   const [showPresence, setShowPresence] = useState(false);
+  const [showWork, setShowWork] = useState(false);
   const visibleMembers = thread.scope === 'private' ? members.filter(item => thread.members.includes(item.id)) : members;
-  const presenceProps = { members: visibleMembers, paused, onPause, onAppearance, onMember, isPrivate: thread.scope === 'private' };
+  const scopedMembers = visibleMembers.map(member => {
+    const current = tasks.find(task => task.member === member.id && !['done','canceled','failed'].includes(task.status));
+    const activity = paused || current?.paused ? '停止中' : current ? ({running:'作業中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_user:'対応待ち',waiting_provider:'接続待ち'})[current.state] || '待機中' : member.runtimeMotion === 'sway' ? '別の会話で対応中' : '返答待機';
+    return {...member,activity};
+  });
+  const presenceProps = { members: scopedMembers, paused, onPause, onAppearance, onMember, isPrivate: thread.scope === 'private' };
   return <>
     <main className="conversation" id="main-content" tabIndex={-1} aria-label={thread.title}>
       <div className="conversation-mobile-tools"><button className="text-button" onClick={onBack}><BackIcon size={20} />スレッド</button><IconButton label="メンバーの様子" onClick={() => setShowPresence(true)}><UsersIcon size={22} /></IconButton></div>
-      <ThreadBody onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} onWork={onWork} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
+      <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} onWork={onWork} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
     </main>
+    {showWork ? <CoordinationBoard roomId={thread.id} members={memberMap} onClose={() => setShowWork(false)} onArtifact={onArtifact}/> : null}
     <aside className="presence-rail" aria-label="メンバーの様子"><Presence {...presenceProps} /></aside>
     {showPresence ? <Modal title="メンバーの様子" onClose={() => setShowPresence(false)} className="presence-modal"><Presence {...presenceProps} noHeading onMember={id => { setShowPresence(false); onMember(id); }} onAppearance={id => { setShowPresence(false); onAppearance(id); }} /></Modal> : null}
   </>;
 }
 
-function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
+function ThreadBody({ onShowWork, thread, tasks, onWork, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
   const history = useConversationMessages(thread);
   const deletedConversation = thread.scope === 'private' && thread.members.length > 0 && thread.members.every(id => memberMap[id]?.deleted);
   const readOnly = thread.archived || deletedConversation;
@@ -61,15 +69,15 @@ function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, on
   }
   return <>
     <header className="message-scroll conversation-header" aria-label="会話のヘッダー">
-      <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={15} />新規セッション</button><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : 'アーカイブ'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
+      <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" onClick={onShowWork}>共同作業</button><button className="text-button" disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={15} />新規セッション</button><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : 'アーカイブ'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
     </header>
     <div className="message-scroll conversation-replies" ref={listRef}>
-      <Message message={history.first} isRoot title={thread.title} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
+      <Message acknowledgments={thread.acknowledgments} message={history.first} isRoot title={thread.title} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
       <div className="reply-divider"><span>{Math.max(0, thread.message_count - 1)}件の返信</span><span /></div>
       {history.loading ? <p role="status">発言を読み込み中…</p> : null}
       {history.error ? <p role="alert">{history.error}<button className="text-button" onClick={history.reload}>再読み込み</button></p> : null}
       {history.next !== null ? <button className="text-button" disabled={history.loading} onClick={loadEarlier}>以前の返信を50件読み込む</button> : null}
-      <div className="replies">{history.items.map(message => <Message key={message.id} message={message} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />)}</div>
+      <div className="replies">{history.items.map(message => <Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />)}</div>
       {thread.message_count === 1 && !tasks.some(task => !['done', 'canceled'].includes(task.status)) ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
     </div>
     <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。返信するには「保管から戻す」を選んでください。</p> : null}
@@ -95,7 +103,7 @@ function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, on
   </>;
 }
 
-function Message({ message, isRoot = false, title, memberMap, onMember, onReply, onArtifact }) {
+function Message({ acknowledgments = [], message, isRoot = false, title, memberMap, onMember, onReply, onArtifact }) {
   if (!message) return <h1>{title}</h1>;
   const member = memberMap[message.author];
   return <article className={`message ${isRoot ? 'root-message' : ''}`}>
@@ -109,6 +117,7 @@ function Message({ message, isRoot = false, title, memberMap, onMember, onReply,
       {message.artifact ? <button className="file-link" onClick={onArtifact}><FileIcon size={19} />雨音の調査メモ.md</button> : null}
       {message.attachments?.map((file, index) => <span className="file-link local-attachment" key={`${file.name}-${index}`}><FileIcon size={18} />{file.name}<small>{Math.max(1, Math.round(file.size / 1024))} KB · 添付の表示例</small></span>)}
       </div> : null}
+      {acknowledgments.some(item => item.message_id === message.id) ? <p className="message-acknowledgments">受領済み：{acknowledgments.filter(item => item.message_id === message.id).map(item => memberMap[item.agent_id]?.name || '削除したBot').join('・')}</p> : null}
     </div>
   </article>;
 }

@@ -1,0 +1,9 @@
+.coordination-modal { width: min(780px, calc(100vw - 32px)); }
+.coordination-task { border-top: 1px solid var(--border); padding-top: 16px; font-size: 13px; overflow-wrap: anywhere; }
+.coordination-meta { display: flex; gap: 16px; align-items: baseline; }
+.coordination-task > p { white-space: pre-wrap; }
+.coordination-task dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px 12px; margin: 12px 0; }
+.coordination-task dt { opacity: .65; }
+.coordination-task dd { margin: 0; white-space: pre-wrap; }
+.message-acknowledgments { font-size: 11px; opacity: .7; margin-top: 6px; }
+@media (max-width: 600px) { .coordination-task dl { grid-template-columns: 82px minmax(0, 1fr); } }

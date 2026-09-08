@@ -11,6 +11,8 @@ import { openDatabase, transaction } from '../storage/database.ts';
 import { controlSchema, memoryMigrations } from '../storage/schema.ts';
 import { taskSchema } from '../storage/task-schema.ts';
 import { Tasks } from './tasks.ts';
+import { coordinationSchema } from '../storage/coordination-schema.ts';
+import { coordinationUpdateSchema, isAcknowledgment, type CoordinationUpdate } from '../domain/coordination.ts';
 import { Schedules } from './schedules.ts';
 import { scheduleSchema } from '../storage/schedule-schema.ts';
 import { scheduleBudgetSchema } from '../storage/schedule-budget-schema.ts';
@@ -66,7 +68,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -75,7 +77,7 @@ export class Runtime {
       room: (actor, id) => this.#room(actor, id),
       memory: (actor, id) => this.#memory(actor, id),
       announceDelegation: (actor, roomId, agentId, prompt) => {
-        this.post(actor, roomId, `@${this.#agent(agentId).name} への依頼\n${prompt}`);
+        return this.post(actor, roomId, `@${this.#agent(agentId).name} への依頼\n${prompt}`).id;
       },
       participant: (agentId, roomId) => {
         const agent = this.#agent(agentId);
@@ -569,7 +571,8 @@ export class Runtime {
           this.#db.prepare('DELETE FROM submissions WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)').run(record.id);
           this.#db.prepare('DELETE FROM messages WHERE room_id=?').run(record.id);
           this.#db.prepare("UPDATE rooms SET title='' WHERE id=?").run(record.id);
-          this.#db.prepare("UPDATE tasks SET prompt='',result=NULL,wait_reason=NULL WHERE room_id=?").run(record.id);
+          this.#db.prepare('DELETE FROM task_coordination WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
+          this.#db.prepare("UPDATE tasks SET prompt='',result=NULL,wait_reason=NULL,source_message_id=NULL WHERE room_id=?").run(record.id);
           for (const table of ['task_replies', 'tool_receipts', 'business_tasks', 'approval_requests']) this.#db.prepare('DELETE FROM ' + table + ' WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
         } else {
           this.#db.prepare('DELETE FROM updates WHERE artifact_id=?').run(record.id);
@@ -608,6 +611,55 @@ export class Runtime {
   messages(actor: Actor, roomId: string): Message[] {
     this.#room(actor, roomId);
     return this.#db.prepare('SELECT * FROM messages WHERE room_id = ? ORDER BY rowid').all(roomId) as unknown as Message[];
+  }
+  acknowledgments(actor: Actor, roomId: string) {
+    this.#room(actor, roomId);
+    return this.#db.prepare(`SELECT a.message_id,a.agent_id,a.created_at FROM message_acknowledgments a JOIN messages m ON m.id=a.message_id WHERE m.room_id=? ORDER BY a.created_at`).all(roomId);
+  }
+  /** Share operational facts in this room only; never expose another Bot's memory or model transcript. */
+  coordination(actor: Actor, roomId: string) {
+    this.#room(actor, roomId);
+    return this.#db.prepare(`SELECT t.id,t.agent_id,t.requester_id,t.parent_id,substr(t.prompt,1,500) AS prompt,t.state,t.paused,t.wait_reason,t.deadline_at,t.created_at,t.updated_at,
+      coalesce(c.revision,0) AS revision,coalesce(c.completion_condition,'') AS completion_condition,coalesce(c.stop_condition,'') AS stop_condition,
+      coalesce(c.blocker,'') AS blocker,c.waiting_for,c.next_agent_id,
+      (SELECT min(created_at) FROM task_events WHERE task_id=t.id AND kind='running') AS started_at,
+      (SELECT max(u.created_at) FROM updates u WHERE u.task_id=t.id AND u.artifact_id IS NOT NULL) AS last_artifact_at,
+      (SELECT artifact_id FROM updates WHERE task_id=t.id AND artifact_id IS NOT NULL ORDER BY id DESC LIMIT 1) AS artifact_id,
+      EXISTS(SELECT 1 FROM approval_requests WHERE task_id=t.id AND status='pending') AS approval_pending,
+      (SELECT count(*) FROM external_operations WHERE task_id=t.id) AS external_operations,
+      EXISTS(SELECT 1 FROM task_events WHERE task_id=t.id AND kind='acknowledged') AS acknowledgment_only
+      FROM tasks t LEFT JOIN task_coordination c ON c.task_id=t.id WHERE t.room_id=? ORDER BY t.state IN ('completed','cancelled','failed'),t.updated_at DESC,t.rowid DESC LIMIT 100`).all(roomId);
+  }
+  updateCoordination(actor: Actor, lease: TaskLease, input: CoordinationUpdate) {
+    check(Value.Check(coordinationUpdateSchema,input),'invalid','Invalid task coordination');
+    check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
+    this.#room(actor,lease.task.room_id);
+    for (const id of [input.waiting_for,input.next_agent_id]) if (id && id!=='administrator') this.#room(this.agentSession(id),lease.task.room_id);
+    check(!input.blocker || input.waiting_for,'invalid','A blocker needs the person who can unblock it');
+    return transaction(this.#db,()=>{
+      const old=this.#db.prepare('SELECT * FROM task_coordination WHERE task_id=?').get(lease.task.id);
+      check(Number(old?.revision ?? 0)===input.expected_revision,'conflict','Task coordination changed; read it again');
+      const fields=['completion_condition','stop_condition','blocker','waiting_for','next_agent_id'] as const;
+      if(old && fields.every(key=>old[key]===input[key])) {
+        if(input.blocker) this.tasks.wait(actor,lease,'waiting_user',input.blocker);
+        return {revision:Number(old.revision),changed:false};
+      }
+      const revision=input.expected_revision+1;
+      this.#db.prepare('INSERT INTO task_coordination VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET revision=excluded.revision,completion_condition=excluded.completion_condition,stop_condition=excluded.stop_condition,blocker=excluded.blocker,waiting_for=excluded.waiting_for,next_agent_id=excluded.next_agent_id,updated_at=excluded.updated_at')
+        .run(lease.task.id,revision,input.completion_condition,input.stop_condition,input.blocker,input.waiting_for,input.next_agent_id,Date.now());
+      if(input.notify!=='none' && input.blocker && input.blocker!==old?.blocker) {
+        const ids=new Set([lease.task.requester_id,input.waiting_for,input.next_agent_id]);
+        if(input.notify==='leader') for(const member of this.agents(actor)) if(member.role==='leader') ids.add(member.id);
+        const recipients=[...ids].filter((id):id is string=>!!id && id!=='administrator' && id!==lease.task.agent_id)
+          .filter(id=>{try{this.#room(this.agentSession(id),lease.task.room_id);return true;}catch{return false;}});
+        const names=recipients.map(id=>`@${this.#agent(id).name}`).join(' ');
+        const body=`${names ? names+'\n' : ''}作業を保留しています：${input.blocker}\n再開に必要な対応：${input.waiting_for==='administrator'?'管理者':this.#agent(input.waiting_for!).name}`;
+        const message=this.post(actor,lease.task.room_id,body);
+        for(const id of recipients) this.tasks.address(actor,lease,id,body,message.id);
+      }
+      if(input.blocker) this.tasks.wait(actor,lease,'waiting_user',input.blocker);
+      return {revision,changed:true};
+    });
   }
   messageSummary(actor: Actor, roomId: string): { message_count: number; last_sequence: number; first_at: string | null; last_at: string | null } {
     this.#room(actor, roomId);
@@ -665,11 +717,17 @@ export class Runtime {
           remaining = remaining.slice(recipient.name.length + 1).replace(/^[\s、,:：]+/u, '');
         }
       }
-      if (body) this.post(actor, lease.task.room_id, body);
+      let acknowledgment = body;
+      for (const recipient of recipients) if (acknowledgment.startsWith(`@${recipient.name}`)) acknowledgment = acknowledgment.slice(recipient.name.length + 1).trimStart();
+      if (lease.task.conversation_reply === 1 && isAcknowledgment(acknowledgment)) {
+        try { this.tasks.acknowledge(actor, lease); return; }
+        catch (error) { if (!(error instanceof DomainError)) throw error; }
+      }
+      const message = body ? this.post(actor, lease.task.room_id, body) : undefined;
       for (const id of new Set(recipients.map(item => item.id))) {
         if (id === lease.task.agent_id) continue;
         if (lease.task.parent_id && id === lease.task.requester_id && this.tasks.get(actor, lease.task.parent_id).state === 'waiting_child') continue;
-        this.tasks.address(actor, lease, id, body);
+        this.tasks.address(actor, lease, id, body, message?.id);
       }
       this.tasks.finish(actor, lease, body || '完了');
     });
