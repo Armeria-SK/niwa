@@ -50,6 +50,7 @@ export async function prepareRestore(backup: string, target: string, deletions: 
       restored.applyDeletions(admin, [...restored.deletionRecords(admin), ...deletions]);
       restored.applyAgentDeletions(admin, deletedAgents);
       restored.applyContentDeletions(admin, deletedContent);
+      restored.tasks.protectRestoredWork(admin);
       restored.updateSettings(admin, { paused: true });
     } finally { restored.close(); }
     return manifest;

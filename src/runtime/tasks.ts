@@ -215,6 +215,13 @@ export class Tasks {
       const prior = this.#db.prepare('SELECT input_hash,execution_id,output FROM external_operations WHERE task_id=? AND operation_id=?')
         .get(lease.task.id, operationId) as { input_hash: string; execution_id: string; output: string | null } | undefined;
       if (prior) { check(prior.input_hash === inputHash, 'conflict', 'External operation input changed'); return { ...prior, firstAttempt: false }; }
+      const restored = this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id) AS (
+        SELECT id,parent_id FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
+        SELECT 1 FROM ancestors a JOIN restored_tasks r ON r.task_id=a.id LIMIT 1`).get(lease.task.id);
+      if (restored) {
+        this.#change(lease.task.id, 'waiting_user', null, '復元後の外部操作は元の実行記録を確認する必要があります。この仕事から未記録の操作は開始できません。');
+        return { input_hash: inputHash, execution_id: '', output: JSON.stringify({ error: 'outcome_unknown' }), firstAttempt: false };
+      }
       const record = { input_hash: inputHash, execution_id: randomUUID(), output: null };
       this.#db.prepare('INSERT INTO external_operations VALUES (?,?,?,?,NULL)').run(lease.task.id, operationId, inputHash, record.execution_id);
       return { ...record, firstAttempt: true };
@@ -494,6 +501,15 @@ export class Tasks {
       if (task.state !== 'running' || task.lease_token !== lease.token) return;
       this.#change(task.id, 'queued');
       this.#db.prepare('UPDATE tasks SET lease_token=NULL WHERE id=?').run(task.id);
+    });
+  }
+  /** A backup predates possible external effects. Restored work may only reconcile existing intents. */
+  protectRestoredWork(actor: Actor): void {
+    this.#admin(actor);
+    transaction(this.#db, () => {
+      this.#db.exec('INSERT OR IGNORE INTO restored_tasks SELECT id FROM tasks;');
+      this.#db.prepare("UPDATE schedules SET enabled=0,wait_reason=? WHERE deleted=0")
+        .run('バックアップから復元した予定です。実行済みの履歴と次回日時を確認してから再開してください。');
     });
   }
   /** Call once on service startup after obtaining its exclusive process lock. */

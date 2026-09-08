@@ -1,0 +1,72 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { Runtime } from '../src/runtime/runtime.ts';
+import { Backups } from '../src/backup/backups.ts';
+import { restoreInstallation } from '../src/backup/restore.ts';
+import { initializeInstallation } from '../src/config/installation.ts';
+import { FormLog } from '../src/tools/browser/form-log.ts';
+
+for (const generation of ['newer', 'missing', 'unresolved']) test(`backup restore reconciles ${generation} external journal without resending or reviving deletions`, async t => {
+  const parent = mkdtempSync(join(tmpdir(), 'niwa-restore-journal-'));
+  const source = join(parent, 'source'), target = join(parent, 'restored');
+  const config = { version: 1 as const, origin: 'http://127.0.0.1:3210', port: 3210 };
+  const paths = initializeInstallation(source, config); let r = new Runtime(paths.state), admin = r.administrator();
+  let sends = 0;
+  const form = { url: 'https://forms.example.com/acceptance', method: 'POST' as const, fields: [{ name: 'data', value: 'synthetic' }] };
+  const response = { url: form.url, status: 200, text: 'Synthetic receipt', truncated: false, untrusted: true as const };
+  const sender = async () => { sends++; if (generation === 'unresolved') throw Error('Lost response'); return response; };
+  let log = new FormLog(join(paths.runtime, 'forms.db'), sender);
+  const backups = new Backups(r, paths, config);
+  t.after(async () => { await log.close(); await backups.stop(); r.close(); rmSync(parent, { recursive: true, force: true }); });
+  const leader = r.bootstrap(admin), actor = r.agentSession(leader.id), room = r.createRoom(admin, 'Synthetic restore');
+  const message = r.post(admin, room.id, 'Artificial memory source');
+  const memory = r.remember(actor, message.id, 'Delete after backup');
+  const artifact = r.createArtifact(actor, room.id, 'deleted.txt', 'text', 'Synthetic', 'Remove after backup');
+  r.schedules.create(admin, { id: randomUUID(), agent_id: leader.id, room_id: room.id, prompt: 'Do not automatically rerun after restore', interval_ms: 60_000, next_at: Date.now() + 60_000, max_runs: 3, timeout_ms: 60_000 });
+  r.tasks.create(admin, leader.id, room.id, 'Synthetic send'); const lease = r.tasks.claim(admin)!;
+  let backupId = '';
+  await r.tasks.externalOnce(actor, lease, 'send', { form }, async (executionId, firstAttempt) => {
+    backupId = (await backups.create()).id;
+    return { ...await log.execute({ operation_id: executionId, agent_id: leader.id, room_id: room.id, task_id: lease.task.id, allow_start: firstAttempt, form }) };
+  });
+  assert.equal(sends, 1);
+  r.deleteMemory(admin, leader.id, memory.id, memory.revision); r.deleteContent(admin, 'artifact', artifact);
+  await log.close(); await backups.stop(); r.close();
+  await restoreInstallation(source, backupId, target);
+  r = new Runtime(join(target, 'state')); admin = r.administrator();
+  assert.equal(r.settings(admin).paused, true); assert.equal(r.schedules.list(admin)[0]!.enabled, 0);
+  assert.equal(r.memories(admin, leader.id).length, 0); assert.equal(r.artifacts(admin).length, 0);
+  r.updateSettings(admin, { paused: false }); r.tasks.recover(admin);
+  log = new FormLog(join(paths.runtime, generation === 'missing' ? 'new-generation.db' : 'forms.db'), sender);
+  const restored = r.tasks.claim(admin)!;
+  const result = await r.tasks.externalOnce(r.agentSession(leader.id), restored, 'send', { form }, (executionId, firstAttempt) => {
+    assert.equal(firstAttempt, false);
+    return log.execute({ operation_id: executionId, agent_id: leader.id, room_id: room.id, task_id: restored.task.id, allow_start: firstAttempt, form }).then(value => ({ ...value }));
+  });
+  assert.equal(sends, 1); assert.deepEqual(result, generation === 'newer' ? response : { error: 'outcome_unknown' });
+});
+
+test('restoring a snapshot before an external intent blocks new effects in old work and descendants', async t => {
+  const parent = mkdtempSync(join(tmpdir(), 'niwa-pre-intent-')), root = join(parent, 'source');
+  const config = { version: 1 as const, origin: 'http://127.0.0.1:3210', port: 3210 };
+  const paths = initializeInstallation(root, config); let r = new Runtime(paths.state), admin = r.administrator();
+  const backups = new Backups(r, paths, config);
+  t.after(async () => { await backups.stop(); r.close(); rmSync(parent, { recursive: true, force: true }); });
+  const leader = r.bootstrap(admin), actor = r.agentSession(leader.id), child = r.createAgent(actor, 'Delegate');
+  const room = r.createRoom(admin, 'Synthetic'); r.tasks.create(admin, leader.id, room.id, 'Pre-intent work');
+  const manifest = await backups.create(); let sends = 0;
+  const original = r.tasks.claim(admin)!;
+  await r.tasks.externalOnce(actor, original, 'send', {}, async () => { sends++; return { ok: true }; });
+  r.close(); await restoreInstallation(root, manifest.id, join(parent, 'restored'));
+  r = new Runtime(join(parent, 'restored/state')); admin = r.administrator(); r.updateSettings(admin, { paused: false }); r.tasks.recover(admin);
+  const restored = r.tasks.claim(admin)!;
+  const delegated = r.tasks.delegate(r.agentSession(leader.id), restored, child.id, 'Delegated after restore');
+  const childLease = r.tasks.claim(admin)!; assert.equal(childLease.task.id, delegated.id);
+  const result = await r.tasks.externalOnce(r.agentSession(child.id), childLease, 'send', {}, async () => { sends++; return { ok: true }; });
+  assert.deepEqual(result, { error: 'outcome_unknown' }); assert.equal(sends, 1);
+  assert.equal(r.tasks.get(admin, childLease.task.id).state, 'waiting_user');
+});
