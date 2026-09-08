@@ -49,7 +49,8 @@ export class Backups {
   async #create(): Promise<BackupManifest> {
     const admin = this.#runtime.administrator();
     const id = randomUUID(); const created_at = this.clock();
-    const parent = join(this.#paths.runtime, 'backup-staging');
+    // Keep staging on the destination mount: systemd bind-mounts writable paths separately.
+    const parent = join(this.#paths.backups, '.staging');
     assertDirectoryPath(parent); await fs.mkdir(parent, { recursive: true, mode: 0o700 });
     const stage = join(parent, id);
     try {

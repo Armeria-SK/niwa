@@ -141,7 +141,7 @@ test('backup captures a consistent set of databases, excludes secrets, and compr
     assert.equal(runtime.messages(admin, room.id).length, 2);
     assert.equal(runtime.memories(admin, leader.id)[0]?.body, '保存後の記憶');
     assert.equal((await backups.list())[0]?.id, manifest.id);
-    assert.deepEqual(readdirSync(join(paths.runtime, 'backup-staging')), []);
+    assert.deepEqual(readdirSync(join(paths.backups, '.staging')), []);
   } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -159,7 +159,7 @@ test('retention removes expired complete backups and a failed snapshot leaves no
     runtime.snapshot = (actor, directory) => { snapshot(actor, directory); throw new Error('Artificial storage failure'); };
     await assert.rejects(backups.create(), /Artificial storage failure/);
     assert.deepEqual((await backups.list()).map(item => item.id), [current.id]);
-    assert.deepEqual(readdirSync(join(paths.runtime, 'backup-staging')), []);
+    assert.deepEqual(readdirSync(join(paths.backups, '.staging')), []);
     assert.match(backups.error!, /保存できません/);
   } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
