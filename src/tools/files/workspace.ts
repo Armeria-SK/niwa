@@ -80,10 +80,10 @@ export class Workspace {
       (expected !== null && !/^[a-f0-9]{64}$/.test(expected))) throw new WorkspaceError('unsupported');
     const path = this.#path(name, false, true);
     const bytes = Buffer.from(content, encoding);
-    if (bytes.length > 256 * 1024 || (encoding === 'base64' && bytes.toString('base64') !== content)) throw new WorkspaceError('unsupported');
+    if (bytes.length > 8 * 1024 * 1024 || (encoding === 'base64' && bytes.toString('base64') !== content)) throw new WorkspaceError('unsupported');
     const revision = digest(bytes);
     let current: string | null = null;
-    try { current = digest(this.#bytes(path, 256 * 1024)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    try { current = digest(this.#bytes(path, 8 * 1024 * 1024)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     // A lost response after atomic replacement is safe to replay only while the desired content remains current.
     if (current === revision) return { path: name, revision, shared: true as const };
     if (current !== expected) throw new WorkspaceError('conflict');

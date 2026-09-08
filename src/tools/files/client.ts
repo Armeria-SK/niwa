@@ -27,7 +27,7 @@ async function callWorkspace(socketPath: string, verifySocket: () => void, input
     const cancellation = AbortSignal.any([AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]);
     cancellation.throwIfAborted();
     const body = JSON.stringify(input);
-    if (Buffer.byteLength(body) > 512 * 1024) throw new Error('Workspace request too large');
+    if (Buffer.byteLength(body) > (input.operation === 'write' && input.encoding === 'base64' ? 12 * 1024 * 1024 : 512 * 1024)) throw new Error('Workspace request too large');
     const output = await new Promise<unknown>((resolve, reject) => {
       const req = request({ socketPath, method: 'POST', path: '/files', agent: false, signal: cancellation,
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, response => {

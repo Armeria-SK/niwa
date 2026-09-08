@@ -31,11 +31,11 @@ export class WorkspaceWriteLog {
   close(): void { this.#db.close(); }
   write(input: WorkspaceWrite): WriteResult {
     if (!/^[A-Za-z0-9:_-]{1,160}$/.test(input.operation_id) || typeof input.path !== 'string' || input.path.length > 512 ||
-      typeof input.content !== 'string' || Buffer.byteLength(input.content) > (input.encoding === 'base64' ? 349528 : 65536) ||
+      typeof input.content !== 'string' || Buffer.byteLength(input.content) > (input.encoding === 'base64' ? 11_184_812 : 65536) ||
       (input.encoding !== undefined && !['utf8','base64'].includes(input.encoding)) ||
       (input.expected_revision !== null && !/^[a-f0-9]{64}$/.test(input.expected_revision))) throw new WorkspaceError('unsupported');
     const bytes = Buffer.from(input.content, input.encoding ?? 'utf8');
-    if (bytes.length > 256 * 1024 || (input.encoding === 'base64' && bytes.toString('base64') !== input.content)) throw new WorkspaceError('unsupported');
+    if (bytes.length > 8 * 1024 * 1024 || (input.encoding === 'base64' && bytes.toString('base64') !== input.content)) throw new WorkspaceError('unsupported');
     const inputHash = hash(JSON.stringify([input.path, input.content, input.expected_revision, ...(input.encoding === 'base64' ? ['base64'] : [])]));
     const prior = this.#db.prepare('SELECT input_hash,output FROM workspace_writes WHERE operation_id=?').get(input.operation_id) as Receipt | undefined;
     if (prior) {

@@ -10,9 +10,13 @@ import {readPublicFile, type PageNetwork} from '../src/tools/web/public-page.ts'
 test('public binary downloads validate redirect destinations, sizes and preserve bytes', async () => {
   const transport: PageNetwork = {resolve:async()=>['93.184.216.34'], get:async()=>({status:200,contentType:'application/pdf',body:Buffer.from([0,255,42])})};
   assert.equal((await readPublicFile('https://example.com/file',undefined,transport)).body_base64,'AP8q');
+  for (const size of [8*1024*1024-1,8*1024*1024]) {
+    const output=await readPublicFile('https://example.com/file',undefined,{...transport,get:async()=>({status:200,contentType:'application/octet-stream',body:Buffer.alloc(size,42)})});
+    assert.equal(Buffer.from(output.body_base64,'base64').length,size);
+  }
   await assert.rejects(readPublicFile('https://example.com/file',undefined,{...transport,resolve:async()=>['127.0.0.1']}));
   await assert.rejects(readPublicFile('https://example.com/file',undefined,{...transport,get:async()=>({status:302,location:'http://127.0.0.1/private',contentType:'',body:''})}));
-  await assert.rejects(readPublicFile('https://example.com/file',undefined,{...transport,get:async()=>({status:200,contentType:'application/octet-stream',body:Buffer.alloc(256*1024+1)})}));
+  await assert.rejects(readPublicFile('https://example.com/file',undefined,{...transport,get:async()=>({status:200,contentType:'application/octet-stream',body:Buffer.alloc(8*1024*1024+1)})}));
 });
 
 test('download tool enforces shared scope, caches completion and does not retry an uncertain write', async t => {
@@ -33,4 +37,16 @@ test('download tool enforces shared scope, caches completion and does not retry 
   assert.equal((await executeAsyncTurnTool(runtime,actor,lease,call,'lost',undefined,external)).error,'outcome_unknown');
   assert.equal(writes,1);assert.equal(reads,2);
   assert.equal(turnTools(false,external,false).some(tool=>tool.name==='web_download'),false);
+});
+
+test('download limits concurrent buffers and releases capacity after interrupted requests', async () => {
+  let reject!: (error: Error) => void;
+  const pending = new Promise<never>((_resolve, fail) => { reject = fail; });
+  const transport: PageNetwork = {resolve:async()=>['93.184.216.34'],get:()=>pending};
+  const first=readPublicFile('https://example.com/a',undefined,transport);
+  const second=readPublicFile('https://example.com/b',undefined,transport);
+  await assert.rejects(readPublicFile('https://example.com/c',undefined,transport),/capacity/);
+  reject(Error('Connection interrupted'));
+  await Promise.all([assert.rejects(first,/interrupted/),assert.rejects(second,/interrupted/)]);
+  assert.equal((await readPublicFile('https://example.com/d',undefined,{...transport,get:async()=>({status:200,contentType:'text/plain',body:'ok'})})).body_base64,'b2s=');
 });

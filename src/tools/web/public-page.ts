@@ -4,6 +4,8 @@ import { get as httpGet } from 'node:http';
 import { get as httpsGet } from 'node:https';
 
 const MAX_BYTES = 256 * 1024;
+const MAX_FILE_BYTES = 8 * 1024 * 1024;
+let activeDownloads = 0;
 const PAGE_TYPES = /^(text\/(html|plain)|application\/json)(;|$)/i;
 const RESOURCE_TYPES = /^(text\/(html|plain|css|javascript)|application\/(json|javascript|x-javascript)|image\/(png|jpeg|gif|webp|avif|svg\+xml|x-icon|vnd.microsoft.icon)|font\/(woff|woff2|ttf|otf))(;|$)/i;
 export interface PageResponse { status: number; location?: string; contentType: string; body: string | Buffer }
@@ -36,7 +38,7 @@ export function pageUrl(input: string): URL {
   return url;
 }
 
-const networkFor = (accept: string, types: RegExp): PageNetwork => ({
+const networkFor = (accept: string, types: RegExp, maxBytes = MAX_BYTES): PageNetwork => ({
   resolve: async host => (await lookup(host, { family: 4, all: true })).map(item => item.address),
   get: (url, address, signal) => new Promise((resolve, reject) => {
     // Keep Host/SNI from the original URL, pin the checked address, and do not use proxies or pooled sockets.
@@ -53,13 +55,13 @@ const networkFor = (accept: string, types: RegExp): PageNetwork => ({
       }
       if (status !== 200 || !types.test(contentType) ||
         (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') ||
-        Number(response.headers['content-length']) > MAX_BYTES) {
+        Number(response.headers['content-length']) > maxBytes) {
         response.destroy(); reject(new Error('Page status, type, encoding or size is unsupported')); return;
       }
       const chunks: Buffer[] = []; let size = 0;
       response.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (size > MAX_BYTES) { response.destroy(new Error('Page exceeds size limit')); return; }
+        if (size > maxBytes) { response.destroy(new Error('Page exceeds size limit')); return; }
         chunks.push(chunk);
       });
       response.on('error', reject);
@@ -83,8 +85,8 @@ export async function publicAddress(host: string, signal: AbortSignal, resolveHo
   return addresses[0]!;
 }
 
-async function fetchPublic(input: string, types: RegExp, signal: AbortSignal | undefined, transport: PageNetwork) {
-  const cancellation = AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]);
+async function fetchPublic(input: string, types: RegExp, signal: AbortSignal | undefined, transport: PageNetwork, maxBytes = MAX_BYTES) {
+  const cancellation = AbortSignal.any([AbortSignal.timeout(maxBytes === MAX_FILE_BYTES ? 60_000 : 15_000), ...(signal ? [signal] : [])]);
   let url = pageUrl(input);
   for (let redirects = 0; redirects <= 5; redirects++) {
     cancellation.throwIfAborted();
@@ -99,7 +101,7 @@ async function fetchPublic(input: string, types: RegExp, signal: AbortSignal | u
       url = next; continue;
     }
     if (response.status !== 200 || !types.test(response.contentType) || /[\r\n]/.test(response.contentType) ||
-      Buffer.byteLength(response.body) > MAX_BYTES) throw new Error('Page could not be read');
+      Buffer.byteLength(response.body) > maxBytes) throw new Error('Page could not be read');
     return { url: url.href, content_type: response.contentType, body: Buffer.from(response.body), fetched_at: new Date().toISOString(), untrusted: true };
   }
   throw new Error('Page could not be read');
@@ -118,7 +120,12 @@ export async function readPublicResource(input: string, signal?: AbortSignal, tr
 }
 
 /** Bounded anonymous download; never execute the returned bytes or accept a remote filename. */
-export async function readPublicFile(input: string, signal?: AbortSignal, transport: PageNetwork = networkFor('*/*', /^[^\r\n]+$/)) {
-  const { body, ...source } = await fetchPublic(input, /^[^\r\n]+$/, signal, transport);
-  return { ...source, body_base64: body.toString('base64') };
+export async function readPublicFile(input: string, signal?: AbortSignal, transport: PageNetwork = networkFor('*/*', /^[^\r\n]+$/, MAX_FILE_BYTES)) {
+  // Bound simultaneous network/body buffering; the turn runner also bounds complete transfers.
+  if (activeDownloads >= 2) throw new Error('Download capacity reached');
+  activeDownloads++;
+  try {
+    const { body, ...source } = await fetchPublic(input, /^[^\r\n]+$/, signal, transport, MAX_FILE_BYTES);
+    return { ...source, body_base64: body.toString('base64') };
+  } finally { activeDownloads--; }
 }

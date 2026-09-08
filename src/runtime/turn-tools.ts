@@ -24,11 +24,12 @@ import type { FormLog } from '../tools/browser/form-log.ts';
 export interface ExternalTools { readPage?: typeof readPublicPage; readFile?: typeof readPublicFile; search?: WebSearch; workspace?: WorkspaceRead; workspaceWrite?: WorkspaceWriter; program?: ProgramExecutor; browser?: BrowserExecutor;
   forms?: Pick<FormLog, 'execute'>; packages?: PackageExecutor; x?: { api: Pick<XApi, 'read' | 'mentions'>; posts: Pick<XPostLog, 'execute'> } }
 
+let activeFileTransfers = 0;
 const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
-  web_download: { description: '公開URLのファイルを最大256KiBまで匿名取得し、指定した共有相対パスへ保存する。実行・展開はしない。既存更新には現在のexpected_revisionが必要、新規はnull。共有会話限定。認証付きURLや秘密を含むURLは渡さない。', schema: object({ url: Type.String({ minLength: 1, maxLength: 4096 }), path: Type.String({ minLength: 1, maxLength: 512 }), expected_revision: Type.Union([Type.Null(), Type.String({ pattern: '^[a-f0-9]{64}$' })]) }) },
+  web_download: { description: '公開URLのファイルを最大8MiBまで匿名取得し、指定した共有相対パスへ保存する。実行・展開はしない。既存更新には現在のexpected_revisionが必要、新規はnull。共有会話限定。認証付きURLや秘密を含むURLは渡さない。', schema: object({ url: Type.String({ minLength: 1, maxLength: 4096 }), path: Type.String({ minLength: 1, maxLength: 512 }), expected_revision: Type.Union([Type.Null(), Type.String({ pattern: '^[a-f0-9]{64}$' })]) }) },
   browser_interact: { description: '公開ページ上のローカル操作。現在のrevisionとrefを使い、通常button/checkbox/radioのclick、非秘密項目のfill、縦scrollを行う。通信は全拒否するため外部送信やログインは成立しない。操作後のsnapshotで結果を確認し、送信は専用フォーム準備と承認を使う。', schema: interactionSchema },
   browser_form_prepare: { description: '直近画面の送信ボタンrefとテキスト項目ref/valueから通常HTMLフォームの送信内容を準備する。送信はしない。返されたformをbrowser_form_submitへ渡す。ファイル・ログイン情報・独自JavaScript送信は非対応。', schema: formPreparationSchema },
   browser_form_submit: { description: '準備したHTTPSフォームを送信する。必ず完全な宛先・方式・項目を管理者へ提示して承認待ちになり、同じ操作の承認後だけ送る。filesを指定すると共有ファイルをmultipart送信する。各filesはname/path/filename/revision(SHA256)/sizeを明示し、承認後の改変は拒否する。Cookie/認証/転送先への追送は行わない。HTTP応答だけで購入等の成功を断定せず内容を確認する。不明結果を別の呼出しで再送しない。', schema: formSchema },
@@ -189,7 +190,9 @@ export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease
     if (!external.workspaceWrite || !Value.Check(definitions.web_download.schema, call.arguments)) return { error: 'Invalid or unavailable download' };
     if (!runtime.tasks.active(actor, lease) || signal?.aborted) return { error: 'Task is no longer active' };
     if (runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility !== 'shared') return { error: 'Use a shared conversation for downloads' };
-    return runtime.tasks.externalOnce(actor, lease, operationId, { name: call.name, arguments: call.arguments }, async (executionId, firstAttempt) => {
+    if (activeFileTransfers >= 2) return { error: 'Download capacity reached; retry later' };
+    activeFileTransfers++;
+    try { return await runtime.tasks.externalOnce(actor, lease, operationId, { name: call.name, arguments: call.arguments }, async (executionId, firstAttempt) => {
       // A lost fetch/write response must not restart with potentially changed remote bytes.
       if (!firstAttempt) return { error: 'outcome_unknown' };
       const file = await (external.readFile ?? readPublicFile)(call.arguments.url as string, signal);
@@ -197,7 +200,7 @@ export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease
       const result = await external.workspaceWrite!({ operation_id: executionId, path: call.arguments.path as string,
         content: file.body_base64, encoding: 'base64', expected_revision: call.arguments.expected_revision as string | null }, signal);
       return { ...result, url: file.url, content_type: file.content_type, size: Buffer.from(file.body_base64, 'base64').length, untrusted: true };
-    });
+    }); } finally { activeFileTransfers--; }
   }
   if (call.name === 'workspace_write') {
     if (!external.workspaceWrite || !Value.Check(definitions.workspace_write.schema, call.arguments)) return { error: 'Invalid or unavailable workspace write' };

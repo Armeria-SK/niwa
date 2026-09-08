@@ -4,17 +4,20 @@ import type { WorkspaceWriteLog } from './write-log.ts';
 
 /** Only bind this broker to the protected niwa-exec Unix socket; never expose it as a network service. */
 export function createWorkspaceServer(workspace: Workspace, writes?: WorkspaceWriteLog) {
+  let active = 0;
   const server = createServer(async (request, response) => {
     response.setHeader('Content-Type', 'application/json; charset=utf-8');
     response.setHeader('Cache-Control', 'no-store');
     if (request.method !== 'POST' || request.url !== '/files' || request.headers['content-type'] !== 'application/json') {
       response.writeHead(400).end('{"error":"invalid_request"}'); request.resume(); return;
     }
+    if (active >= 2) { response.writeHead(503).end('{"error":"busy"}'); request.resume(); return; }
+    active++;
     try {
       const chunks: Buffer[] = []; let size = 0;
       for await (const chunk of request) {
         size += chunk.length;
-        if (size > 512 * 1024) { response.writeHead(413).end('{"error":"too_large"}'); request.destroy(); return; }
+        if (size > 12 * 1024 * 1024) { response.writeHead(413).end('{"error":"too_large"}'); request.destroy(); return; }
         chunks.push(chunk);
       }
       const body: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -30,7 +33,7 @@ export function createWorkspaceServer(workspace: Workspace, writes?: WorkspaceWr
     } catch (error) {
       const code = error instanceof WorkspaceError ? error.code : (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'not_found' : 'unavailable';
       response.writeHead(code === 'conflict' ? 409 : 400).end(JSON.stringify({ error: code }));
-    }
+    } finally { active--; }
   });
   server.requestTimeout = 10_000; server.headersTimeout = 10_000;
   server.setTimeout(10_000, socket => socket.destroy());

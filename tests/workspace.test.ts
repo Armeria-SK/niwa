@@ -275,7 +275,35 @@ test('binary writes cross IPC, retain bytes across journal reopen, and reject ch
   await assert.rejects(write({ ...input, content: Buffer.from('changed').toString('base64') }));
   for (const path of ['../outside', 'lost+found/file', '/etc/file']) assert.equal((await write({ ...input, operation_id: randomUUID(), path })).error, 'invalid_path');
   await assert.rejects(write({ ...input, operation_id: 'bad-base64', content: 'not base64' }));
-  await assert.rejects(write({ ...input, operation_id: 'oversize', content: Buffer.alloc(256 * 1024 + 1).toString('base64') }));
+  await assert.rejects(write({ ...input, operation_id: 'oversize', content: Buffer.alloc(8 * 1024 * 1024 + 1).toString('base64') }));
   const reopened = new WorkspaceWriteLog(database, f.files); f.cleanup.push(() => reopened.close());
   assert.deepEqual(reopened.write(input), first);
+});
+
+test('8 MiB binary files cross live IPC, detect conflicts and reconcile an interrupted receipt', async t => {
+  const f=fixture(t),db=join(f.root,'large.db'),log=new WorkspaceWriteLog(db,f.files);f.cleanup.push(()=>log.close());
+  const server=createWorkspaceServer(f.files,log),endpoint=join(f.root,'large.sock');
+  await new Promise<void>(resolve=>server.listen(endpoint,resolve));
+  t.after(()=>new Promise<void>(resolve=>server.close(()=>resolve())));
+  const data=Buffer.alloc(8*1024*1024,42),input={operation_id:'large-file',path:'large.bin',content:data.toString('base64'),encoding:'base64' as const,expected_revision:null};
+  const write=workspaceWriter(endpoint,()=>{}), first=await write(input);
+  assert.equal(first.revision,createHash('sha256').update(data).digest('hex'));
+  assert.equal((await workspaceDownloader(endpoint,()=>{})('large.bin')).data,input.content);
+  const {DatabaseSync}=await import('node:sqlite');const receipt=new DatabaseSync(db);
+  receipt.prepare('UPDATE workspace_writes SET output=NULL WHERE operation_id=?').run(input.operation_id);receipt.close();
+  assert.deepEqual(log.write(input),first);
+  assert.equal((await write({...input,operation_id:'conflict',content:Buffer.from('different').toString('base64')})).error,'conflict');
+});
+
+test('ENOSPC before atomic replacement preserves original bytes and cleans temporary files', async t => {
+  const f=fixture(t);const first=f.files.write('kept.bin','original',null);
+  const fs=(await import('node:fs')).default;
+  const {syncBuiltinESMExports}=await import('node:module');
+  const original=fs.writeFileSync;
+  fs.writeFileSync=(()=>{throw Object.assign(Error('Artificial full disk'),{code:'ENOSPC'});}) as typeof original;
+  syncBuiltinESMExports();
+  try {assert.throws(()=>f.files.write('kept.bin',Buffer.from([0,255]).toString('base64'),first.revision,'base64'),/full disk/);}
+  finally {fs.writeFileSync=original;syncBuiltinESMExports();}
+  assert.equal(f.files.read('kept.bin').content,'original');
+  assert.deepEqual((await import('node:fs')).readdirSync(f.shared),['kept.bin']);
 });

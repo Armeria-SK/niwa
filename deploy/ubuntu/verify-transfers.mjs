@@ -17,11 +17,15 @@ const program=configuredProgramExecutor(`${root}/runtime/sockets/program.sock`,c
 const stage=mkdtempSync(`${root}/runtime/transfer-acceptance-`),bytes=Buffer.from([0,255,128,42]);
 const file={name:'attachment',path:`${directory}/file.bin`,filename:'file.bin',revision:createHash('sha256').update(bytes).digest('hex'),size:bytes.length};
 const input={operation_id:id,path:file.path,content:bytes.toString('base64'),encoding:'base64',expected_revision:null};
-let journal,created=false,publicCreated=false,sends=0;
+let journal,created=false,publicCreated=false,largeCreated=false,sends=0;
 try {
  const saved=await write(input);assert.equal(saved.revision,file.revision);created=true;
  assert.deepEqual(await write(input),saved);
  assert.equal((await read(file.path)).data,bytes.toString('base64'));
+ const large=Buffer.alloc(8*1024*1024,42),largeHash=createHash('sha256').update(large).digest('hex');
+ const largeResult=await write({operation_id:randomUUID(),path:`${directory}/large.bin`,content:large.toString('base64'),encoding:'base64',expected_revision:null});
+ assert.equal(largeResult.revision,largeHash);largeCreated=true;
+ assert.equal((await read(`${directory}/large.bin`)).revision,largeHash);
  const publicFile=await readPublicFile('https://www.iana.org/help/example-domains');
  const downloaded=await write({operation_id:randomUUID(),path:`${directory}/public.html`,content:publicFile.body_base64,encoding:'base64',expected_revision:null});
  assert.ok(downloaded.revision);publicCreated=true;
@@ -37,10 +41,10 @@ try {
  assert.deepEqual(await journal.execute({...operation,allow_start:false}),result);assert.equal(sends,1);
  await write({...input,operation_id:randomUUID(),expected_revision:file.revision,content:Buffer.from('changed').toString('base64')});
  assert.equal((await journal.execute({...operation,operation_id:randomUUID()})).error,'outcome_unknown');assert.equal(sends,1);
- writeFileSync(`${root}/runtime/transfer-acceptance.json`,JSON.stringify({verified_at:new Date().toISOString(),checks:['public-https-download-to-workspace','live-binary-ipc','bytes-and-revision','write-replay','multipart-synthetic-send','journal-reopen-no-resend','changed-file-no-send'],external_send:false})+'\n',{mode:0o600});
+ writeFileSync(`${root}/runtime/transfer-acceptance.json`,JSON.stringify({verified_at:new Date().toISOString(),checks:['8m-binary-ipc','public-https-download-to-workspace','live-binary-ipc','bytes-and-revision','write-replay','multipart-synthetic-send','journal-reopen-no-resend','changed-file-no-send'],external_send:false})+'\n',{mode:0o600});
  console.log('PASS: live binary IPC, synthetic multipart upload, reopened journal and changed-file rejection; no external send');
 } finally {
  await journal?.close();
- if(created){const result=await program({operation_id:randomUUID(),agent_id:'fixture',room_id:'fixture',task_id:'fixture',allow_start:true,seconds:10,command:['python3','-c',`from pathlib import Path\np=Path(${JSON.stringify(directory)})\n(p/'file.bin').unlink()\n${publicCreated ? "(p/'public.html').unlink()\n" : ''}p.rmdir()`]});assert.equal(result.code,0,'Fixture cleanup failed');}
+ if(created){const result=await program({operation_id:randomUUID(),agent_id:'fixture',room_id:'fixture',task_id:'fixture',allow_start:true,seconds:10,command:['python3','-c',`from pathlib import Path\np=Path(${JSON.stringify(directory)})\n(p/'file.bin').unlink()\n${publicCreated ? "(p/'public.html').unlink()\n" : ''}${largeCreated ? "(p/'large.bin').unlink()\n" : ''}p.rmdir()`]});assert.equal(result.code,0,'Fixture cleanup failed');}
  rmSync(stage,{recursive:true,force:true});
 }
