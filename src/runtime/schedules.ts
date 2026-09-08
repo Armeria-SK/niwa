@@ -12,7 +12,7 @@ export interface ScheduleInput {
   trigger_kind?: 'interval' | 'shared_changes';
   autonomous?: boolean;
 }
-interface Schedule extends Omit<ScheduleInput, 'autonomous'> { autonomous: number; source_revision: string; max_model_calls: number; model_calls: number; enabled: number; run_count: number; failure_reset: number; wait_reason: string | null }
+interface Schedule extends Omit<ScheduleInput, 'autonomous'> { version: string; autonomous: number; source_revision: string; max_model_calls: number; model_calls: number; enabled: number; run_count: number; failure_reset: number; wait_reason: string | null }
 
 /** Administrator-owned triggers; each occurrence and its task commit together. */
 export class Schedules {
@@ -22,15 +22,16 @@ export class Schedules {
   list(actor: Actor): Schedule[] {
     this.admin(actor);
     return this.db.prepare(`SELECT id,agent_id,room_id,prompt,interval_ms,next_at,max_runs,timeout_ms,
-      enabled,run_count,failure_reset,wait_reason,max_model_calls,model_calls,trigger_kind,source_revision,autonomous FROM schedules WHERE deleted=0 ORDER BY rowid`).all() as unknown as Schedule[];
+      enabled,run_count,failure_reset,wait_reason,max_model_calls,model_calls,trigger_kind,source_revision,autonomous FROM schedules WHERE deleted=0 ORDER BY rowid`).all().map(row => {
+      const { run_count, model_calls, source_revision, failure_reset, wait_reason, ...configuration } = row;
+      return { ...row, version: createHash('sha256').update(JSON.stringify(configuration)).digest('hex') };
+    }) as unknown as Schedule[];
   }
   private sourceRevision(agentId: string, roomId: string): string {
     const messages = this.db.prepare('SELECT id,author_id,body FROM messages WHERE room_id=? AND author_id<>? ORDER BY id').all(roomId, agentId);
     return createHash('sha256').update(JSON.stringify(messages)).digest('hex');
   }
-  create(actor: Actor, input: ScheduleInput): Schedule {
-    this.admin(actor);
-    check(typeof input.id === 'string' && /^[0-9a-f-]{36}$/.test(input.id), 'invalid', 'Invalid schedule id');
+  private validate(input: ScheduleInput) {
     text(input.prompt);
     for (const [value, min, max] of [[input.interval_ms, 60_000, 365 * 86400_000],
       [input.next_at, 0, 8_000_000_000_000_000], [input.max_runs, 1, 10_000], [input.timeout_ms, 60_000, 86400_000]]) {
@@ -41,6 +42,31 @@ export class Schedules {
     check(input.autonomous === undefined || typeof input.autonomous === 'boolean', 'invalid', 'Invalid autonomy mode');
     check(trigger === 'interval' || trigger === 'shared_changes', 'invalid', 'Invalid schedule trigger');
     check(Number.isSafeInteger(maxCalls) && maxCalls > 0 && maxCalls <= 1_000_000, 'invalid', 'Invalid model call limit');
+    return { maxCalls, trigger };
+  }
+  update(actor: Actor, input: ScheduleInput, version: string): Schedule {
+    this.admin(actor);
+    const { maxCalls, trigger } = this.validate(input);
+    return transaction(this.db, () => {
+      const row = this.list(actor).find(item => item.id === input.id);
+      check(row, 'not_found', 'Schedule not found');
+      check(row.version === version, 'conflict', 'Schedule changed; reload before saving');
+      if (input.agent_id !== row.agent_id || input.room_id !== row.room_id) this.recipient(actor, input.agent_id, input.room_id);
+      if (trigger === 'shared_changes' || input.autonomous) check(this.db.prepare('SELECT visibility FROM rooms WHERE id=?').get(input.room_id)!.visibility === 'shared', 'forbidden', 'Automatic participation requires a shared room');
+      check(input.next_at === row.next_at || input.next_at >= Date.now(), 'invalid', 'Next occurrence must be in the future');
+      check(input.max_runs >= row.run_count && maxCalls >= row.model_calls, 'invalid', 'Limits cannot be lower than usage');
+      const sameSource = input.agent_id === row.agent_id && input.room_id === row.room_id && trigger === row.trigger_kind;
+      this.db.prepare(`UPDATE schedules SET agent_id=?,room_id=?,prompt=?,interval_ms=?,next_at=?,max_runs=?,timeout_ms=?,
+        max_model_calls=?,trigger_kind=?,autonomous=?,source_revision=? WHERE id=?`).run(
+        input.agent_id, input.room_id, input.prompt, input.interval_ms, input.next_at, input.max_runs, input.timeout_ms,
+        maxCalls, trigger, Number(input.autonomous ?? false), sameSource ? row.source_revision : trigger === 'shared_changes' ? this.sourceRevision(input.agent_id, input.room_id) : '', input.id);
+      return this.list(actor).find(item => item.id === input.id)!;
+    });
+  }
+  create(actor: Actor, input: ScheduleInput): Schedule {
+    this.admin(actor);
+    check(typeof input.id === 'string' && /^[0-9a-f-]{36}$/.test(input.id), 'invalid', 'Invalid schedule id');
+    const { maxCalls, trigger } = this.validate(input);
     const hash = createHash('sha256').update(JSON.stringify([input.agent_id, input.room_id, input.prompt,
       input.interval_ms, input.next_at, input.max_runs, input.timeout_ms,
       ...(input.max_model_calls === undefined ? [] : [input.max_model_calls]), ...(trigger === 'interval' ? [] : [trigger]), ...(input.autonomous ? ['autonomous'] : [])])).digest('hex');

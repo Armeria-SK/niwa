@@ -19,7 +19,7 @@ export class Workspace {
   #path(name: string, directory = false, createParents = false): string {
     if (typeof name !== 'string' || name.length > 512) throw new WorkspaceError('invalid_path');
     const parts = name === '' && directory ? [] : name.split('/');
-    if (parts.length > 16 || parts.some(part => !part || part === '.' || part === '..' ||
+    if (parts[0] === 'lost+found' || parts.length > 16 || parts.some(part => !part || part === '.' || part === '..' ||
       /[<>:"\\|?*\x00-\x1f]/.test(part) || /[. ]$/.test(part) || /^\.niwa-/i.test(part) ||
       /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) throw new WorkspaceError('invalid_path');
     assertDirectoryPath(this.#root);
@@ -57,7 +57,7 @@ export class Workspace {
     try {
       for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
         if (entries.length === 200 || ++scanned > 1000) { truncated = true; break; }
-        if (!/^\.niwa-/i.test(entry.name) && !entry.isSymbolicLink() && (entry.isFile() || entry.isDirectory())) {
+        if (!(name === '' && entry.name === 'lost+found') && !/^\.niwa-/i.test(entry.name) && !entry.isSymbolicLink() && (entry.isFile() || entry.isDirectory())) {
           entries.push({ name: entry.name, kind: entry.isDirectory() ? 'directory' : 'file' });
         }
       }

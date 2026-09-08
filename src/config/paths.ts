@@ -1,7 +1,7 @@
 import { mkdirSync, lstatSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
-const directories = ['config', 'state', 'secrets', 'workspace', 'runtime', 'backups', 'logs'] as const;
+const directories = ['config', 'state', 'secrets', 'workspace', 'runtime', 'backups'] as const;
 export type ProductPaths = { root: string } & Record<typeof directories[number], string>;
 
 /** Explicit installation root, never inferred from cwd or the source checkout. */

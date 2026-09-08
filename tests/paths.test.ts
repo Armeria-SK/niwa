@@ -13,7 +13,7 @@ test('product layout separates source, state, secrets and shared workspace under
     assert.throws(() => productPaths('relative'), /absolute/);
     assert.equal(existsSync(root), false);
     const paths = initializeProduct(root);
-    assert.deepEqual(readdirSync(root).sort(), ['backups', 'config', 'logs', 'runtime', 'secrets', 'state', 'workspace']);
+    assert.deepEqual(readdirSync(root).sort(), ['backups', 'config', 'runtime', 'secrets', 'state', 'workspace']);
     const runtime = new Runtime(paths.state);
     try { runtime.bootstrap(runtime.administrator()); } finally { runtime.close(); }
     assert.equal(existsSync(join(paths.state, 'control.db')), true);

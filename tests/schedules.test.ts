@@ -157,7 +157,7 @@ test('model reservations share one persistent schedule budget across delegation 
 test('existing schedules migrate with a finite budget and retain creation replay compatibility', t => {
   const f = fixture(t); f.runtime.schedules.create(f.admin, f.input);
   const db = new DatabaseSync(join(f.root, 'control.db'));
-  db.exec('DROP TABLE approval_requests; DROP TABLE business_tasks; DROP TABLE deleted_content; DROP TABLE deleted_agents; ALTER TABLE tasks DROP COLUMN conversation_reply; DROP TABLE generated_model; ALTER TABLE settings DROP COLUMN backup_time; ALTER TABLE settings DROP COLUMN autonomous;');
+  db.exec('DROP TABLE member_requests; ALTER TABLE messages DROP COLUMN reply_to; DROP TABLE approval_requests; DROP TABLE business_tasks; DROP TABLE deleted_content; DROP TABLE deleted_agents; ALTER TABLE tasks DROP COLUMN conversation_reply; DROP TABLE generated_model; ALTER TABLE settings DROP COLUMN backup_time; ALTER TABLE settings DROP COLUMN autonomous;');
   db.exec('DROP TABLE common_rules; DROP INDEX tasks_provider_retry; ALTER TABLE tasks DROP COLUMN provider_retry_at; DROP TABLE model_routes; DROP TABLE provider_limits; ALTER TABLE schedules DROP COLUMN max_model_calls; ALTER TABLE schedules DROP COLUMN model_calls; ALTER TABLE schedules DROP COLUMN trigger_kind; ALTER TABLE schedules DROP COLUMN source_revision; ALTER TABLE schedules DROP COLUMN deleted; ALTER TABLE schedules DROP COLUMN autonomous; PRAGMA user_version=14;');
   db.close();
   const r = f.reopen(); const admin = r.administrator();
@@ -236,4 +236,43 @@ test('deleting a schedule persists, rejects resurrection and keeps existing jobs
   assert.equal(r.tasks.get(admin, lease.task.id).result, '仕事の履歴は残る');
   assert.equal(r.messages(admin, f.room.id).some(item => item.id === message.id), true);
   assert.equal(r.updates(admin).some(item => item.task_id === lease.task.id), true);
+});
+
+test('editing schedules preserves usage, running jobs, identity and stopped state; stale edits conflict', t => {
+  const f = fixture(t); const r = f.runtime;
+  const original = r.schedules.create(f.admin, f.input);
+  r.schedules.dispatch(f.admin, f.input.next_at);
+  const task = r.tasks.list(f.admin)[0]!;
+  const lease = r.tasks.claim(f.admin)!;
+  const actor = r.agentSession(f.leader.id);
+  r.tasks.reserveModelCall(actor, lease);
+  r.schedules.setEnabled(f.admin, f.input.id, false);
+  const current = r.schedules.list(f.admin)[0]!;
+  const changed = { ...f.input, prompt: 'Edited request', next_at: current.next_at, max_model_calls: 50 };
+  assert.throws(() => r.schedules.update(f.admin, changed, original.version), /changed/);
+  const saved = r.schedules.update(f.admin, changed, current.version);
+  assert.equal(saved.prompt, changed.prompt); assert.equal(saved.run_count, 1); assert.equal(saved.model_calls, 1); assert.equal(saved.enabled, 0);
+  assert.equal(r.tasks.get(f.admin, task.id).prompt, f.input.prompt);
+  assert.equal(r.schedules.create(f.admin, f.input).prompt, changed.prompt);
+  assert.throws(() => r.schedules.update(actor, changed, saved.version), /Administrator/);
+  assert.throws(() => r.schedules.update(f.admin, { ...changed, interval_ms: 1 }, saved.version), /bounds/);
+  r.tasks.cancel(f.admin, task.id); r.schedules.setEnabled(f.admin, f.input.id, true);
+  r.schedules.dispatch(f.admin, saved.next_at);
+  assert.equal(r.tasks.list(f.admin).at(-1)!.prompt, changed.prompt);
+  const reopened = f.reopen();
+  assert.equal(reopened.schedules.list(reopened.administrator())[0]!.run_count, 2);
+});
+
+test('editing a dormant schedule keeps its recipient and does not erase concurrent model usage', t => {
+  const f = fixture(t); const r = f.runtime;
+  const child = r.createAgent(r.agentSession(f.leader.id), 'Scheduled member');
+  const input = { ...f.input, agent_id: child.id, max_model_calls: 5 };
+  r.schedules.create(f.admin, input); r.schedules.dispatch(f.admin, input.next_at);
+  const lease = r.tasks.claim(f.admin)!; const actor = r.agentSession(child.id);
+  const before = r.schedules.list(f.admin)[0]!;
+  r.tasks.reserveModelCall(actor, lease); r.tasks.reserveModelCall(actor, lease);
+  assert.throws(() => r.schedules.update(f.admin, { ...input, next_at: before.next_at, max_model_calls: 1 }, before.version), /lower than usage/);
+  r.setDormant(f.admin, child.id, true); r.organizeRoom(f.admin, f.room.id, { archived: true });
+  const edited = r.schedules.update(f.admin, { ...input, prompt: 'Changed while dormant', next_at: before.next_at }, before.version);
+  assert.equal(edited.agent_id, child.id); assert.equal(edited.model_calls, 2); assert.equal(edited.run_count, 1);
 });

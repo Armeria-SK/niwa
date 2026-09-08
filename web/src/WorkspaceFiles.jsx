@@ -40,7 +40,7 @@ export function WorkspaceFiles({ onClose }) {
   }
   const entries = [...(listing?.entries || [])].filter(item => item.name.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name, 'ja') : a.kind === 'directory' ? -1 : 1));
-  return <Modal title="共有フォルダー" onClose={onClose} className="artifact-modal"><div className="modal-body">
+  return <Modal title="共有フォルダー" onClose={onClose} className="artifact-modal"><div className="modal-body form-stack">
     <div className="inline-actions"><button className="button secondary" disabled={busy || (!path && !file)} onClick={() => file ? setFile(null) : setPath(path.split('/').slice(0, -1).join('/'))}>戻る</button><button className="button subtle" disabled={busy} onClick={load}>再読み込み</button></div>
     <p className="muted">共有フォルダー{path ? ` / ${path}` : ''}{file ? ` / ${file.name}` : ''}</p>
     {busy ? <p role="status">ファイルを確認しています…</p> : null}
@@ -50,7 +50,7 @@ export function WorkspaceFiles({ onClose }) {
       {file.image ? <img src={file.image} alt={file.name} style={{ display: 'block', maxWidth: '100%', maxHeight: '60vh', margin: '0 auto', objectFit: 'contain' }} onError={() => setFile(current => current === file ? { ...current, image: null, content: null } : current)} />
         : file.content === null ? <p>この形式・サイズのプレビューには対応していません。ダウンロードして確認できます。</p> : <pre className="artifact-document">{file.content}</pre>}
     </> : listing?.available ? <><label className="field"><span>このフォルダーを検索</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>
-      <div className="artifact-grid">{entries.map(entry => <article className="artifact-card" key={entry.name}><div className="artifact-card-meta"><FileIcon size={24} /><span>{entry.kind === 'directory' ? 'フォルダー' : 'ファイル'}</span></div><button className="artifact-title" disabled={busy} onClick={() => entry.kind === 'directory' ? setPath([path, entry.name].filter(Boolean).join('/')) : open(entry.name)}>{entry.name}</button></article>)}</div>
+      <div className="artifact-grid">{entries.map(entry => <button className="artifact-card workspace-entry" key={entry.name} disabled={busy} onClick={() => entry.kind === 'directory' ? setPath([path, entry.name].filter(Boolean).join('/')) : open(entry.name)}><span className="artifact-card-meta"><FileIcon size={24} /><span>{entry.kind === 'directory' ? 'フォルダー' : 'ファイル'}</span></span><span className="artifact-title">{entry.name}</span></button>)}</div>
       {!entries.length ? <p>表示するファイルがありません。</p> : null}
       {listing.truncated ? <p className="field-hint">件数が多いため一覧を一部に制限しています。</p> : null}
     </> : null}

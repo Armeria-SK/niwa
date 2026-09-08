@@ -70,7 +70,7 @@ test('upgrading an existing database indexes saved sources and subsequent task r
     for (const table of ['messages', 'tasks', 'task_replies', 'artifacts']) {
       for (const action of ['insert', 'update', 'delete']) db.exec(`DROP TRIGGER search_${table}_${action}`);
     }
-    db.exec('DROP TABLE approval_requests; DROP TABLE business_tasks; DROP TABLE deleted_content; DROP TABLE deleted_agents; ALTER TABLE tasks DROP COLUMN conversation_reply; DROP TABLE generated_model; ALTER TABLE settings DROP COLUMN backup_time; ALTER TABLE settings DROP COLUMN autonomous; DROP TABLE common_rules; DROP INDEX tasks_provider_retry; ALTER TABLE tasks DROP COLUMN provider_retry_at; DROP TABLE model_routes; DROP TABLE provider_limits; DROP TABLE schedule_runs; DROP TABLE schedules; DROP TABLE history_search; PRAGMA user_version=12;');
+    db.exec('DROP TABLE member_requests; ALTER TABLE messages DROP COLUMN reply_to; DROP TABLE approval_requests; DROP TABLE business_tasks; DROP TABLE deleted_content; DROP TABLE deleted_agents; ALTER TABLE tasks DROP COLUMN conversation_reply; DROP TABLE generated_model; ALTER TABLE settings DROP COLUMN backup_time; ALTER TABLE settings DROP COLUMN autonomous; DROP TABLE common_rules; DROP INDEX tasks_provider_retry; ALTER TABLE tasks DROP COLUMN provider_retry_at; DROP TABLE model_routes; DROP TABLE provider_limits; DROP TABLE schedule_runs; DROP TABLE schedules; DROP TABLE history_search; PRAGMA user_version=12;');
   } finally { db.close(); }
   runtime = new Runtime(root); admin = runtime.administrator();
   const actor = runtime.agentSession(leader.id);

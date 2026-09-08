@@ -130,9 +130,14 @@ export function App() {
     });
     return ok ? version : false;
   }
+  const memberRequest = useRef(null);
   async function addMember(draft) {
-    const ok = await createThread({ title: '仲間を迎える相談', text: `新しい仲間を作ってください。希望: ${JSON.stringify(draft)}`, scope: 'shared' });
-    return ok ? null : '依頼を保存できませんでした。';
+    const { name, ...profile } = draft;
+    const key = JSON.stringify(draft);
+    if (memberRequest.current?.key !== key) memberRequest.current = { key, id: crypto.randomUUID() };
+    const ok = await mutate(() => api('/agents', 'POST', { id: memberRequest.current.id, name, profile }), '仲間を迎えました');
+    if (ok) memberRequest.current = null;
+    return ok ? null : '仲間を作成できませんでした。人数上限・接続状態を確認してください。';
   }
   async function openArtifact(id) {
     try { const value = await api(`/artifacts/${id}`); setModal({ type: 'artifact', artifact: { ...artifacts.find(item => item.id === id), ...value } }); } catch (error) { notify(error.message); }
@@ -146,12 +151,12 @@ export function App() {
   async function sendMessage(text, attachments = [], replyTo, selectedRecipients = []) {
     if (selectedRecipients.some(id => memberMap[id]?.deleted)) { notify('指定したBotは削除されています。依頼先を選び直してください。'); return false; }
     if (attachments.length) { notify('添付ファイルの保存はまだ利用できません。'); return false; }
-    const body = replyTo ? `「${replyTo.text}」への返信\n${text}` : text;
-    const fallback = thread.scope === 'private' ? thread.members[0] : members.find(item => item.authority === 'leader')?.id;
+    const body = text;
+    const fallback = replyTo && memberMap[replyTo.author] && !memberMap[replyTo.author].deleted ? replyTo.author : thread.scope === 'private' ? thread.members[0] : members.find(item => item.authority === 'leader')?.id;
     const recipients = [...new Set(selectedRecipients.length ? selectedRecipients : fallback ? [fallback] : [])].sort();
-    const key = JSON.stringify([thread.id, recipients, body]);
+    const key = JSON.stringify([thread.id, recipients, body, replyTo?.id]);
     if (submission.current?.key !== key) submission.current = { key, id: crypto.randomUUID() };
-    const ok = await mutate(() => api(`/rooms/${thread.id}/messages`, 'POST', { id: submission.current.id, body, ...(recipients.length ? { agent_ids: recipients } : {}) }), '送信しました');
+    const ok = await mutate(() => api(`/rooms/${thread.id}/messages`, 'POST', { id: submission.current.id, body, ...(replyTo ? { reply_to: replyTo.id } : {}), ...(recipients.length ? { agent_ids: recipients } : {}) }), '送信しました');
     if (ok) submission.current = null;
     return ok;
   }
@@ -206,7 +211,7 @@ export function App() {
     {page === 'conversation' && !thread ? <main className="conversation" id="main-content"><EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState></main> : null}
     {page === 'conversation' && thread ? <Conversation onThreadAction={organizeThread} thread={thread} tasks={activities.filter(task => task.thread === thread.id)} onWork={() => { setActivityFilter('running'); navigate('activity'); }} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => setMobileDetail(false)} onArtifact={openArtifact} /> : null}
     {page === 'members' ? <Members onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), 'Botを削除しました。会話と成果物は残っています。')} onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={selectedMember} onSelect={setSelectedMember} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
-    {page === 'activity' ? <Activity onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '予定を削除しました')} schedules={schedules} threads={threads} onScheduleSave={body => mutate(() => api('/schedules', 'POST', body), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={activityFilter} onFilter={setActivityFilter} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(() => api(`/approvals/${id}`, 'POST', { approved, version }), approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
+    {page === 'activity' ? <Activity onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '予定を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={activityFilter} onFilter={setActivityFilter} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(() => api(`/approvals/${id}`, 'POST', { approved, version }), approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
     {page === 'settings' ? <Settings onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} onUpdateMembers={setMembers} notify={notify} /> : null}
     <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined} onClick={() => { setPage(id); if (id === 'conversation') setMobileDetail(false); }}><Icon size={23} /><span>{label}</span>{id === 'activity' && pendingCount ? <span className="nav-notice" /> : null}</a>)}</nav>
     {modal?.type === 'appearance' ? <Modal title={`${memberMap[modal.member].name}のアイコン`} onClose={() => setModal(null)} className="appearance-modal"><AppearanceEditor member={memberMap[modal.member]} onCancel={() => setModal(null)} onSave={async patch => { if (await updateMember(modal.member, patch)) setModal(null); }} /></Modal> : null}

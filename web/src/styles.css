@@ -798,3 +798,5 @@
   .member-list-shell .member-list { height: auto; padding-right: 0; }
   .member-scroll-controls { display: none; }
 }
+.workspace-entry { width: 100%; text-align: left; color: var(--text); }
+.workspace-entry:hover { border-color: var(--green); }

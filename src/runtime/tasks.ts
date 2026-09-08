@@ -81,12 +81,27 @@ export class Tasks {
       const next = (this.#db.prepare(`SELECT t.id,t.agent_id FROM tasks t JOIN agents a ON a.id=t.agent_id
         WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS
           (SELECT 1 FROM tasks running WHERE running.agent_id=t.agent_id AND running.state='running')
-        ORDER BY t.created_at,t.rowid`).all() as { id: string; agent_id: string }[]).find(task => !excludedAgents.has(task.agent_id) && this.#autonomyAllowed(task.id));
+        ORDER BY t.updated_at,t.rowid`).all() as { id: string; agent_id: string }[]).find(task => !excludedAgents.has(task.agent_id) && this.#autonomyAllowed(task.id));
       if (!next) return undefined;
       const token = randomUUID();
       this.#db.prepare("UPDATE tasks SET lease_token=?,attempt=attempt+1 WHERE id=?").run(token, next.id);
       this.#change(next.id, 'running');
       return { task: publicTask(this.#read(next.id)), token };
+    });
+  }
+  /** Give another runnable job a turn after a durable model/tool step, without ending this work. */
+  yieldIfWaiting(actor: Actor, lease: TaskLease): boolean {
+    return transaction(this.#db, () => {
+      this.#owned(actor, lease);
+      const waiting = this.#db.prepare(`SELECT t.id,t.updated_at FROM tasks t JOIN agents a ON a.id=t.agent_id
+        WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS
+          (SELECT 1 FROM tasks r WHERE r.agent_id=t.agent_id AND r.state='running' AND r.id<>?)
+        ORDER BY t.updated_at,t.rowid`).all(lease.task.id).find(row => this.#autonomyAllowed(row.id as string));
+      if (!waiting) return false;
+      this.#change(lease.task.id, 'queued');
+      this.#db.prepare('UPDATE tasks SET lease_token=NULL,updated_at=MAX(updated_at,?) WHERE id=?')
+        .run(Number(waiting.updated_at) + 1, lease.task.id);
+      return true;
     });
   }
   #owned(actor: Actor, lease: TaskLease, requireRunning = true): RecordWithLease {

@@ -90,10 +90,11 @@ function MemoryEditModal({ memory, member, onSave, onClose }) {
 function AddMemberModal({ onClose, onAdd, atLimit, maxMembers }) {
   const [draft, setDraft] = useState({ name: '', role: '', persona: '', motion: 'none', shape: 'pebble', color: '#61B8A5' });
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const change = (key, value) => { setDraft(current => ({ ...current, [key]: value })); setError(''); };
-  return <Modal title="メンバーを追加" onClose={onClose}><form onSubmit={async e => { e.preventDefault(); if (!atLimit && draft.name.trim()) setError(await onAdd({ ...draft, persona: draft.persona.trim() }) || ''); }}>
-    <div className="modal-body form-stack">
-      <p className="field-hint">指定内容をもとにリーダーへ追加を依頼します。生成結果は会話で確認できます。</p>
+  return <Modal title="メンバーを追加" onClose={() => { if (!busy) onClose(); }}><form onSubmit={async e => { e.preventDefault(); if (busy || atLimit || !draft.name.trim()) return; setBusy(true); try { setError(await onAdd({ ...draft, name: draft.name.trim(), persona: draft.persona.trim() }) || ''); } finally { setBusy(false); } }}>
+    <fieldset className="modal-body form-stack" disabled={busy} style={{ border: 0, margin: 0 }}>
+      <p className="field-hint">指定した内容で仲間を追加します。追加後はこのメンバー一覧で確認できます。</p>
       {atLimit ? <p className="field-error" role="alert">生成メンバーの上限（{maxMembers}体）に達しています。休眠中も数に含みます。設定の「活動と人数」を確認してください。</p> : null}
       <div className="field-pair"><label className="field"><span>名前</span><input autoFocus required maxLength={20} value={draft.name} onChange={e => change('name', e.target.value)} placeholder="新しい仲間の名前" /></label><label className="field"><span>役割</span><input maxLength={40} value={draft.role} onChange={e => change('role', e.target.value)} placeholder="例：調べる・まとめる" /></label></div>
       <label className="field"><span>性格と話し方</span><textarea rows={3} maxLength={2000} value={draft.persona} onChange={e => change('persona', e.target.value)} placeholder="どんな仲間にしたいですか？" /></label>
@@ -101,7 +102,7 @@ function AddMemberModal({ onClose, onAdd, atLimit, maxMembers }) {
       <fieldset><legend>動き</legend><MotionPicker value={draft.motion} onChange={value => change('motion', value)} /></fieldset>
       <p className="field-hint">モデルは「新しいBotの標準モデル」を使用します。見た目やプロフィールは追加後も変更できます。</p>
       {error ? <p className="field-error" role="alert">{error}</p> : null}
-    </div>
-    <div className="form-actions"><button type="button" className="button subtle" onClick={onClose}>キャンセル</button><button className="button primary" disabled={atLimit || !draft.name.trim()}>追加する</button></div>
+    </fieldset>
+    <div className="form-actions"><button type="button" className="button subtle" disabled={busy} onClick={onClose}>キャンセル</button><button className="button primary" disabled={busy || atLimit || !draft.name.trim()}>{busy ? '追加中…' : '追加する'}</button></div>
   </form></Modal>;
 }

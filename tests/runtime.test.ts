@@ -212,3 +212,35 @@ test('conversation pages retain the first message and cover replies without leak
   const reopened = new Runtime(f.path);
   try { assert.deepEqual(reopened.messagePage(reopened.administrator(), room.id), f.runtime.messagePage(f.admin, room.id)); } finally { reopened.close(); }
 });
+
+test('administrator member requests are idempotent and create no conversation or task', t => {
+  const f = fixture(t); const id = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+  const before = f.runtime.rooms(f.admin).length;
+  const profile = { persona: 'Synthetic profile', color: '#abcdef' };
+  f.runtime.updateSettings(f.admin, { paused: true });
+  const agent = f.runtime.requestMember(f.admin, id, 'New colleague', profile);
+  assert.equal(f.runtime.requestMember(f.admin, id, 'New colleague', { color: '#abcdef', persona: 'Synthetic profile' }).id, agent.id);
+  assert.deepEqual(f.runtime.profile(f.admin, agent.id), profile);
+  assert.equal(agent.model, f.runtime.generatedModel(f.admin).model);
+  assert.equal(f.runtime.rooms(f.admin).length, before);
+  assert.equal(f.runtime.tasks.list(f.admin).length, 0);
+  assert.throws(() => f.runtime.requestMember(f.admin, id, 'Changed', profile), /different input/);
+  denied(() => f.runtime.requestMember(f.childActor, id, 'New colleague', profile));
+  f.runtime.updateSettings(f.admin, { generatedLimit: 2 });
+  assert.throws(() => f.runtime.requestMember(f.admin, 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb', 'Too many', {}), /limit/);
+});
+
+test('structured replies retain clean message text and reject cross-room targets atomically', t => {
+  const f = fixture(t); const r = f.runtime;
+  const room = r.createRoom(f.admin, 'Reply test'); const hidden = r.createRoom(f.admin, 'Private', [f.child.id]);
+  const original = r.post(f.childActor, room.id, 'Long original message');
+  const privateMessage = r.post(f.childActor, hidden.id, 'Private original');
+  const id = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+  const sent = r.submit(f.admin, id, room.id, 'Short reply', [f.child.id], original.id);
+  assert.equal(sent.message.body, 'Short reply'); assert.equal(sent.message.reply_to, original.id);
+  assert.equal(sent.task?.agent_id, f.child.id);
+  assert.equal(r.submit(f.admin, id, room.id, 'Short reply', [f.child.id], original.id).message.id, sent.message.id);
+  assert.throws(() => r.submit(f.admin, 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb', room.id, 'Invalid', [f.child.id], privateMessage.id), /Reply target/);
+  assert.equal(r.messages(f.admin, room.id).length, 2);
+  assert.equal(r.tasks.list(f.admin).length, 1);
+});

@@ -198,3 +198,23 @@ test('administrator deletion requires the displayed Bot version and retains hist
   assert.equal(state.deletedAgents.some((agent: { id: string }) => agent.id === child.id), true);
   assert.equal((await f.call(`/api/agents/${child.id}/profile`, 'PATCH', { patch: { name: '復活' }, version: body.version })).status, 404);
 });
+
+test('member creation, structured reply and schedule edit routes validate authorization and persistence', async t => {
+  const f = await fixture(t); const draft = { id: randomUUID(), name: 'UI member', profile: { role: 'Testing' } };
+  assert.equal((await f.call('/api/agents', 'POST', draft)).status, 401);
+  await f.login();
+  const created = await (await f.call('/api/agents', 'POST', draft)).json() as { id: string };
+  assert.equal((await (await f.call('/api/agents', 'POST', draft)).json()).id, created.id);
+  assert.equal(f.runtime.rooms(f.admin).length, 0);
+  const room = f.runtime.createRoom(f.admin, 'Synthetic thread');
+  const message = f.runtime.post(f.runtime.agentSession(created.id), room.id, 'Synthetic original');
+  const reply = await f.call(`/api/rooms/${room.id}/messages`, 'POST', { id: randomUUID(), body: 'Clean reply', reply_to: message.id, agent_ids: [created.id] });
+  assert.equal(reply.status, 200); const data = await reply.json(); assert.equal(data.message.body, 'Clean reply'); assert.equal(data.message.reply_to, message.id);
+  const schedule = { id: randomUUID(), agent_id: created.id, room_id: room.id, prompt: 'Original schedule', interval_ms: 60_000, next_at: Date.now() + 600_000, max_runs: 10, timeout_ms: 60_000 };
+  const saved = await (await f.call('/api/schedules', 'POST', schedule)).json();
+  const { id, ...body } = schedule;
+  const edited = await f.call(`/api/schedules/${id}`, 'PUT', { ...body, prompt: 'Edited schedule', version: saved.version });
+  assert.equal(edited.status, 200); assert.equal((await edited.json()).prompt, 'Edited schedule');
+  assert.equal((await f.call(`/api/schedules/${id}`, 'PUT', { ...body, version: saved.version })).status, 409);
+  assert.equal((await f.call(`/api/schedules/${id}`, 'PUT', { ...body, version: saved.version, run_count: 0 })).status, 400);
+});

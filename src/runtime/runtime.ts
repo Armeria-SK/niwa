@@ -1,3 +1,4 @@
+import { userActionsSchema } from '../storage/user-actions-schema.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, rmSync } from 'node:fs';
 import { agentDeletionSchema } from '../storage/agent-deletion-schema.ts';
@@ -64,7 +65,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -255,6 +256,9 @@ export class Runtime {
   createAgent(actor: Actor, name: string, profile: Record<string, unknown> = {}): Agent {
     this.#leader(actor);
     this.#running(actor);
+    return this.#createMember(actor, name, profile);
+  }
+  #createMember(actor: Actor, name: string, profile: Record<string, unknown>): Agent {
     text(name, 100);
     check(Value.Check(creationProfileSchema, profile), 'invalid', 'Invalid initial profile');
     return transaction(this.#db, () => {
@@ -266,6 +270,23 @@ export class Runtime {
         .run(id, name, 'member', 'active', selected.model, selected.reasoning, selected.provider);
       this.#db.prepare('INSERT INTO agent_profiles(agent_id,profile) VALUES (?,?)').run(id, JSON.stringify(profile));
       return this.#agent(id);
+    });
+  }
+  requestMember(actor: Actor, id: string, name: string, profile: Record<string, unknown>): Agent {
+    this.#admin(actor);
+    check(typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id), 'invalid', 'Invalid member request id');
+    text(name, 100);
+    check(Value.Check(creationProfileSchema, profile), 'invalid', 'Invalid initial profile');
+    const hash = createHash('sha256').update(JSON.stringify([name, Object.entries(profile).sort(([a], [b]) => a.localeCompare(b))])).digest('hex');
+    return transaction(this.#db, () => {
+      const prior = this.#db.prepare('SELECT * FROM member_requests WHERE id=?').get(id);
+      if (prior) {
+        check(prior.input_hash === hash, 'conflict', 'Member request id was reused with different input');
+        return this.#agent(prior.agent_id as string);
+      }
+      const agent = this.#createMember(actor, name, profile);
+      this.#db.prepare('INSERT INTO member_requests VALUES (?,?,?)').run(id, hash, agent.id);
+      return agent;
     });
   }
   setDormant(actor: Actor, agentId: string, dormant: boolean): void {
@@ -575,8 +596,8 @@ export class Runtime {
     const principal = this.#running(actor);
     this.#room(actor, roomId);
     text(body);
-    const message: Message = { id: randomUUID(), room_id: roomId, author_id: principal.id, body, created_at: new Date().toISOString() };
-    this.#db.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?)')
+    const message: Message = { reply_to: null, id: randomUUID(), room_id: roomId, author_id: principal.id, body, created_at: new Date().toISOString() };
+    this.#db.prepare('INSERT INTO messages(id,room_id,author_id,body,created_at) VALUES (?, ?, ?, ?, ?)')
       .run(message.id, roomId, message.author_id, body, message.created_at);
     return message;
   }
@@ -667,13 +688,13 @@ export class Runtime {
     });
   }
   /** A browser retry must not post twice or start two jobs. Both records commit together. */
-  submit(actor: Actor, id: string, roomId: string, body: string, agentId?: string | string[]): { message: Message; task: Task | null } {
+  submit(actor: Actor, id: string, roomId: string, body: string, agentId?: string | string[], replyTo?: string): { message: Message; task: Task | null } {
     this.#admin(actor);
     check(typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id), 'invalid', 'Invalid submission id');
     text(body);
     const recipients = Array.isArray(agentId) ? [...new Set(agentId)].sort() : agentId ? [agentId] : [];
     check(!Array.isArray(agentId) || (agentId.length > 0 && agentId.length <= 100 && agentId.every(value => typeof value === 'string')), 'invalid', 'Invalid recipients');
-    const hash = createHash('sha256').update(JSON.stringify([roomId, body, Array.isArray(agentId) ? recipients : agentId ?? null])).digest('hex');
+    const hash = createHash('sha256').update(JSON.stringify([roomId, body, Array.isArray(agentId) ? recipients : agentId ?? null, ...(replyTo === undefined ? [] : [replyTo])])).digest('hex');
     return transaction(this.#db, () => {
       const previous = this.#db.prepare('SELECT * FROM submissions WHERE id=?').get(id) as
         { input_hash: string; message_id: string; task_id: string | null } | undefined;
@@ -683,7 +704,12 @@ export class Runtime {
         return { message, task: previous.task_id ? this.tasks.get(actor, previous.task_id) : null };
       }
       check(!this.roomPreferences(actor, roomId).archived, 'conflict', 'Restore the archived room before replying');
+      if (replyTo !== undefined) check(typeof replyTo === 'string' && !!this.#db.prepare('SELECT 1 FROM messages WHERE id=? AND room_id=?').get(replyTo, roomId), 'not_found', 'Reply target is no longer available in this conversation');
       const message = this.post(actor, roomId, body);
+      if (replyTo !== undefined) {
+        this.#db.prepare('UPDATE messages SET reply_to=? WHERE id=?').run(replyTo, message.id);
+        message.reply_to = replyTo;
+      }
       let task: Task | null = null;
       for (const recipient of recipients) {
         this.#room(this.agentSession(recipient), roomId);

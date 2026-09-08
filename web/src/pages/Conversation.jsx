@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
 import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon } from '../icons.jsx';
 import { uid } from '../data.js';
-import { ConversationWork } from '../ConversationWork.jsx';
 import { MentionText } from '../MentionText.jsx';
 import { useConversationMessages } from '../useConversationMessages.js';
 import './Conversation.css';
@@ -56,23 +55,22 @@ function ThreadBody({ thread, tasks, onWork, onNewSession, memberMap, paused, on
   async function submit(e) {
     e?.preventDefault(); if (readOnly || sending || (!draft.trim() && !attachments.length)) return;
     setSending(true);
-    try { if (await onSend(draft.trim(), attachments.map(({ name, size }) => ({ name, size })), replyTo ? { author: replyTo.author, text: replyTo.text } : null, recipients.map(item => item.id))) {
+    try { if (await onSend(draft.trim(), attachments.map(({ name, size }) => ({ name, size })), replyTo ? { id: replyTo.id, author: replyTo.author } : null, recipients.map(item => item.id))) {
       setDraft(''); setAttachments([]); setReplyTo(null); setRecipients([]); setCaret(0); inputRef.current?.focus();
     } } finally { setSending(false); }
   }
   return <>
     <header className="message-scroll conversation-header" aria-label="会話のヘッダー">
       <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={15} />新規セッション</button><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : 'アーカイブ'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
-      <Message message={history.first} isRoot title={thread.title} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
     </header>
     <div className="message-scroll conversation-replies" ref={listRef}>
+      <Message message={history.first} isRoot title={thread.title} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
       <div className="reply-divider"><span>{Math.max(0, thread.message_count - 1)}件の返信</span><span /></div>
       {history.loading ? <p role="status">発言を読み込み中…</p> : null}
       {history.error ? <p role="alert">{history.error}<button className="text-button" onClick={history.reload}>再読み込み</button></p> : null}
       {history.next !== null ? <button className="text-button" disabled={history.loading} onClick={loadEarlier}>以前の返信を50件読み込む</button> : null}
       <div className="replies">{history.items.map(message => <Message key={message.id} message={message} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />)}</div>
       {thread.message_count === 1 && !tasks.some(task => !['done', 'canceled'].includes(task.status)) ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
-      <ConversationWork tasks={tasks} members={memberMap} onOpen={onWork} />
     </div>
     <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。返信するには「保管から戻す」を選んでください。</p> : null}
       {deletedConversation ? <p className="archive-note" role="status">相手のBotは削除されています。この会話は履歴として読むことができます。</p> : null}
@@ -105,6 +103,7 @@ function Message({ message, isRoot = false, title, memberMap, onMember, onReply,
     <div className="message-content"><div className="message-meta"><strong>{member?.name || 'あなた'}</strong><time>{message.time}</time><IconButton label={`${member?.name || 'あなた'}のメッセージに返信`} className="message-reply" onClick={() => onReply(message)}><ReplyIcon size={18} /></IconButton></div>
       {isRoot ? <h1>{title}</h1> : null}
       {(message.text || message.replyTo || message.artifact || message.attachments?.length) ? <div className="message-bubble">
+      {message.reply_to ? <span className="message-reply-label"><ReplyIcon size={13} />返信</span> : null}
       {message.replyTo ? <blockquote><span>{memberMap[message.replyTo.author]?.name || 'あなた'}</span>{message.replyTo.text}</blockquote> : null}
       {message.text ? <p><MentionText text={message.text} members={memberMap} /></p> : null}
       {message.artifact ? <button className="file-link" onClick={onArtifact}><FileIcon size={19} />雨音の調査メモ.md</button> : null}

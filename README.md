@@ -63,6 +63,8 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh restart
 
 端末のCtrl+Cでサービスは停止しません。`node ...server.js` を別に起動すると二重起動になります。日常操作にセットアップの再実行や `--init` は不要です。上のstopは今回の稼働を停止する操作で、自動起動の登録は残ります。Botの活動停止状態は画面で管理します。
 
+運用ログは `sudo journalctl -u niwa.service -u niwa-workspace.service` で確認できます。`app/` や `logs/` への保存は行いません。共有フォルダー内の `lost+found` はファイルシステムの復旧用なので、画面には表示しません。
+
 ## ブラウザー・パッケージ機能を追加する
 
 初回セットアップ後に追加する場合は、次を順に実行します。すでに有効化済みの環境で繰り返す必要はありません。

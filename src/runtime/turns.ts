@@ -50,6 +50,8 @@ export class TurnRunner {
     let saved = runtime.tasks.steps(actor, lease.task.id);
     let pendingCompletion: (typeof saved)[number] | undefined;
     let position = 0;
+    let freshSteps = 0;
+    const startedAt = Date.now();
     let historyRevision: number | undefined;
     while (runtime.tasks.active(actor, lease) && !signal?.aborted) {
       agent = runtime.agents(actor).find(item => item.id === lease.task.agent_id)!;
@@ -76,6 +78,7 @@ export class TurnRunner {
         runtime.tasks.discardStep(actor, lease, step.step);
         continue;
       }
+      const freshStep = !step;
       if (!step) {
         if (agent.provider === 'openai_subscription' && adapter.adapter_id === 'ollama') {
           try { adapter = await this.#resolve(agent, lease.task.id, signal); }
@@ -84,7 +87,7 @@ export class TurnRunner {
           if (!runtime.isContextCurrent(actor, context.revision)) continue;
         }
         const base: ModelMessage[] = runtime.messages(actor, lease.task.room_id).map(message => ({
-          role: 'user', content: JSON.stringify({ message_id: message.id, author_id: message.author_id, text: message.body }),
+          role: 'user', content: JSON.stringify({ message_id: message.id, author_id: message.author_id, text: message.body, ...(message.reply_to ? { reply_to: message.reply_to } : {}) }),
         }));
         const workState = runtime.tasks.workState(actor, lease);
         const reviewingMemory = base.length > 0 && !runtime.memoryReviewed(actor, lease);
@@ -169,6 +172,7 @@ export class TurnRunner {
         const index = runtime.tasks.saveStep(actor, lease, context.revision, events);
         step = { step: index, memory_revision: context.revision, rules_revision: rules.revision, discarded: 0, events: [...events] };
         saved.push(step);
+        freshSteps++;
       }
       const calls: ModelToolCall[] = step.events.filter((event): event is Extract<ModelEvent, { type: 'tool_call' }> => event.type === 'tool_call')
         .map(({ name, tool_call_id, arguments: args }) => ({ name, tool_call_id, arguments: args }));
@@ -198,6 +202,7 @@ export class TurnRunner {
         if (!runtime.isContextCurrent(actor, context.revision)) break;
       }
       saved = runtime.tasks.steps(actor, lease.task.id);
+      if (freshStep && (freshSteps >= 4 || Date.now() - startedAt >= 10_000) && !pendingCompletion && runtime.tasks.yieldIfWaiting(actor, lease)) return;
     }
   }
 }

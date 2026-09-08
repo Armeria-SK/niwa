@@ -14,6 +14,7 @@ export interface Room {
   visibility: 'shared' | 'private';
 }
 export interface Message {
+  reply_to?: string | null;
   id: string;
   room_id: string;
   author_id: string;

@@ -249,3 +249,13 @@ test('unknown or failed writes are not retried and a closed receipt store never 
     assert.equal(f.files.read('report.md').content, '別編集');
   } finally { reopened.close(); }
 });
+
+test('filesystem recovery directory is hidden and cannot be read or overwritten', t => {
+  const f = fixture(t); mkdirSync(join(f.shared, 'lost+found'));
+  writeFileSync(join(f.shared, 'lost+found', 'recovery'), 'retained');
+  f.files.write('report/result.txt', 'generated', null);
+  assert.deepEqual(f.files.list().entries, [{ name: 'report', kind: 'directory' }]);
+  assert.equal(f.files.read('report/result.txt').content, 'generated');
+  for (const operation of [() => f.files.list('lost+found'), () => f.files.download('lost+found/recovery'), () => f.files.write('lost+found/recovery', 'changed', null)]) assert.throws(operation, /invalid_path/);
+  assert.equal(readFileSync(join(f.shared, 'lost+found', 'recovery'), 'utf8'), 'retained');
+});

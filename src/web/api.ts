@@ -7,7 +7,7 @@ import type { Runtime } from '../runtime/runtime.ts';
 import { WebAuth } from './auth.ts';
 import { ModelGateway } from '../providers/gateway.ts';
 import { serveStatic } from './static.ts';
-import { profileSchema } from '../domain/profile.ts';
+import { profileSchema, creationProfileSchema } from '../domain/profile.ts';
 import type { Backups } from '../backup/backups.ts';
 import type { WorkspaceRead, WorkspaceDownload } from '../tools/files/client.ts';
 import type { XOAuth } from '../auth/x-oauth.ts';
@@ -15,6 +15,11 @@ import type { XOAuth } from '../auth/x-oauth.ts';
 const string = Type.String({ minLength: 1, maxLength: 20_000 });
 const id = Type.String({ pattern: '^[0-9a-f-]{36}$' });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
+const scheduleFields = { agent_id: id, room_id: id, prompt: string,
+      interval_ms: Type.Integer({ minimum: 60_000, maximum: 365 * 86400_000 }), next_at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }),
+      max_runs: Type.Integer({ minimum: 1, maximum: 10_000 }), timeout_ms: Type.Integer({ minimum: 60_000, maximum: 86400_000 }),
+      max_model_calls: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
+      trigger_kind: Type.Optional(Type.Union([Type.Literal('interval'), Type.Literal('shared_changes')])), autonomous: Type.Optional(Type.Boolean()) };
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(JSON.stringify(body));
@@ -48,14 +53,13 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'GET', path: /^\/api\/workspace\/file$/, run: (_m, _b, url) => {
       if (!workspace) throw new DomainError('conflict', 'Workspace service unavailable');
       return workspace.download(url.searchParams.get('path') ?? ''); } },
+    { method: 'POST', path: /^\/api\/agents$/, schema: object({ id, name: Type.String({ minLength: 1, maxLength: 100 }), profile: creationProfileSchema }), run: (_m, b) => runtime.requestMember(admin, b.id as string, b.name as string, b.profile as Record<string, unknown>) },
     { method: 'GET', path: /^\/api\/schedules$/, run: () => runtime.schedules.list(admin) },
     { method: 'DELETE', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, run: m => { runtime.schedules.remove(admin, m[1]!); return { ok: true }; } },
-    { method: 'POST', path: /^\/api\/schedules$/, schema: object({ id, agent_id: id, room_id: id, prompt: string,
-      interval_ms: Type.Integer({ minimum: 60_000, maximum: 365 * 86400_000 }), next_at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }),
-      max_runs: Type.Integer({ minimum: 1, maximum: 10_000 }), timeout_ms: Type.Integer({ minimum: 60_000, maximum: 86400_000 }),
-      max_model_calls: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
-      trigger_kind: Type.Optional(Type.Union([Type.Literal('interval'), Type.Literal('shared_changes')])), autonomous: Type.Optional(Type.Boolean()) }),
+    { method: 'POST', path: /^\/api\/schedules$/, schema: object({ id, ...scheduleFields }),
       run: (_m, b) => runtime.schedules.create(admin, b as unknown as import('../runtime/schedules.ts').ScheduleInput) },
+    { method: 'PUT', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, schema: object({ ...scheduleFields, version: Type.String({ pattern: '^[0-9a-f]{64}$' }) }),
+      run: (m, b) => runtime.schedules.update(admin, { ...b, id: m[1]! } as unknown as import('../runtime/schedules.ts').ScheduleInput, b.version as string) },
     { method: 'PATCH', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, schema: object({ enabled: Type.Boolean() }),
       run: (m, b) => { runtime.schedules.setEnabled(admin, m[1]!, b.enabled as boolean); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/subscription$/, run: async () => models.subscription ? { available: true, ...await models.subscription.status() } : { available: false, connected: false, pending: false, url: null, error: null } },
@@ -109,10 +113,10 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, run: m => runtime.messages(admin, m[1]!) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages\/page$/, run: (m, _b, url) => runtime.messagePage(admin, m[1]!, Number(url.searchParams.get('before') ?? Number.MAX_SAFE_INTEGER)) },
     { method: 'GET', path: /^\/api\/rooms\/search$/, run: (_m, _b, url) => runtime.searchRoomMessages(admin, url.searchParams.get('q') ?? '') },
-    { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, schema: object({ id, body: string, agent_id: Type.Optional(id), agent_ids: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
+    { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, schema: object({ id, body: string, reply_to: Type.Optional(id), agent_id: Type.Optional(id), agent_ids: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
       run: (m, b) => {
         if (b.agent_id && b.agent_ids) throw new DomainError('invalid', 'Specify one recipient field');
-        return runtime.submit(admin, b.id as string, m[1]!, b.body as string, (b.agent_ids ?? b.agent_id) as string | string[] | undefined); } },
+        return runtime.submit(admin, b.id as string, m[1]!, b.body as string, (b.agent_ids ?? b.agent_id) as string | string[] | undefined, b.reply_to as string | undefined); } },
     { method: 'PATCH', path: /^\/api\/settings$/, schema: object({ paused: Type.Optional(Type.Boolean()), autonomous: Type.Optional(Type.Boolean()), generatedLimit: Type.Optional(Type.Integer({ minimum: 0 })),
       concurrencyLimit: Type.Optional(Type.Union([Type.Null(), Type.Integer({ minimum: 1 })])), backupDays: Type.Optional(Type.Integer({ minimum: 1 })), backupTime: Type.Optional(Type.String({ pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' })) }),
       run: (_m, b) => runtime.updateSettings(admin, b as Partial<Settings>) },

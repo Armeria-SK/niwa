@@ -708,3 +708,24 @@ test('initial dialogue asks in the conversation and saves its own identity after
   assert.equal(f.runtime.profile(f.admin, f.leader.id).persona, '簡潔で穏やかに話す。');
   assert.equal(f.runtime.messages(f.admin, f.room.id).filter(message => message.body.includes('どんな名前')).length, 1);
 });
+
+test('long work yields to queued requests and resumes without repeating committed tools', async t => {
+  const f = fixture(t); const r = f.runtime;
+  const first = r.tasks.create(f.admin, f.leader.id, f.room.id, 'Long work');
+  const lease = r.tasks.claim(f.admin)!;
+  const second = r.tasks.create(f.admin, f.leader.id, f.room.id, 'New question');
+  let calls = 0;
+  const runner = new TurnRunner(r, async () => model(() => {
+    calls++;
+    return calls <= 4 ? tool('decision_report', { title: `Progress ${calls}`, detail: 'Synthetic progress' }) : complete('Finished');
+  }));
+  await runner.run(lease);
+  assert.equal(r.tasks.get(f.admin, first.id).state, 'queued');
+  assert.equal(r.tasks.active(f.actor, lease), false);
+  const next = r.tasks.claim(f.admin)!; assert.equal(next.task.id, second.id);
+  r.tasks.finish(f.actor, next, 'Answered');
+  await runner.run(r.tasks.claim(f.admin)!);
+  assert.equal(r.tasks.get(f.admin, first.id).state, 'completed');
+  assert.equal(calls, 5);
+  assert.equal(r.updates(f.admin).filter(item => item.kind === 'decision').length, 4);
+});
