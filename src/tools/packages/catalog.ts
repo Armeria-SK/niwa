@@ -28,7 +28,7 @@ export class PackageCatalog {
   }
   list(): { name: string; version: string }[] { return this.#entries.map(({ name, version }) => ({ name, version })); }
   select(names: string[]): ApprovedPackage[] {
-    if (!Array.isArray(names) || !names.length || names.length > 32 || new Set(names).size !== names.length ||
+    if (!Array.isArray(names) || !names.length || names.length > 64 || new Set(names).size !== names.length ||
       names.some(name => typeof name !== 'string' || !packageName.test(name))) throw new Error('Invalid package selection');
     return [...names].sort().map(name => {
       const entry = this.#entries.find(item => item.name === name);

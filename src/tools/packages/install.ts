@@ -8,7 +8,7 @@ export const packageVerificationName = (name: string): string => `${name.slice(0
 export function packageArguments(image: string, stage: string, name: string, count: number): string[] {
   if (!/^sha256:[a-f0-9]{64}$/.test(image) || !/^\/[^,:\x00-\x1f]+$/.test(stage) ||
     stage.split('/').some(part => part === '.' || part === '..') || !/^niwa-package-[a-f0-9-]{36}$/.test(name) ||
-    !Number.isInteger(count) || count < 1 || count > 32) throw new Error('Invalid package environment');
+    !Number.isInteger(count) || count < 1 || count > 64) throw new Error('Invalid package environment');
   return ['run', '--name', name, '--pull=never', '--network=none', '--http-proxy=false', '--user=0:0',
     '--security-opt=no-new-privileges', '--cap-drop=NET_RAW,NET_BIND_SERVICE,SETFCAP,SETPCAP,KILL',
     '--pid=private', '--ipc=private', '--uts=private', '--pids-limit=128', '--memory=1g', '--memory-swap=1g', '--cpus=1',

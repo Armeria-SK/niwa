@@ -23,18 +23,18 @@ const env=['-u','niwa-exec','--','env','-i','PATH=/usr/bin:/bin',`HOME=${root}/r
 assert.equal(exec('runuser',[...env,'is-active','niwa-executor.service']),'active');
 assert.equal(exec('runuser',[...env,'is-enabled','niwa-executor.service']),'enabled');
 const catalog=JSON.parse(readFileSync(`${root}/runtime/executor/environments/catalog/catalog.json`,'utf8'));
-assert.deepEqual(catalog,[],'Production catalog changed; review before acceptance');
 const packageDb=new DatabaseSync(`${root}/runtime/executor/state/packages.db`,{readOnly:true});
 const environment=packageDb.prepare('SELECT * FROM environment').all().map(row=>({...row}));packageDb.close();
 if(process.argv[2]==='--prepare') {
  mkdirSync(`${root}/runtime/reboot-acceptance`,{recursive:true,mode:0o700});
- writeFileSync(file,JSON.stringify({boot,ids,settings,environment,prepared_at:new Date().toISOString()})+'\n',{mode:0o600});
- console.log('PASS: reboot baseline saved; services active/enabled, mounts and database valid, production catalog empty');
+ writeFileSync(file,JSON.stringify({boot,ids,settings,environment,catalog,prepared_at:new Date().toISOString()})+'\n',{mode:0o600});
+ console.log('PASS: reboot baseline saved; services active/enabled, mounts, database and current catalog recorded');
 } else {
  const before=JSON.parse(readFileSync(file,'utf8'));assert.notEqual(boot,before.boot,'WSL/OS has not restarted');
  for(const table of tables) {const current=new Set(ids[table]);assert.ok(before.ids[table].every(id=>current.has(id)),`${table}: IDs changed; review explicit deletions`);}
  assert.deepEqual(settings,before.settings,'Settings changed; review activity state before acceptance');
  assert.deepEqual(environment,before.environment,'Adopted package environment changed');
+ assert.deepEqual(catalog,before.catalog ?? [],'Production catalog changed; review before acceptance');
  execFileSync('runuser',['-u','niwa','--',process.execPath,`${root}/deploy/ubuntu/verify-services.mjs`],{stdio:'inherit'});
  writeFileSync(file,JSON.stringify({...before,checked_boot:boot,checked_at:new Date().toISOString()})+'\n',{mode:0o600});
  console.log('PASS: new OS boot, automatic service startup, saved IDs/settings, adopted image and live IPC');

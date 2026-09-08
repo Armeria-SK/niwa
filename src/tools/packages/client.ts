@@ -7,7 +7,7 @@ import type { PackageOperation, PackageOutcome } from './log.ts';
 const item = Type.Object({ name: Type.String({ maxLength: 128 }), version: Type.String({ maxLength: 128 }) }, { additionalProperties: false });
 const listSchema = Type.Object({ available: Type.Array(item, { maxItems: 256 }), installed: Type.Array(item, { maxItems: 256 }) }, { additionalProperties: false });
 const resultSchema = Type.Object({ operation_id: Type.String(), result: Type.Union([
-  Type.Object({ image: Type.String({ pattern: '^sha256:[a-f0-9]{64}$' }), installed: Type.Array(item, { maxItems: 32 }) }, { additionalProperties: false }),
+  Type.Object({ image: Type.String({ pattern: '^sha256:[a-f0-9]{64}$' }), installed: Type.Array(item, { maxItems: 64 }) }, { additionalProperties: false }),
   Type.Object({ error: Type.Union([Type.Literal('outcome_unknown'), Type.Literal('installation_failed')]) }, { additionalProperties: false }),
 ]) }, { additionalProperties: false });
 
