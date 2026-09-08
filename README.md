@@ -30,7 +30,7 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/setup.sh
 
 `niwa` は本体・記憶・認証情報、`niwa-exec` は共有ファイルと隔離プログラム実行を担当します。既存の `niwa` を作り直しません。完了済みの準備は確認して引き継ぎます。既存領域・設定が想定と異なる場合や、途中のディスク準備が不完全な場合は停止し、既存データを削除して再作成しません。
 
-最後に `PASS: Niwa services installed, enabled and responding` と表示されれば、起動確認まで完了です。端末は閉じて構いません。セットアップ自体の実機確認状況は[起動・運用資料](docs/ubuntu/SERVICES.md)に記載しています。
+最後に `PASS: Niwa services installed, enabled and responding` と表示されれば、起動確認まで完了です。端末は閉じて構いません。初回工程と日常操作の詳細は[起動・運用資料](docs/OPERATIONS.md#services)、実機確認状況は[STATUS](docs/STATUS.md)に記載しています。
 
 ## 開く・ログインする
 
@@ -74,7 +74,7 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/verify-extensions.sh --apply
 sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
 ```
 
-最初のコマンドで専用ブラウザーと人工パッケージの隔離・動作を検証し、次のコマンドで受入記録を確認して本体へ接続・再起動します。ブラウザーの通常フォームは内容ごとの承認が必要です。パッケージの管理カタログは空で開始し、管理者が検証したdebを追加して使います。任意のオンラインパッケージ取得は行いません。詳しくは[パッケージ運用](docs/ubuntu/PACKAGES.md)を参照してください。
+最初のコマンドで専用ブラウザーと人工パッケージの隔離・動作を検証し、次のコマンドで受入記録を確認して本体へ接続・再起動します。ブラウザーの通常フォームは内容ごとの承認が必要です。パッケージの管理カタログは空で開始し、管理者が検証したdebを追加して使います。任意のオンラインパッケージ取得は行いません。詳しくは[パッケージ運用](docs/OPERATIONS.md#packages)を参照してください。
 
 保存・復元・サービス再起動を再検証する場合は `sudo sh /home/niwa/niwa/deploy/ubuntu/verify-continuity.sh --apply` を使います。復元試験は人工データの一時環境で行います。
 
@@ -82,10 +82,10 @@ sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
 
 | 状況 | 確認すること |
 |---|---|
-| セットアップが停止した | 最後の工程名とエラーを確認。既存ファイルを削除して拒否を解除しないでください。[準備工程](docs/ubuntu/SERVICES.md)を参照。 |
+| セットアップが停止した | 最後の工程名とエラーを確認。既存ファイルを削除して拒否を解除しないでください。[準備工程](docs/OPERATIONS.md#services)を参照。 |
 | `interactive authentication is required` | 自分のUbuntu端末でsudo付きセットアップコマンドを実行します。 |
 | 画面が開かない | `services.sh status` と `sudo journalctl -u niwa.service -u niwa-workspace.service -n 80 --no-pager` を確認。 |
-| プログラムが動かない | `services.sh status` でexecutorの状態を確認。[サービス資料](docs/ubuntu/SERVICES.md)にログの確認手順があります。 |
+| プログラムが動かない | `services.sh status` でexecutorの状態を確認。[サービス資料](docs/OPERATIONS.md#services)にログの確認手順があります。 |
 | Botが返事をしない | 画面のモデル接続・モデル選択・活動停止・承認待ちを確認。 |
 | 管理者キーが分からない | 上のcatコマンドで再表示できます。 |
 
