@@ -1,0 +1,20 @@
+.autonomy-status { padding: 16px 18px 4px; background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius); }
+.autonomy-status-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.autonomy-status-heading h3 { font-size: 13px; font-weight: 500; line-height: 1.7; }
+.autonomy-status-heading > span { color: var(--muted); font-size: 10px; }
+.autonomy-status-hint { font-size: 11px; line-height: 1.8; color: var(--muted); margin: 5px 0 10px; }
+.autonomy-member + .autonomy-member { border-top: 1px solid var(--border); }
+.autonomy-member > summary { display: grid; grid-template-columns: 30px minmax(0, 1fr) minmax(0, 1.3fr) 14px; align-items: center; gap: 12px; min-height: 64px; padding: 10px 0; cursor: pointer; list-style: none; }
+.autonomy-member > summary::-webkit-details-marker { display: none; }
+.autonomy-member-name { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.autonomy-member-state { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; text-align: right; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.autonomy-member-state time { color: var(--muted); font-size: 11px; }
+.autonomy-member-chevron { color: var(--muted); }
+.autonomy-member[open] .autonomy-member-chevron { transform: rotate(180deg); }
+.autonomy-member-detail { padding: 0 0 12px 42px; color: var(--muted); font-size: 11px; line-height: 1.9; overflow-wrap: anywhere; }
+.autonomy-status-error { color: var(--danger); font-size: 12px; line-height: 1.8; padding-bottom: 12px; }
+@media (max-width: 600px) {
+  .autonomy-status { padding: 12px 12px 2px; }
+  .autonomy-member > summary { gap: 8px; }
+  .autonomy-member-detail { padding-left: 38px; }
+}
