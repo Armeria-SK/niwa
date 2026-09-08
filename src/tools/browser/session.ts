@@ -6,6 +6,7 @@ import { BrowserWire } from './wire.ts';
 import { BrowserRequests } from './requests.ts';
 import type { BrowserSnapshot } from './page.ts';
 import { formSchema } from './form.ts';
+import { requestApprovalSchema } from './pending-request.ts';
 
 export const snapshotSchema = Type.Object({
   revision: Type.String({ minLength: 1, maxLength: 64 }), url: Type.String({ maxLength: 4096 }),
@@ -14,6 +15,7 @@ export const snapshotSchema = Type.Object({
     name: Type.String({ maxLength: 200 }), href: Type.Optional(Type.String({ maxLength: 4096 })) }, { additionalProperties: false }), { maxItems: 100 }),
   blocked: Type.Array(Type.String({ maxLength: 100 }), { maxItems: 10 }),
   form: Type.Optional(formSchema),
+  requests: Type.Optional(Type.Array(requestApprovalSchema, {maxItems:4})),
 }, { additionalProperties: false });
 const resourceSchema = Type.Object({ url: Type.String({ maxLength: 4096 }), method: Type.String({ maxLength: 16 }),
   resourceType: Type.String({ maxLength: 32 }) }, { additionalProperties: false });
@@ -43,6 +45,9 @@ export class BrowserSession {
     finally { signal?.removeEventListener('abort', abort); this.#active = undefined; this.#busy = false; }
   }
   navigate(url: string, signal?: AbortSignal) { return this.#action('browser.navigate', { url }, url, signal); }
+  completeRequest(input: Parameters<import('./page.ts').BrowserPage['completeRequest']>[0], signal?: AbortSignal) {
+    return this.#action('browser.complete', input, undefined, signal);
+  }
   snapshot(signal?: AbortSignal) { return this.#action('browser.snapshot', {}, undefined, signal); }
   follow(revision: string, ref: number, signal?: AbortSignal) {
     const element = this.#snapshot?.elements.find(item => item.ref === ref);

@@ -20,6 +20,7 @@ import type { PackageExecutor } from '../tools/packages/client.ts';
 import { formPreparationSchema } from '../tools/browser/client.ts';
 import { formSchema, normalizeForm } from '../tools/browser/form.ts';
 import type { FormLog } from '../tools/browser/form-log.ts';
+import { requestApprovalSchema } from '../tools/browser/pending-request.ts';
 
 export interface ExternalTools { readPage?: typeof readPublicPage; readFile?: typeof readPublicFile; search?: WebSearch; workspace?: WorkspaceRead; workspaceWrite?: WorkspaceWriter; program?: ProgramExecutor; browser?: BrowserExecutor;
   forms?: Pick<FormLog, 'execute'>; packages?: PackageExecutor; x?: { api: Pick<XApi, 'read' | 'mentions'>; posts: Pick<XPostLog, 'execute'> } }
@@ -29,8 +30,9 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  browser_request_submit: { description: 'snapshot.requests内のrequest_idとformをそのまま指定し、保留中の同一サイトGET/JSON POSTを管理者の正確な承認後に送信する。成功したJSON応答を保留中のページへ戻す。最大4件、匿名HTTPSのみ。ログイン・任意ヘッダー・別サイト通信は非対応。不明結果を別の呼出しで再送しない。', schema: requestApprovalSchema },
   web_download: { description: '公開URLのファイルを最大8MiBまで匿名取得し、指定した共有相対パスへ保存する。実行・展開はしない。既存更新には現在のexpected_revisionが必要、新規はnull。共有会話限定。認証付きURLや秘密を含むURLは渡さない。', schema: object({ url: Type.String({ minLength: 1, maxLength: 4096 }), path: Type.String({ minLength: 1, maxLength: 512 }), expected_revision: Type.Union([Type.Null(), Type.String({ pattern: '^[a-f0-9]{64}$' })]) }) },
-  browser_interact: { description: '公開ページ上のローカル操作。現在のrevisionとrefを使い、通常button/checkbox/radioのclick、非秘密項目のfill、縦scrollを行う。通信は全拒否するため外部送信やログインは成立しない。操作後のsnapshotで結果を確認し、送信は専用フォーム準備と承認を使う。', schema: interactionSchema },
+  browser_interact: { description: '公開ページ上のローカル操作。現在のrevisionとrefを使い、通常button/checkbox/radioのclick、非秘密項目のfill、縦scrollを行う。通信は保留または拒否する。requestsに出た同一サイトのJSON通信はbrowser_request_submitで承認する。ログインは非対応。操作後のsnapshotで結果を確認し、送信は専用フォーム準備と承認を使う。', schema: interactionSchema },
   browser_form_prepare: { description: '直近画面の送信ボタンrefとテキスト項目ref/valueから通常HTMLフォームの送信内容を準備する。送信はしない。返されたformをbrowser_form_submitへ渡す。ファイル・ログイン情報・独自JavaScript送信は非対応。', schema: formPreparationSchema },
   browser_form_submit: { description: '準備したHTTPSフォームを送信する。必ず完全な宛先・方式・項目を管理者へ提示して承認待ちになり、同じ操作の承認後だけ送る。filesを指定すると共有ファイルをmultipart送信する。各filesはname/path/filename/revision(SHA256)/sizeを明示し、承認後の改変は拒否する。Cookie/認証/転送先への追送は行わない。HTTP応答だけで購入等の成功を断定せず内容を確認する。不明結果を別の呼出しで再送しない。', schema: formSchema },
   packages_list: { description: '管理者が導入を許可したパッケージ名と版、導入済みの記録を確認する。必要な依存も許可一覧から選ぶ。Debianのpython3-*を使うプログラムは/usr/bin/python3で実行する。', schema: object({}) },
@@ -70,7 +72,7 @@ const definitions = {
   memory_search: { description: '現在の会話へ利用できる自分の記憶だけを検索する。', schema: object({ query: Type.String({ maxLength: 200 }) }) },
 };
 export function turnTools(isLeader: boolean, external: ExternalTools = {}, sharedRoom = false, autonomous = false): ModelToolDefinition[] {
-  return Object.entries(definitions).filter(([name]) => (name !== 'web_download' || (external.workspaceWrite && sharedRoom)) && (name !== 'browser_form_submit' || (external.forms && sharedRoom)) && (!name.startsWith('packages_') || (external.packages && sharedRoom)) && (!name.startsWith('x_') || external.x) && (name !== 'x_post' || sharedRoom) && (!name.startsWith('browser_') || external.browser) && (name !== 'program_run' || (external.program && sharedRoom)) && (name !== 'task_rest' || autonomous) && (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
+  return Object.entries(definitions).filter(([name]) => (name !== 'web_download' || (external.workspaceWrite && sharedRoom)) && (!['browser_form_submit','browser_request_submit'].includes(name) || (external.forms && sharedRoom)) && (!name.startsWith('packages_') || (external.packages && sharedRoom)) && (!name.startsWith('x_') || external.x) && (name !== 'x_post' || sharedRoom) && (!name.startsWith('browser_') || external.browser) && (name !== 'program_run' || (external.program && sharedRoom)) && (name !== 'task_rest' || autonomous) && (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
     (!name.startsWith('workspace_') || external.workspace) && (name !== 'workspace_write' || (external.workspaceWrite && sharedRoom))).map(([name, value]) => ({
     name, description: value.description, input_schema: JSON.parse(JSON.stringify(value.schema)) as JsonObject,
   }));
@@ -144,6 +146,34 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
 
 export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease, call: ModelToolCall, operationId: string,
   signal?: AbortSignal, external: ExternalTools = {}): Promise<JsonObject> {
+  if (call.name === 'browser_request_submit') {
+    if (!external.forms || !external.browser || !Value.Check(requestApprovalSchema, call.arguments)) return {error:'Invalid script request'};
+    if (!runtime.tasks.active(actor, lease) || signal?.aborted) return {error:'Task is no longer active'};
+    if (runtime.rooms(actor).find(room=>room.id===lease.task.room_id)?.visibility!=='shared') return {error:'Use a shared conversation'};
+    const {request_id}=call.arguments;
+    let form;
+    try { form=normalizeForm(call.arguments.form); } catch { return {error:'Invalid request content'}; }
+    const input={request_id,form};
+    if (JSON.stringify(input,null,2).length>2000) return {error:'Script request exceeds approval display limit'};
+    if (!runtime.authorizeAction(actor,lease,operationId,'ページのJSON通信',input)) return {waiting_for_approval:true};
+    const identity={agent_id:lease.task.agent_id,room_id:lease.task.room_id,task_id:lease.task.id};
+    const result=await runtime.tasks.externalOnce(actor,lease,operationId,{name:call.name,arguments:input},async(_executionId,firstAttempt)=>{
+      if (firstAttempt) {
+        const page=await external.browser!({...identity,action:{kind:'snapshot'}},signal);
+        const pending=page.requests?.find(item=>item.request_id===request_id);
+        if (!pending || JSON.stringify(normalizeForm(pending.form))!==JSON.stringify(form)) return {error:'Pending request changed or expired'};
+      }
+      // The page request ID binds retries across different model call IDs to one journal intent.
+      return {...await external.forms!.execute({...identity,operation_id:`browser-request-${request_id}`,allow_start:firstAttempt,form},signal)};
+    });
+    if (typeof result.status==='number' && result.status>=200 && result.status<300 && result.content_type==='application/json' && result.truncated===false && typeof result.text==='string') {
+      try {
+        const page=await external.browser({...identity,action:{kind:'complete',input:{...input,status:result.status,text:result.text}}},signal);
+        return {...result,page:{...page}};
+      } catch { return {...result,page_update:'Request expired or response unsupported; the saved response was not resent'}; }
+    }
+    return result;
+  }
   if (call.name === 'browser_form_submit') {
     if (!external.forms || !external.browser) return { error: 'Form submission is not configured' };
     if (!runtime.tasks.active(actor, lease) || signal?.aborted) return { error: 'Task is no longer active' };

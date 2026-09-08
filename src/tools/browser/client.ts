@@ -4,6 +4,7 @@ import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { verifyExecutorEndpoint } from '../../config/executor-endpoint.ts';
 import { snapshotSchema } from './session.ts';
+import { requestCompletionSchema } from './pending-request.ts';
 
 const identity = Type.String({ minLength: 1, maxLength: 100, pattern: '^[A-Za-z0-9_-]+$' });
 export const formPreparationSchema = Type.Object({ revision: Type.String({ minLength: 1, maxLength: 64 }), ref: Type.Integer({ minimum: 0, maximum: 99 }),
@@ -16,6 +17,7 @@ export const browserOperationSchema = Type.Object({ agent_id: identity, room_id:
     Type.Object({ kind: Type.Literal('follow'), revision: Type.String({ minLength: 1, maxLength: 64 }), ref: Type.Integer({ minimum: 0, maximum: 99 }) }, { additionalProperties: false }),
     Type.Object({ kind: Type.Literal('form'), ...formPreparationSchema.properties }, { additionalProperties: false }),
     Type.Object({ kind: Type.Literal('interact'), input: interactionSchema }, { additionalProperties: false }),
+    Type.Object({ kind: Type.Literal('complete'), input: requestCompletionSchema }, { additionalProperties: false }),
   ]),
 }, { additionalProperties: false });
 export type BrowserOperation = Static<typeof browserOperationSchema>;

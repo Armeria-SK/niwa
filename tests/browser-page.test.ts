@@ -124,3 +124,36 @@ test('browser session and worker exchange bounded observations and resources thr
     await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });
+
+test('JSON SPA requests stay paused until an exact response arrives and expire on navigation', {skip:!executable,timeout:30_000}, async()=>{
+  const testRoot=resolve('.local/browser-tests');mkdirSync(testRoot,{recursive:true});
+  const profile=mkdtempSync(join(testRoot,'spa-')),toWorker=new PassThrough(),toHost=new PassThrough();
+  const worker=await browserWorker(toWorker,toHost,executable!,profile);let reads=0;
+  const session=new BrowserSession(toHost,toWorker,worker.close,url=>new BrowserRequests(url,async address=>{
+    reads++;
+    const html=`<p id="read">Reading paused</p><script>fetch('/read?value=one').then(r=>r.json()).then(v=>document.getElementById('read').textContent=v.message)</script><p id="result">Waiting</p><button type="button" onclick="fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({value:42})}).then(r=>r.json()).then(v=>document.getElementById('result').textContent=v.message)">Save</button>`;
+    return {url:address,content_type:'text/html',body_base64:Buffer.from(html).toString('base64'),fetched_at:new Date().toISOString(),untrusted:true};
+  }));
+  try {
+    let first=await session.navigate('https://fixture.example.com/');
+    for(let i=0;i<10 && !first.requests?.length;i++) first=await session.snapshot();
+    const initial=first.requests![0]!;
+    assert.deepEqual(initial.form,{url:'https://fixture.example.com/read',method:'GET',fields:[{name:'value',value:'one'}]});
+    first=await session.completeRequest({...initial,status:200,text:'{"message":"Approved initial read"}'});
+    for(let i=0;i<10 && !first.text.includes('Approved initial read');i++) first=await session.snapshot();
+    assert.match(first.text,/Approved initial read/);assert.equal(reads,1);
+    let page=await session.interact({action:'click',revision:first.revision,ref:first.elements[0]!.ref});
+    for(let i=0;i<10 && !page.requests?.length;i++) page=await session.snapshot();
+    assert.equal(reads,1);assert.match(page.text,/Waiting/);assert.equal(page.requests?.length,1);
+    const pending=page.requests![0]!;
+    assert.deepEqual(pending.form,{url:'https://fixture.example.com/api',method:'POST',fields:[],json:'{"value":42}'});
+    page=await session.completeRequest({...pending,status:200,text:'{"message":"Saved exactly once"}'});
+    for(let i=0;i<10 && !page.text.includes('Saved exactly once');i++) page=await session.snapshot();
+    assert.match(page.text,/Saved exactly once/);assert.equal(page.requests,undefined);assert.equal(reads,1);
+    page=await session.interact({action:'click',revision:page.revision,ref:page.elements[0]!.ref});
+    for(let i=0;i<10 && !page.requests?.length;i++) page=await session.snapshot();
+    const expired=page.requests![0]!;
+    await session.navigate('https://fixture.example.com/next');
+    await assert.rejects(session.completeRequest({...expired,status:200,text:'{}'}),/rejected/);
+  } finally {await session.close();await rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
+});

@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { CdpPipe, type CdpEvent } from './cdp.ts';
 import { BrowserRequests, BrowserRequestBlocked } from './requests.ts';
 import { normalizeForm, type PublicForm } from './form.ts';
+import { pendingRequest } from './pending-request.ts';
 
 export interface BrowserSnapshot {
   revision: string; url: string; title: string; text: string;
   elements: { ref: number; role: string; name: string; href?: string }[];
   blocked: string[]; untrusted: true;
   form?: PublicForm;
+  requests?: { request_id: string; form: PublicForm }[];
 }
 type Broker = (url: string) => Pick<BrowserRequests, 'get'>;
 
@@ -16,7 +18,10 @@ type Broker = (url: string) => Pick<BrowserRequests, 'get'>;
 export class BrowserPage {
   #context = ''; #session = ''; #world = 0; #revision = ''; #busy = false; #closed = false;
   #lifetime = new AbortController();
-  #active: { broker: ReturnType<Broker>; signal: AbortSignal; blocked: Set<string> } | undefined;
+  #url = 'about:blank';
+  #pending = new Map<string, { requestId: unknown; networkId: unknown; form: PublicForm }>();
+  #active: { broker: ReturnType<Broker>; signal: AbortSignal } | undefined;
+  #blocked = new Set<string>();
   #unsubscribe: () => void;
   constructor(private cdp: CdpPipe, private broker: Broker = url => new BrowserRequests(url)) {
     this.#unsubscribe = cdp.onEvent(event => { void this.#event(event).catch(() => this.close()); });
@@ -42,6 +47,13 @@ export class BrowserPage {
   }
   async #event(event: CdpEvent) {
     if (event.sessionId !== this.#session || this.#closed) return;
+    if (event.method === 'Network.loadingFailed') {
+      for (const [id, request] of this.#pending) if (request.networkId === event.params.requestId) this.#pending.delete(id);
+    }
+    if (event.method === 'Page.frameNavigated') {
+      const frame = event.params.frame as { parentId?: string; url: string };
+      if (!frame.parentId) { this.#pending.clear(); this.#url = frame.url; }
+    }
     if (event.method === 'Page.javascriptDialogOpening') {
       await this.#send('Page.handleJavaScriptDialog', { accept: false }); return;
     }
@@ -49,6 +61,15 @@ export class BrowserPage {
     const requestId = event.params.requestId;
     const active = this.#active;
     try {
+      if (['Fetch', 'XHR'].includes(String(event.params.resourceType))) {
+        if (this.#pending.size >= 4) throw new BrowserRequestBlocked('request_limit');
+        let form: PublicForm;
+        try { form = pendingRequest(this.#url, event.params.request as Parameters<typeof pendingRequest>[1], String(event.params.resourceType)); }
+        catch { throw new BrowserRequestBlocked('approval_required'); }
+        this.#pending.set(randomUUID(), { requestId, networkId: event.params.networkId, form });
+        this.#blocked.add('script_request_awaiting_approval');
+        return; // Keep the intercepted request paused; there is no container network access.
+      }
       if (!active) throw new BrowserRequestBlocked('approval_required');
       const request = event.params.request as { url: string; method: string };
       const resource = await active.broker.get({ ...request, resourceType: String(event.params.resourceType) }, active.signal);
@@ -59,7 +80,7 @@ export class BrowserPage {
           { name: 'Content-Type', value: resource.content_type }, { name: 'Cache-Control', value: 'no-store' },
         ], body: redirected ? '' : resource.body_base64 }, active.signal);
     } catch (error) {
-      active?.blocked.add(error instanceof BrowserRequestBlocked ? error.reason : 'resource_failed');
+      this.#blocked.add(error instanceof BrowserRequestBlocked ? error.reason : 'resource_failed');
       // Navigation/cancellation can already have disposed this intercepted request.
       await this.#send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => {});
     }
@@ -68,11 +89,11 @@ export class BrowserPage {
     if (!this.#session || this.#closed || this.#busy) throw new Error('Browser page unavailable');
     new BrowserRequests(url); // URL validation also applies when using a parent-process broker.
     const broker = this.broker(url); // Validate before issuing browser commands.
-    this.#busy = true; this.#revision = '';
+    this.#busy = true; this.#revision = ''; this.#pending.clear(); this.#blocked.clear();
     const controller = new AbortController();
     const combined = AbortSignal.any([this.#lifetime.signal, controller.signal, AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]);
-    this.#active = { broker, signal: combined, blocked: new Set() };
-    let dispose = () => {};
+    this.#active = { broker, signal: combined };
+    let dispose = () => {}; let completed = false;
     let expectedLoader = ''; const loadedIds = new Set<string>(); let resolveLoaded = () => {};
     const loaded = new Promise<void>((resolve, reject) => {
       resolveLoaded = resolve;
@@ -95,10 +116,10 @@ export class BrowserPage {
       expectedLoader = String(result.loaderId ?? '');
       if (!expectedLoader || loadedIds.has(expectedLoader)) resolveLoaded();
       await loaded;
-      return await this.#snapshot(combined);
+      const snapshot = await this.#snapshot(combined); completed = true; return snapshot;
     } finally {
       dispose(); controller.abort(); this.#active = undefined;
-      await this.#send('Page.stopLoading').catch(() => {}); this.#busy = false;
+      if (!completed) await this.#send('Page.stopLoading').catch(() => {}); this.#busy = false;
     }
   }
   async #evaluate(expression: string, signal?: AbortSignal) {
@@ -139,7 +160,22 @@ export class BrowserPage {
       return {url: location.href, title: document.title.slice(0,500), text: texts.join('\\n').slice(0,20000), elements};
     })()`, signal) as Omit<BrowserSnapshot, 'revision' | 'blocked' | 'untrusted'>;
     this.#revision = revision;
-    return { ...value, revision, blocked: [...(this.#active?.blocked ?? [])], untrusted: true };
+    return { ...value, revision, blocked: [...this.#blocked], untrusted: true,
+      ...(this.#pending.size ? { requests: [...this.#pending].map(([request_id, {form}]) => ({request_id, form: structuredClone(form)})) } : {}) };
+  }
+  /** Only the trusted runtime supplies a journaled JSON response after exact approval. */
+  async completeRequest(input: {request_id: string; form: PublicForm; status: number; text: string}, signal?: AbortSignal) {
+    const pending = this.#pending.get(input.request_id);
+    if (this.#busy || this.#closed || !pending || JSON.stringify(normalizeForm(input.form)) !== JSON.stringify(pending.form)) throw new Error('Pending request changed or expired');
+    if (input.status < 200 || input.status > 299 || input.text.length > 20000) throw new Error('Unsupported script response');
+    JSON.parse(input.text);
+    this.#busy = true; this.#pending.delete(input.request_id);
+    try {
+      await this.#send('Fetch.fulfillRequest', {requestId: pending.requestId, responseCode: input.status,
+        responseHeaders: [{name:'Content-Type',value:'application/json'}, {name:'Cache-Control',value:'no-store'}],
+        body: Buffer.from(input.text).toString('base64')}, signal);
+      return await this.#snapshot(AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]));
+    } finally { this.#busy = false; }
   }
   /** Follow an observed hyperlink without running click handlers. Other controls require a classified action. */
   async follow(revision: string, ref: number, signal?: AbortSignal) {
@@ -190,7 +226,7 @@ export class BrowserPage {
   }
   async close() {
     if (this.#closed) return;
-    this.#closed = true; this.#lifetime.abort(); this.#revision = ''; this.#active = undefined; this.#unsubscribe();
+    this.#closed = true; this.#lifetime.abort(); this.#revision = ''; this.#active = undefined; this.#pending.clear(); this.#unsubscribe();
     if (this.#context) await this.cdp.send('Target.disposeBrowserContext', { browserContextId: this.#context }, { timeoutMs: 5_000 }).catch(() => {});
   }
   /** Snapshot a native form without invoking submit handlers or allowing network traffic. */

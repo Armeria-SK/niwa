@@ -8,6 +8,7 @@ export const formSchema = Type.Object({
   url: Type.String({ minLength: 1, maxLength: 1000 }), method: Type.Union([Type.Literal('GET'), Type.Literal('POST')]),
   fields: Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 200 }), value: Type.String({ maxLength: 1000 }) },
     { additionalProperties: false }), { maxItems: 32 }),
+  json: Type.Optional(Type.String({ maxLength: 1000 })),
   files: Type.Optional(Type.Array(Type.Object({
     name: Type.String({minLength:1,maxLength:100,pattern:'^[A-Za-z0-9_.-]+$'}),
     path: Type.String({minLength:1,maxLength:512}),
@@ -17,7 +18,7 @@ export const formSchema = Type.Object({
   },{additionalProperties:false}),{minItems:1,maxItems:4})),
 }, { additionalProperties: false });
 export type PublicForm = Static<typeof formSchema>;
-export interface FormResponse { url: string; status: number; text: string; truncated: boolean; untrusted: true }
+export interface FormResponse { url: string; status: number; text: string; truncated: boolean; untrusted: true; content_type?: string }
 
 /** This value is also the complete human-readable approval payload. No hidden caller-selected headers. */
 export function normalizeForm(input: unknown): PublicForm {
@@ -26,7 +27,12 @@ export function normalizeForm(input: unknown): PublicForm {
   if (url.protocol !== 'https:') throw new Error('Form submission requires public HTTPS');
   if (input.method === 'GET') url.search = ''; // Native GET forms replace the action query with their fields.
   if (input.files && (input.method !== 'POST' || input.fields.some(field => !/^[A-Za-z0-9_.-]+$/.test(field.name)))) throw new Error('Invalid multipart form');
+  if (input.json !== undefined) {
+    if (input.method !== 'POST' || input.files || input.fields.length) throw new Error('Invalid JSON request');
+    JSON.parse(input.json);
+  }
   const form = { url: url.href, method: input.method, fields: input.fields.map(({ name, value }) => ({ name, value })),
+    ...(input.json !== undefined ? { json: input.json } : {}),
     ...(input.files ? {files: input.files.map(file => ({...file}))} : {}) };
   if (JSON.stringify(form, null, 2).length > 2000) throw new Error('Form exceeds approval display limit');
   return form;
@@ -49,7 +55,7 @@ const transport: FormTransport = (url, method, body, address, signal, contentTyp
     const chunks: Buffer[] = []; let size = 0;
     response.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 256 * 1024) response.destroy(new Error('Form response too large')); else chunks.push(chunk); });
     response.on('error', reject);
-    response.on('end', () => { const text = Buffer.concat(chunks).toString('utf8'); resolve({ url: url.href, status, text: text.slice(0, 20000), truncated: text.length > 20000, untrusted: true }); });
+    response.on('end', () => { const text = Buffer.concat(chunks).toString('utf8'); resolve({ url: url.href, status, text: text.slice(0, 20000), truncated: text.length > 20000, untrusted: true, content_type: type.split(';')[0]!.toLowerCase() }); });
   });
   req.on('error', reject); req.end(method === 'POST' ? body : undefined);
 });
@@ -62,6 +68,7 @@ export async function submitPublicForm(input: PublicForm, signal?: AbortSignal, 
   if (form.method === 'GET') url.search = body;
   const cancellation = AbortSignal.any([AbortSignal.timeout(20_000), ...(signal ? [signal] : [])]);
   let payload: string | Buffer = body, contentType: string | undefined;
+  if (form.json !== undefined) { payload = form.json; contentType = 'application/json'; }
   if (form.files) {
     if (!readFile) throw new Error('Shared file reader required');
     const boundary = `niwa-${randomUUID()}`, chunks: Buffer[] = [];
