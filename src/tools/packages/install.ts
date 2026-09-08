@@ -15,7 +15,10 @@ export function packageArguments(image: string, stage: string, name: string, cou
     '--ulimit=nofile=256:256', '--ulimit=core=0:0', '--log-driver=none', '--systemd=false', '--health-cmd=none',
     '--image-volume=ignore', '--timeout=300', '--stop-timeout=1', '--workdir=/', '--env=DEBIAN_FRONTEND=noninteractive',
     '--mount', `type=bind,source=${stage},destination=/packages,ro`, '--entrypoint=/usr/bin/apt-get', image,
-    '-y', '--no-download', '--no-remove', 'install', ...Array.from({ length: count }, (_, index) => `/packages/${index}.deb`)];
+    // --no-download also skips apt's local-file acquisition and breaks .deb installs.
+    // Disable repository inputs instead; the container also has no network.
+    '-y', '--no-remove', '-o', 'Dir::Etc::sourcelist=/dev/null', '-o', 'Dir::Etc::sourceparts=-',
+    'install', ...Array.from({ length: count }, (_, index) => `/packages/${index}.deb`)];
 }
 
 export async function installPackages(image: string, stage: string, name: string, entries: ApprovedPackage[], call: PodmanCall, signal?: AbortSignal): Promise<PackageResult> {

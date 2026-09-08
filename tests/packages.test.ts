@@ -48,7 +48,7 @@ test('offline installation has one readonly package mount and selects only a ver
     image: `sha256:${'b'.repeat(64)}`, installed: [{ name: 'hello', version: '2.10-1' }],
   });
   const args = calls[0]!;
-  for (const flag of ['--network=none', '--http-proxy=false', '--user=0:0', '--security-opt=no-new-privileges', '--no-download', '--no-remove', '--pids-limit=128']) assert.ok(args.includes(flag));
+  for (const flag of ['--network=none', '--http-proxy=false', '--user=0:0', '--security-opt=no-new-privileges', 'Dir::Etc::sourcelist=/dev/null', 'Dir::Etc::sourceparts=-', '--no-remove', '--pids-limit=128']) assert.ok(args.includes(flag));
   assert.deepEqual(args.filter(arg => arg.startsWith('type=bind,')), ['type=bind,source=/executor/stage,destination=/packages,ro']);
   assert.deepEqual(calls[1], ['commit', '--quiet', '--include-volumes=false', name]);
   assert.ok(calls[2]!.includes('--read-only')); assert.ok(!calls[2]!.includes('--mount'));
