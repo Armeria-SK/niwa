@@ -93,4 +93,6 @@ sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
 
 ## ライセンス
 
-Niwaは [Apache License 2.0](LICENSE) で公開します。利用コードの表記は [LICENSES.md](LICENSES.md) を参照してください。
+Niwaは [Apache License 2.0](LICENSE) で公開します。帰属表記は [NOTICE](NOTICE) を参照してください。
+
+商用利用やforkの際は、READMEやクレジットなどに [NiwaのGitHub URL](https://github.com/Armeria-SK/niwa) を掲載していただけると嬉しいです。このお願いは、Apache-2.0の条件に追加する義務ではありません。
