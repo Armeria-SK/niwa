@@ -12,6 +12,8 @@ import { controlSchema, memoryMigrations } from '../storage/schema.ts';
 import { taskSchema } from '../storage/task-schema.ts';
 import { Tasks } from './tasks.ts';
 import { coordinationSchema } from '../storage/coordination-schema.ts';
+import { artifactVersionSchema } from '../storage/artifact-version-schema.ts';
+import { ArtifactVersions } from './artifact-versions.ts';
 import { coordinationUpdateSchema, isAcknowledgment, type CoordinationUpdate } from '../domain/coordination.ts';
 import { Schedules } from './schedules.ts';
 import { scheduleSchema } from '../storage/schedule-schema.ts';
@@ -58,6 +60,7 @@ type Principal = { kind: 'admin'; id: 'administrator' } | { kind: 'agent'; id: s
 /** Trusted application service. Do not expose this object to generated code or models. */
 export class Runtime {
   readonly tasks: Tasks;
+  readonly artifactVersions: ArtifactVersions;
   readonly schedules: Schedules;
   readonly providerLimits: ProviderLimits;
   #db: DatabaseSync;
@@ -68,7 +71,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -86,6 +89,7 @@ export class Runtime {
           || !!this.#db.prepare('SELECT 1 FROM participants WHERE room_id=? AND agent_id=?').get(roomId, agentId));
       },
     });
+    this.artifactVersions = new ArtifactVersions(this.#db,this,actor=>this.#principal(actor));
     this.schedules = new Schedules(this.#db, this.tasks, actor => this.#admin(actor), (actor, agentId, roomId) => {
       this.#room(actor, roomId);
       check(!this.roomPreferences(actor, roomId).archived, 'conflict', 'Restore the archived room before scheduling');
@@ -624,11 +628,28 @@ export class Runtime {
       coalesce(c.blocker,'') AS blocker,c.waiting_for,c.next_agent_id,
       (SELECT min(created_at) FROM task_events WHERE task_id=t.id AND kind='running') AS started_at,
       (SELECT max(u.created_at) FROM updates u WHERE u.task_id=t.id AND u.artifact_id IS NOT NULL) AS last_artifact_at,
-      (SELECT artifact_id FROM updates WHERE task_id=t.id AND artifact_id IS NOT NULL ORDER BY id DESC LIMIT 1) AS artifact_id,
+      (SELECT artifact_id FROM updates WHERE task_id=t.id AND artifact_id IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1) AS artifact_id,
       EXISTS(SELECT 1 FROM approval_requests WHERE task_id=t.id AND status='pending') AS approval_pending,
       (SELECT count(*) FROM external_operations WHERE task_id=t.id) AS external_operations,
       EXISTS(SELECT 1 FROM task_events WHERE task_id=t.id AND kind='acknowledged') AS acknowledgment_only
       FROM tasks t LEFT JOIN task_coordination c ON c.task_id=t.id WHERE t.room_id=? ORDER BY t.state IN ('completed','cancelled','failed'),t.updated_at DESC,t.rowid DESC LIMIT 100`).all(roomId);
+  }
+  coordinationDigest(actor: Actor, roomId: string, now=Date.now()) {
+    this.#room(actor,roomId);
+    const since=now-86_400_000;
+    const artifacts=this.#db.prepare('SELECT a.id,a.name,a.author_id,a.created_at,coalesce(v.version,1) AS version FROM artifacts a LEFT JOIN artifact_versions v ON v.artifact_id=a.id WHERE a.room_id=? AND a.created_at>=? ORDER BY a.created_at DESC LIMIT 20').all(roomId,since);
+    const artifactCount=this.#db.prepare('SELECT count(*) AS n FROM artifacts WHERE room_id=? AND created_at>=?').get(roomId,since)!.n;
+    const operations=this.#db.prepare(`SELECT l.tool_name,count(*) AS intents,sum(e.output IS NOT NULL) AS recorded,sum(e.output IS NULL) AS unknown
+      FROM external_operation_labels l JOIN external_operations e USING(task_id,operation_id) JOIN tasks t ON t.id=l.task_id
+      WHERE t.room_id=? AND l.started_at>=? AND l.tool_name IN ('browser_form_submit','browser_request_submit','x_post') GROUP BY l.tool_name`).all(roomId,since);
+    const pending=this.#db.prepare(`SELECT
+      sum(EXISTS(SELECT 1 FROM approval_requests a WHERE a.task_id=t.id AND a.status='pending')) AS approvals,
+      sum(coalesce(c.blocker,'')!='') AS blockers,sum(t.deadline_at<=?) AS overdue
+      FROM tasks t LEFT JOIN task_coordination c ON c.task_id=t.id WHERE t.room_id=? AND t.state NOT IN ('completed','failed','cancelled')`).get(now,roomId)!;
+    const expired=this.#db.prepare("SELECT count(*) AS n FROM tasks WHERE room_id=? AND state='failed' AND result='Task deadline exceeded' AND updated_at>=?").get(roomId,since)!.n;
+    return {since,artifact_count:Number(artifactCount),artifacts,operations,
+      approvals:Number(pending.approvals||0),blockers:Number(pending.blockers||0),overdue:Number(pending.overdue||0)+Number(expired),
+      revenue:'unverified',customer_contacts:'unverified',operation_note:'送信の実行記録です。記録済みでも業務の成功や入金を意味しません。導入以前の未分類の操作は含みません。'};
   }
   updateCoordination(actor: Actor, lease: TaskLease, input: CoordinationUpdate) {
     check(Value.Check(coordinationUpdateSchema,input),'invalid','Invalid task coordination');
@@ -647,13 +668,17 @@ export class Runtime {
       const revision=input.expected_revision+1;
       this.#db.prepare('INSERT INTO task_coordination VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET revision=excluded.revision,completion_condition=excluded.completion_condition,stop_condition=excluded.stop_condition,blocker=excluded.blocker,waiting_for=excluded.waiting_for,next_agent_id=excluded.next_agent_id,updated_at=excluded.updated_at')
         .run(lease.task.id,revision,input.completion_condition,input.stop_condition,input.blocker,input.waiting_for,input.next_agent_id,Date.now());
-      if(input.notify!=='none' && input.blocker && input.blocker!==old?.blocker) {
+      const blockerChanged=!!input.blocker && (input.blocker!==old?.blocker || input.waiting_for!==old?.waiting_for || input.next_agent_id!==old?.next_agent_id);
+      const handoffChanged=!input.blocker && !!input.next_agent_id && input.next_agent_id!==old?.next_agent_id;
+      if(input.notify!=='none' && (blockerChanged || handoffChanged)) {
         const ids=new Set([lease.task.requester_id,input.waiting_for,input.next_agent_id]);
-        if(input.notify==='leader') for(const member of this.agents(actor)) if(member.role==='leader') ids.add(member.id);
+        if(input.notify==='leader' && input.blocker) for(const member of this.agents(actor)) if(member.role==='leader') ids.add(member.id);
         const recipients=[...ids].filter((id):id is string=>!!id && id!=='administrator' && id!==lease.task.agent_id)
           .filter(id=>{try{this.#room(this.agentSession(id),lease.task.room_id);return true;}catch{return false;}});
         const names=recipients.map(id=>`@${this.#agent(id).name}`).join(' ');
-        const body=`${names ? names+'\n' : ''}作業を保留しています：${input.blocker}\n再開に必要な対応：${input.waiting_for==='administrator'?'管理者':this.#agent(input.waiting_for!).name}`;
+        const body=`${names ? names+'\n' : ''}`+(input.blocker
+          ? `作業を保留しています：${input.blocker}\n再開に必要な対応：${input.waiting_for==='administrator'?'管理者':this.#agent(input.waiting_for!).name}`
+          : `次の受け渡し先を設定しました：${input.next_agent_id==='administrator'?'管理者':this.#agent(input.next_agent_id!).name}\n受領だけの返信は不要です。実際の依頼・成果物を確認してください。`);
         const message=this.post(actor,lease.task.room_id,body);
         for(const id of recipients) this.tasks.address(actor,lease,id,body,message.id);
       }

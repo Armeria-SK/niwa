@@ -281,7 +281,7 @@ test('long turns compact complete exchanges, recreate the adapter, and preserve 
       assert.equal(request.budget.max_requests, 1);
       assert.equal(request.budget.max_total_tokens, 64_000);
       return complete('圧縮後に完了');
-    }), context_window: 55_000 };
+    }), context_window: 50_000 + Math.ceil(Buffer.byteLength(JSON.stringify(turnTools(true))) / 3) };
   }, { readPage: async url => ({ url, content_type: 'text/plain', text: (++reads === 1 ? '古い資料' : '新しい資料').repeat(7000),
     fetched_at: new Date().toISOString(), untrusted: true, truncated: false }) });
   const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '二つの資料を確認');

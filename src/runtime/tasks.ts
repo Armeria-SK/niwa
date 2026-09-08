@@ -241,6 +241,8 @@ export class Tasks {
       }
       const record = { input_hash: inputHash, execution_id: randomUUID(), output: null };
       this.#db.prepare('INSERT INTO external_operations VALUES (?,?,?,?,NULL)').run(lease.task.id, operationId, inputHash, record.execution_id);
+      const toolName=typeof input.name==='string' && /^[a-z_]{1,64}$/.test(input.name) ? input.name : 'unknown';
+      this.#db.prepare('INSERT INTO external_operation_labels VALUES (?,?,?,?)').run(lease.task.id,operationId,toolName,Date.now());
       return { ...record, firstAttempt: true };
     });
     if (pending.output !== null) return JSON.parse(pending.output) as JsonObject;
@@ -504,6 +506,17 @@ export class Tasks {
     const descendants = this.#db.prepare('SELECT id FROM tasks WHERE parent_id=?').all(id) as { id: string }[];
     for (const child of descendants) this.#cancelTree(child.id);
     if (!isTerminal(this.#read(id).state)) this.#change(id, 'cancelled', 'Cancelled');
+  }
+  timebox(actor: Actor, lease: TaskLease, seconds: number) {
+    const task=this.#owned(actor,lease);
+    check(Number.isSafeInteger(seconds) && seconds>=1 && seconds<=86_400,'invalid','Timebox must be 1–86400 seconds');
+    const deadline=Math.min(task.deadline_at,Date.now()+seconds*1000);
+    transaction(this.#db,()=>{
+      this.#db.prepare(`WITH RECURSIVE descendants(id) AS (SELECT ? UNION ALL SELECT t.id FROM tasks t JOIN descendants d ON t.parent_id=d.id)
+        UPDATE tasks SET deadline_at=min(deadline_at,?),updated_at=? WHERE id IN (SELECT id FROM descendants) AND state NOT IN ('completed','failed','cancelled')`).run(task.id,deadline,Date.now());
+      this.#event(task.id,'timeboxed');
+    });
+    return {deadline_at:deadline};
   }
   expire(actor: Actor, now = Date.now()): void {
     this.#admin(actor);

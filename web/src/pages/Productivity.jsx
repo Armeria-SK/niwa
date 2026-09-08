@@ -42,7 +42,22 @@ export function ArtifactLibrary({ onDelete, artifacts, members, onOpen, onThread
   </section>;
 }
 
-export function ArtifactPreview({ onDelete, artifact, members, onClose, onThread }) {
+export function ArtifactPreview({ onDelete, artifact, members, onClose, onThread, onOpen }) {
+  const [note,setNote]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  async function record(action,verdict) {
+    if(busy)return;setBusy(true);setError('');
+    try {await api(`/artifacts/${artifact.id}/${action}`,'POST',{expected_sha256:artifact.sha256,...(action==='review'?{verdict,note}: {})});await onOpen(artifact.id);setNote('');}
+    catch(e){setError(e.message);}finally{setBusy(false);}
+  }
   function download() { const url = URL.createObjectURL(new Blob([artifact.content], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href = url; a.download = artifact.name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
-  return <Modal title={artifact.name} onClose={onClose} className="artifact-modal"><div className="modal-body"><p className="muted">{members[artifact.member]?.name} · 更新 {artifact.updated} · {artifact.scope === 'shared' ? '共有' : '個別'}</p><pre className="artifact-document">{artifact.content}</pre></div><div className="form-actions"><button className="button subtle" onClick={() => { onClose(); onThread(artifact.thread); }}>関連する会話</button><button className="button subtle" onClick={onDelete}>削除</button><button className="button primary" onClick={download}><DownloadIcon size={17} />ダウンロード</button></div></Modal>;
+  return <Modal title={artifact.name} onClose={onClose} className="artifact-modal"><div className="modal-body"><p className="muted">{members[artifact.member || artifact.author_id]?.name} · 更新 {artifact.updated || new Date(artifact.created_at).toLocaleString('ja-JP')} · {artifact.scope === 'shared' ? '共有' : '個別'}</p>
+    {artifact.sha256 ? <div className="form-stack artifact-version-info"><p>第{artifact.version}版 · {artifact.frozen?'凍結済み':'未凍結'} · 参照する依頼 {artifact.referenced_by.length}件</p>
+      <details><summary>版・確認記録</summary><p>固定ID：{artifact.id}<br/>SHA-256：{artifact.sha256}</p>
+        {artifact.versions.map(version=><p key={version.id}><button className="text-button" disabled={version.id===artifact.id} onClick={()=>onOpen(version.id)}>第{version.version}版{version.id===artifact.id?'（表示中）':''}</button> · {new Date(version.created_at).toLocaleString('ja-JP')}{version.frozen?' · 凍結済み':''}</p>)}
+        {artifact.reviews.length ? artifact.reviews.map(review=><p key={review.reviewer_id}>{review.reviewer_id==='administrator'?'管理者':members[review.reviewer_id]?.name || '削除済みBot'}：{review.verdict==='approved'?'確認済み':'要修正'} · {new Date(review.created_at).toLocaleString('ja-JP')}<br/>{review.note}</p>) : <p>内容の確認記録はありません。</p>}
+        <form className="form-stack" onSubmit={e=>{e.preventDefault();void record('review','approved');}}><label className="field"><span>この版の確認メモ</span><textarea value={note} onChange={e=>setNote(e.target.value)} required maxLength={1000} rows={2}/></label><div className="inline-actions"><button className="button secondary" disabled={busy || !note.trim()}>確認済みとして記録</button><button type="button" className="button subtle" disabled={busy || !note.trim()} onClick={()=>record('review','changes_requested')}>要修正として記録</button></div></form>
+        <p className="muted">内容の確認記録です。外部操作の実行を承認するものではありません。凍結すると、この版からの改訂はできません。</p>
+        {!artifact.frozen ? <button className="button secondary" disabled={busy || !artifact.reviews.some(item=>item.verdict==='approved') || artifact.reviews.some(item=>item.verdict==='changes_requested')} onClick={()=>record('freeze')}>確認済みの版を凍結</button> : null}
+      </details>{error ? <p role="alert">{error}</p> : null}
+    </div> : null}<pre className="artifact-document">{artifact.content}</pre></div><div className="form-actions"><button className="button subtle" onClick={() => { onClose(); onThread(artifact.thread || artifact.room_id); }}>関連する会話</button><button className="button subtle" onClick={onDelete}>この版を削除</button><button className="button primary" onClick={download}><DownloadIcon size={17} />ダウンロード</button></div></Modal>;
 }

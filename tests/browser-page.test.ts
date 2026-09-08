@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { once } from 'node:events';
+import {setTimeout as delay} from 'node:timers/promises';
 import type { Readable, Writable } from 'node:stream';
 import { PassThrough } from 'node:stream';
 import { CdpPipe } from '../src/tools/browser/cdp.ts';
@@ -136,22 +137,22 @@ test('JSON SPA requests stay paused until an exact response arrives and expire o
   }));
   try {
     let first=await session.navigate('https://fixture.example.com/');
-    for(let i=0;i<10 && !first.requests?.length;i++) first=await session.snapshot();
+    for(let until=Date.now()+3000;Date.now()<until && !first.requests?.length;){await delay(20);first=await session.snapshot();}
     const initial=first.requests![0]!;
     assert.deepEqual(initial.form,{url:'https://fixture.example.com/read',method:'GET',fields:[{name:'value',value:'one'}]});
     first=await session.completeRequest({...initial,status:200,text:'{"message":"Approved initial read"}'});
-    for(let i=0;i<10 && !first.text.includes('Approved initial read');i++) first=await session.snapshot();
+    for(let until=Date.now()+3000;Date.now()<until && !first.text.includes('Approved initial read');){await delay(20);first=await session.snapshot();}
     assert.match(first.text,/Approved initial read/);assert.equal(reads,1);
     let page=await session.interact({action:'click',revision:first.revision,ref:first.elements[0]!.ref});
-    for(let i=0;i<10 && !page.requests?.length;i++) page=await session.snapshot();
+    for(let until=Date.now()+3000;Date.now()<until && !page.requests?.length;){await delay(20);page=await session.snapshot();}
     assert.equal(reads,1);assert.match(page.text,/Waiting/);assert.equal(page.requests?.length,1);
     const pending=page.requests![0]!;
     assert.deepEqual(pending.form,{url:'https://fixture.example.com/api',method:'POST',fields:[],json:'{"value":42}'});
     page=await session.completeRequest({...pending,status:200,text:'{"message":"Saved exactly once"}'});
-    for(let i=0;i<10 && !page.text.includes('Saved exactly once');i++) page=await session.snapshot();
+    for(let until=Date.now()+3000;Date.now()<until && !page.text.includes('Saved exactly once');){await delay(20);page=await session.snapshot();}
     assert.match(page.text,/Saved exactly once/);assert.equal(page.requests,undefined);assert.equal(reads,1);
     page=await session.interact({action:'click',revision:page.revision,ref:page.elements[0]!.ref});
-    for(let i=0;i<10 && !page.requests?.length;i++) page=await session.snapshot();
+    for(let until=Date.now()+3000;Date.now()<until && !page.requests?.length;){await delay(20);page=await session.snapshot();}
     const expired=page.requests![0]!;
     await session.navigate('https://fixture.example.com/next');
     await assert.rejects(session.completeRequest({...expired,status:200,text:'{}'}),/rejected/);

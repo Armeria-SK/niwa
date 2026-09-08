@@ -7,3 +7,6 @@
 .coordination-task dd { margin: 0; white-space: pre-wrap; }
 .message-acknowledgments { font-size: 11px; opacity: .7; margin-top: 6px; }
 @media (max-width: 600px) { .coordination-task dl { grid-template-columns: 82px minmax(0, 1fr); } }
+
+.artifact-version-info { font-size: 13px; overflow-wrap: anywhere; }
+.artifact-version-info details > p { white-space: pre-wrap; }

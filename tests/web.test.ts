@@ -218,3 +218,21 @@ test('member creation, structured reply and schedule edit routes validate author
   assert.equal((await f.call(`/api/schedules/${id}`, 'PUT', { ...body, version: saved.version })).status, 409);
   assert.equal((await f.call(`/api/schedules/${id}`, 'PUT', { ...body, version: saved.version, run_count: 0 })).status, 400);
 });
+
+test('artifact review and freezing require authenticated exact hashes without approving external work',async t=>{
+ const f=await fixture(t),actor=f.runtime.agentSession(f.leader.id),room=f.runtime.createRoom(f.admin,'版の確認');
+ const id=f.runtime.createArtifact(actor,room.id,'version.txt','資料','人工','body');
+ const hash=f.runtime.artifactVersions.inspect(actor,id).sha256;
+ const review={expected_sha256:hash,verdict:'approved',note:'人工の確認'};
+ assert.equal((await f.call(`/api/artifacts/${id}/review`,'POST',review)).status,401);
+ assert.equal((await f.call(`/api/artifacts/${id}/freeze`,'POST',{expected_sha256:hash})).status,401);
+ await f.login();
+ assert.equal((await f.call(`/api/artifacts/${id}/freeze`,'POST',{expected_sha256:hash})).status,409);
+ assert.equal((await f.call(`/api/artifacts/${id}/review`,'POST',{...review,expected_sha256:'0'.repeat(64)})).status,409);
+ assert.equal((await f.call(`/api/artifacts/${id}/review`,'POST',review)).status,200);
+ assert.equal((await f.call(`/api/artifacts/${id}/freeze`,'POST',{expected_sha256:hash})).status,200);
+ const item=await (await f.call(`/api/artifacts/${id}`)).json() as {frozen:number;sha256:string};
+ assert.equal(item.frozen,1);assert.equal(item.sha256,hash);assert.equal(f.runtime.approvals(f.admin).length,0);
+ const board=await (await f.call(`/api/rooms/${room.id}/coordination`)).json() as {digest:{artifact_count:number}};
+ assert.equal(board.digest.artifact_count,1);
+});
