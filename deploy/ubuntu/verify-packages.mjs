@@ -27,7 +27,18 @@ try {
   const entries=catalog.stage(['niwa-acceptance'],installation);
   const environment={workspace:`${root}/workspace`,image:base,uid,gid:process.getgid(),home,runtime};
   const original=configuredProgramRunner(environment); await original.verify();
-  const result=await installPackages(base,installation,`niwa-package-${randomUUID()}`,entries,original.call);
+  // Only this synthetic acceptance fixture prints subprocess output; production
+  // package operations retain their deliberately narrow public error response.
+  const diagnosticCall=async (args,seconds,signal)=>{
+    const step=args[0]==='run' ? (args.includes('--entrypoint=/usr/bin/dpkg-query') ? 'verify installed version' : 'offline apt install') : args[0];
+    console.log(`Package step: ${step}`);
+    const output=await original.call(args,seconds,signal);
+    console.log(`Package step result: ${step}, exit=${output.code}`);
+    if(output.stdout) console.log(output.stdout.slice(0,16384));
+    if(output.stderr) console.error(output.stderr.slice(0,16384));
+    return output;
+  };
+  const result=await installPackages(base,installation,`niwa-package-${randomUUID()}`,entries,diagnosticCall);
   assert.ok('image' in result, 'Offline installation or committed image validation failed');
   const next=configuredProgramRunner({...environment,image:result.image}); await next.verify();
   const output=await next({command:['niwa-acceptance'],seconds:10});
