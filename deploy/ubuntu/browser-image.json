@@ -1,0 +1,6 @@
+{
+  "reference": "docker.io/library/node@sha256:6642ef280aebc09c4541bee0b15c9f89f0f3f3c247ddee79ae1d37eddfdcbbaa",
+  "resolved_from": "docker.io/library/node:24.20.0-bookworm-slim",
+  "platform": "linux/amd64",
+  "resolved_on": "2026-09-08"
+}

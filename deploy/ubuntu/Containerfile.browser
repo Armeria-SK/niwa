@@ -8,5 +8,7 @@ COPY node_modules/@sinclair/typebox /app/node_modules/@sinclair/typebox
 COPY dist/entrypoints/browser-worker.js /app/dist/entrypoints/browser-worker.js
 COPY dist/tools/browser /app/dist/tools/browser
 COPY dist/tools/web/public-page.js /app/dist/tools/web/public-page.js
+COPY dist/config/executor-endpoint.js /app/dist/config/executor-endpoint.js
+COPY dist/config/paths.js /app/dist/config/paths.js
 USER 1000:1000
 ENTRYPOINT ["/usr/local/bin/node", "/app/dist/entrypoints/browser-worker.js"]
