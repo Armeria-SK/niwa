@@ -80,7 +80,7 @@ sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
 
 | 状況 | 確認すること |
 |---|---|
-| セットアップが停止した | 最後の工程名とエラーを確認。既存ファイルを削除して拒否を解除しないでください。[準備工程](docs/ubuntu/README.md)を参照。 |
+| セットアップが停止した | 最後の工程名とエラーを確認。既存ファイルを削除して拒否を解除しないでください。[準備工程](docs/ubuntu/SERVICES.md)を参照。 |
 | `interactive authentication is required` | 自分のUbuntu端末でsudo付きセットアップコマンドを実行します。 |
 | 画面が開かない | `services.sh status` と `sudo journalctl -u niwa.service -u niwa-workspace.service -n 80 --no-pager` を確認。 |
 | プログラムが動かない | `services.sh status` でexecutorの状態を確認。[サービス資料](docs/ubuntu/SERVICES.md)にログの確認手順があります。 |
@@ -90,3 +90,7 @@ sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
 会話・記憶・設定は `/home/niwa/niwa/` に保存されます。このフォルダーを削除しないでください。バックアップは画面の設定で管理します。ブラウザー操作、追加パッケージ、X、スマートフォン接続は[追加準備と残件](docs/STATUS.md)を参照してください。
 
 資料は[docs/](docs/README.md)、実行スクリプトとsystemd定義は `deploy/ubuntu/` に集約しています。現在docsはGit対象外のローカル資料です。cloneだけでは含まれませんが、上記のセットアップ・起動操作はこのREADMEだけで行えます。
+
+## ライセンス
+
+取り込み元・依存ライブラリ・フォント・アイコンのライセンスと帰属表記は [LICENSES.md](LICENSES.md) にまとめています。ビルド成果物にも同梱します。Niwa本体のライセンス指定とは区別しています。

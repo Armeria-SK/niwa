@@ -11,7 +11,7 @@
     "restore": "node dist/entrypoints/restore.js",
     "workspace": "node dist/entrypoints/workspace.js",
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json && vite build --config web/vite.config.mjs",
+    "build": "tsc -p tsconfig.build.json && vite build --config web/vite.config.mjs && node scripts/copy-licenses.mjs",
     "test": "tsc -p tsconfig.test.json && node --test .local/test-build/tests/*.test.js",
     "check": "npm run typecheck && npm test && npm run build"
   },
