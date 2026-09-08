@@ -80,7 +80,7 @@ export function workspaceWriter(socketPath: string, verifySocket: () => void): W
     const output = await callWorkspace(socketPath, verifySocket, { ...input, operation: 'write' }, signal);
     if (!Value.Check(writeSchema, output)) throw new Error('Invalid workspace write response');
     const result = output as JsonObject;
-    if (!result.error && (result.path !== input.path || result.revision !== createHash('sha256').update(input.content).digest('hex'))) {
+    if (!result.error && (result.path !== input.path || result.revision !== createHash('sha256').update(Buffer.from(input.content, input.encoding ?? 'utf8')).digest('hex'))) {
       throw new Error('Workspace write response mismatch');
     }
     return result;

@@ -116,3 +116,9 @@ export async function readPublicResource(input: string, signal?: AbortSignal, tr
   const { body, ...source } = await fetchPublic(input, RESOURCE_TYPES, signal, transport);
   return { ...source, body_base64: body.toString('base64') };
 }
+
+/** Bounded anonymous download; never execute the returned bytes or accept a remote filename. */
+export async function readPublicFile(input: string, signal?: AbortSignal, transport: PageNetwork = networkFor('*/*', /^[^\r\n]+$/)) {
+  const { body, ...source } = await fetchPublic(input, /^[^\r\n]+$/, signal, transport);
+  return { ...source, body_base64: body.toString('base64') };
+}

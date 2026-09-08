@@ -79,3 +79,35 @@ test('saved model form request resumes after approval and runtime restart withou
     assert.equal(runtime.tasks.get(admin, task.id).state, 'completed'); assert.equal(calls, 2); assert.equal(sends, 1);
   } finally { await forms.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test('multipart upload sends only approved shared bytes, rejects changed files and protects exact approval', async () => {
+  const { createHash } = await import('node:crypto');
+  const bytes = Buffer.from([0, 255, 42]);
+  const upload = { ...form, files: [{ name: 'attachment', path: 'shared/file.bin', filename: 'file.bin', revision: createHash('sha256').update(bytes).digest('hex'), size: bytes.length }] };
+  let sends = 0;
+  const read = async (path: string) => { assert.equal(path, 'shared/file.bin'); return { data: bytes.toString('base64'), revision: upload.files[0]!.revision }; };
+  const send: import('../src/tools/browser/form.ts').FormTransport = async (_url, _method, body, _address, _signal, contentType) => {
+    sends++; assert.ok(Buffer.isBuffer(body)); assert.match(contentType!, /^multipart\/form-data; boundary=niwa-/);
+    assert.ok(body.includes(bytes)); assert.match(body.toString('latin1'), /filename="file.bin"/); return response;
+  };
+  assert.deepEqual(await submitPublicForm(upload, undefined, send, async () => '8.8.8.8', read), response);
+  await assert.rejects(submitPublicForm(upload, undefined, send, async () => '8.8.8.8', async () => ({data:'YmFk',revision:upload.files[0]!.revision})), /changed/);
+  assert.equal(sends, 1);
+  assert.throws(() => normalizeForm({ ...upload, method: 'GET' }));
+  assert.throws(() => normalizeForm({ ...upload, files: [{ ...upload.files[0], filename: 'bad\r\nheader' }] }));
+  const root = mkdtempSync(join(tmpdir(), 'niwa-upload-approval-')), runtime = new Runtime(join(root, 'state'));
+  const log = new FormLog(join(root, 'forms.db'), (input, signal) => submitPublicForm(input, signal, send, async () => '8.8.8.8', read));
+  const external = { forms: log, browser: async () => { throw Error('not needed'); } };
+  try {
+    const admin = runtime.administrator(), leader = runtime.bootstrap(admin), actor = runtime.agentSession(leader.id), room = runtime.createRoom(admin, 'Artificial upload');
+    runtime.tasks.create(admin, leader.id, room.id, 'upload'); let lease = runtime.tasks.claim(admin)!;
+    const call = { name: 'browser_form_submit', tool_call_id: 'upload', arguments: upload };
+    assert.deepEqual(await executeAsyncTurnTool(runtime, actor, lease, call, 'upload', undefined, external), { waiting_for_approval: true });
+    assert.equal(sends, 1);
+    const approval = runtime.approvals(admin)[0]!; assert.deepEqual(JSON.parse(String(approval.detail)).files, upload.files);
+    runtime.decideApproval(admin, lease.task.id, true, String(approval.version)); lease = runtime.tasks.claim(admin)!;
+    assert.deepEqual(await executeAsyncTurnTool(runtime, actor, lease, call, 'upload', undefined, external), response);
+    assert.deepEqual(await executeAsyncTurnTool(runtime, actor, lease, call, 'upload', undefined, external), response);
+    assert.equal(sends, 2);
+  } finally { await log.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});

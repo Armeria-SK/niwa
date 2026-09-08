@@ -75,13 +75,15 @@ export class Workspace {
     if (content.includes('\0')) throw new WorkspaceError('unsupported');
     return { path: name, content, revision: digest(bytes), shared: true, untrusted: true };
   }
-  write(name: string, content: string, expected: string | null) {
-    if (typeof content !== 'string' || content.includes('\0') || Buffer.byteLength(content) > MAX_BYTES ||
+  write(name: string, content: string, expected: string | null, encoding: 'utf8' | 'base64' = 'utf8') {
+    if (typeof content !== 'string' || !['utf8','base64'].includes(encoding) || (encoding === 'utf8' && (content.includes('\0') || Buffer.byteLength(content) > MAX_BYTES)) ||
       (expected !== null && !/^[a-f0-9]{64}$/.test(expected))) throw new WorkspaceError('unsupported');
     const path = this.#path(name, false, true);
-    const bytes = Buffer.from(content); const revision = digest(bytes);
+    const bytes = Buffer.from(content, encoding);
+    if (bytes.length > 256 * 1024 || (encoding === 'base64' && bytes.toString('base64') !== content)) throw new WorkspaceError('unsupported');
+    const revision = digest(bytes);
     let current: string | null = null;
-    try { current = digest(this.#bytes(path)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    try { current = digest(this.#bytes(path, 256 * 1024)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     // A lost response after atomic replacement is safe to replay only while the desired content remains current.
     if (current === revision) return { path: name, revision, shared: true as const };
     if (current !== expected) throw new WorkspaceError('conflict');

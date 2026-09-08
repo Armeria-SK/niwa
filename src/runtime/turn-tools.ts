@@ -7,7 +7,7 @@ import type { TaskLease } from '../domain/task.ts';
 import { DomainError } from '../domain/types.ts';
 import { summarySchema, type WorkSummary } from '../domain/summary.ts';
 import { procedureDefinitions } from './procedures.ts';
-import { readPublicPage } from '../tools/web/public-page.ts';
+import { readPublicPage, readPublicFile } from '../tools/web/public-page.ts';
 import type { WebSearch } from '../tools/web/search.ts';
 import type { WorkspaceRead, WorkspaceWriter } from '../tools/files/client.ts';
 import { creationProfileSchema } from '../domain/profile.ts';
@@ -21,16 +21,17 @@ import { formPreparationSchema } from '../tools/browser/client.ts';
 import { formSchema, normalizeForm } from '../tools/browser/form.ts';
 import type { FormLog } from '../tools/browser/form-log.ts';
 
-export interface ExternalTools { readPage?: typeof readPublicPage; search?: WebSearch; workspace?: WorkspaceRead; workspaceWrite?: WorkspaceWriter; program?: ProgramExecutor; browser?: BrowserExecutor;
+export interface ExternalTools { readPage?: typeof readPublicPage; readFile?: typeof readPublicFile; search?: WebSearch; workspace?: WorkspaceRead; workspaceWrite?: WorkspaceWriter; program?: ProgramExecutor; browser?: BrowserExecutor;
   forms?: Pick<FormLog, 'execute'>; packages?: PackageExecutor; x?: { api: Pick<XApi, 'read' | 'mentions'>; posts: Pick<XPostLog, 'execute'> } }
 
 const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  web_download: { description: '公開URLのファイルを最大256KiBまで匿名取得し、指定した共有相対パスへ保存する。実行・展開はしない。既存更新には現在のexpected_revisionが必要、新規はnull。共有会話限定。認証付きURLや秘密を含むURLは渡さない。', schema: object({ url: Type.String({ minLength: 1, maxLength: 4096 }), path: Type.String({ minLength: 1, maxLength: 512 }), expected_revision: Type.Union([Type.Null(), Type.String({ pattern: '^[a-f0-9]{64}$' })]) }) },
   browser_interact: { description: '公開ページ上のローカル操作。現在のrevisionとrefを使い、通常button/checkbox/radioのclick、非秘密項目のfill、縦scrollを行う。通信は全拒否するため外部送信やログインは成立しない。操作後のsnapshotで結果を確認し、送信は専用フォーム準備と承認を使う。', schema: interactionSchema },
   browser_form_prepare: { description: '直近画面の送信ボタンrefとテキスト項目ref/valueから通常HTMLフォームの送信内容を準備する。送信はしない。返されたformをbrowser_form_submitへ渡す。ファイル・ログイン情報・独自JavaScript送信は非対応。', schema: formPreparationSchema },
-  browser_form_submit: { description: '準備したHTTPSフォームを送信する。必ず完全な宛先・方式・項目を管理者へ提示して承認待ちになり、同じ操作の承認後だけ送る。Cookie/認証/転送先への追送は行わない。HTTP応答だけで購入等の成功を断定せず内容を確認する。不明結果を別の呼出しで再送しない。', schema: formSchema },
+  browser_form_submit: { description: '準備したHTTPSフォームを送信する。必ず完全な宛先・方式・項目を管理者へ提示して承認待ちになり、同じ操作の承認後だけ送る。filesを指定すると共有ファイルをmultipart送信する。各filesはname/path/filename/revision(SHA256)/sizeを明示し、承認後の改変は拒否する。Cookie/認証/転送先への追送は行わない。HTTP応答だけで購入等の成功を断定せず内容を確認する。不明結果を別の呼出しで再送しない。', schema: formSchema },
   packages_list: { description: '管理者が導入を許可したパッケージ名と版、導入済みの記録を確認する。必要な依存も許可一覧から選ぶ。', schema: object({}) },
   packages_install: { description: '許可一覧の名前を指定し共有の隔離実行環境へUbuntuパッケージを導入する。成功後のプログラム実行から有効。ホストOSは変更しない。依存不足は管理者へ相談する。結果不明なら再実行せず確認を待つ。', schema: object({ names: Type.Array(Type.String({ pattern: '^[a-z0-9][a-z0-9+.-]{1,127}$' }), { minItems: 1, maxItems: 32, uniqueItems: true }) }) },
   x_post: { description: 'Niwaの共有Xアカウントで公開投稿または返信を行う。共有会話でのみ利用でき、私的情報は含めない。textは最大280文字だが言語やリンク等によるX側の長さ検査にも従う。reply_toは返信先投稿ID、通常投稿はnull。投稿順と重複は一元管理し、結果不明なら再投稿せず確認を待つ。', schema: object({ text: Type.String({ minLength: 1, maxLength: 280 }), reply_to: Type.Union([Type.Null(), Type.String({ pattern: '^[0-9]{1,19}$' })]) }) },
@@ -68,7 +69,7 @@ const definitions = {
   memory_search: { description: '現在の会話へ利用できる自分の記憶だけを検索する。', schema: object({ query: Type.String({ maxLength: 200 }) }) },
 };
 export function turnTools(isLeader: boolean, external: ExternalTools = {}, sharedRoom = false, autonomous = false): ModelToolDefinition[] {
-  return Object.entries(definitions).filter(([name]) => (name !== 'browser_form_submit' || (external.forms && sharedRoom)) && (!name.startsWith('packages_') || (external.packages && sharedRoom)) && (!name.startsWith('x_') || external.x) && (name !== 'x_post' || sharedRoom) && (!name.startsWith('browser_') || external.browser) && (name !== 'program_run' || (external.program && sharedRoom)) && (name !== 'task_rest' || autonomous) && (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
+  return Object.entries(definitions).filter(([name]) => (name !== 'web_download' || (external.workspaceWrite && sharedRoom)) && (name !== 'browser_form_submit' || (external.forms && sharedRoom)) && (!name.startsWith('packages_') || (external.packages && sharedRoom)) && (!name.startsWith('x_') || external.x) && (name !== 'x_post' || sharedRoom) && (!name.startsWith('browser_') || external.browser) && (name !== 'program_run' || (external.program && sharedRoom)) && (name !== 'task_rest' || autonomous) && (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
     (!name.startsWith('workspace_') || external.workspace) && (name !== 'workspace_write' || (external.workspaceWrite && sharedRoom))).map(([name, value]) => ({
     name, description: value.description, input_schema: JSON.parse(JSON.stringify(value.schema)) as JsonObject,
   }));
@@ -182,6 +183,20 @@ export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease
       const result = await external.program!({ operation_id: executionId, agent_id: lease.task.agent_id, room_id: lease.task.room_id, task_id: lease.task.id,
         command: call.arguments.command as string[], seconds: call.arguments.seconds as number, allow_start: firstAttempt }, cancellation);
       return 'error' in result ? result : { ...result, untrusted: true };
+    });
+  }
+  if (call.name === 'web_download') {
+    if (!external.workspaceWrite || !Value.Check(definitions.web_download.schema, call.arguments)) return { error: 'Invalid or unavailable download' };
+    if (!runtime.tasks.active(actor, lease) || signal?.aborted) return { error: 'Task is no longer active' };
+    if (runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility !== 'shared') return { error: 'Use a shared conversation for downloads' };
+    return runtime.tasks.externalOnce(actor, lease, operationId, { name: call.name, arguments: call.arguments }, async (executionId, firstAttempt) => {
+      // A lost fetch/write response must not restart with potentially changed remote bytes.
+      if (!firstAttempt) return { error: 'outcome_unknown' };
+      const file = await (external.readFile ?? readPublicFile)(call.arguments.url as string, signal);
+      if (!runtime.tasks.active(actor, lease) || signal?.aborted) return { error: 'Task is no longer active' };
+      const result = await external.workspaceWrite!({ operation_id: executionId, path: call.arguments.path as string,
+        content: file.body_base64, encoding: 'base64', expected_revision: call.arguments.expected_revision as string | null }, signal);
+      return { ...result, url: file.url, content_type: file.content_type, size: Buffer.from(file.body_base64, 'base64').length, untrusted: true };
     });
   }
   if (call.name === 'workspace_write') {

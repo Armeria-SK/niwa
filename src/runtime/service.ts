@@ -55,7 +55,11 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     xAuth = config.xAccountId && xClient ? new XOAuth(new FileCredentialStore(join(paths.secrets, 'x.json')), xClient, config.xAccountId) : undefined;
     const xApi = xAuth ? new XApi(xAuth) : undefined;
     if (xAuth && xApi) xPosts = new XPostLog(join(paths.runtime, 'x-posts.db'), xAuth.accountId, (post, signal) => xApi.post(post, signal));
-    if (config.browserExecutorUid) forms = new FormLog(join(paths.runtime, 'forms.db'), submitPublicForm);
+    if (config.browserExecutorUid) forms = new FormLog(join(paths.runtime, 'forms.db'), (form, signal) => submitPublicForm(form, signal, undefined, undefined,
+      config.workspaceExecutorUid ? async (path, signal) => {
+        const file = await configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid!)(path, signal);
+        return {data: file.data as string, revision: file.revision as string};
+      } : undefined));
     scheduler = new Scheduler(runtime, new TurnRunner(runtime, resolve ?? models.resolve, {
       ...(xApi && xPosts ? { x: { api: xApi, posts: xPosts } } : {}),
       ...(forms ? { forms } : {}),

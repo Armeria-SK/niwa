@@ -208,13 +208,13 @@ test('an interrupted write is reconciled against the file after restart without 
   const f = fixture(t); const database = join(f.root, 'write-log.db');
   const input = { operation_id: 'task:1:0', path: 'report.md', content: '応答だけ失われた資料', expected_revision: null };
   let executions = 0;
-  let log = new WorkspaceWriteLog(database, {
+  let log = new WorkspaceWriteLog(database, { download: name => f.files.download(name),
     read: name => f.files.read(name), write: (name, content, expected) => {
       executions++; f.files.write(name, content, expected); throw new Error('Artificial connection loss after write');
     },
   });
   assert.deepEqual(log.write(input), { error: 'outcome_unknown' }); log.close();
-  log = new WorkspaceWriteLog(database, {
+  log = new WorkspaceWriteLog(database, { download: name => f.files.download(name),
     read: name => f.files.read(name), write: () => { executions++; throw new Error('Must not execute again'); },
   });
   try {
@@ -227,7 +227,7 @@ test('unknown or failed writes are not retried and a closed receipt store never 
   const f = fixture(t); const database = join(f.root, 'write-log.db');
   const input = { operation_id: 'unknown', path: 'report.md', content: '未確認の資料', expected_revision: null };
   let executions = 0;
-  const log = new WorkspaceWriteLog(database, {
+  const log = new WorkspaceWriteLog(database, { download: name => f.files.download(name),
     read: name => f.files.read(name), write: () => { executions++; throw new Error('Artificial failure before write'); },
   });
   try {
@@ -258,4 +258,24 @@ test('filesystem recovery directory is hidden and cannot be read or overwritten'
   assert.equal(f.files.read('report/result.txt').content, 'generated');
   for (const operation of [() => f.files.list('lost+found'), () => f.files.download('lost+found/recovery'), () => f.files.write('lost+found/recovery', 'changed', null)]) assert.throws(operation, /invalid_path/);
   assert.equal(readFileSync(join(f.shared, 'lost+found', 'recovery'), 'utf8'), 'retained');
+});
+
+test('binary writes cross IPC, retain bytes across journal reopen, and reject changed replay or unsafe paths', async t => {
+  const f = fixture(t), database = join(f.root, 'binary.db');
+  const log = new WorkspaceWriteLog(database, f.files); f.cleanup.push(() => log.close());
+  const server = createWorkspaceServer(f.files, log), endpoint = join(f.root, 'binary.sock');
+  await new Promise<void>(resolve => server.listen(endpoint, resolve));
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const write = workspaceWriter(endpoint, () => {}), data = Buffer.from([0, 255, 128, 42]);
+  const input = { operation_id: 'binary-one', path: 'downloads/data.bin', content: data.toString('base64'), encoding: 'base64' as const, expected_revision: null };
+  const first = await write(input);
+  assert.equal(first.revision, createHash('sha256').update(data).digest('hex'));
+  assert.deepEqual(readFileSync(join(f.shared, input.path)), data);
+  assert.deepEqual(await write(input), first);
+  await assert.rejects(write({ ...input, content: Buffer.from('changed').toString('base64') }));
+  for (const path of ['../outside', 'lost+found/file', '/etc/file']) assert.equal((await write({ ...input, operation_id: randomUUID(), path })).error, 'invalid_path');
+  await assert.rejects(write({ ...input, operation_id: 'bad-base64', content: 'not base64' }));
+  await assert.rejects(write({ ...input, operation_id: 'oversize', content: Buffer.alloc(256 * 1024 + 1).toString('base64') }));
+  const reopened = new WorkspaceWriteLog(database, f.files); f.cleanup.push(() => reopened.close());
+  assert.deepEqual(reopened.write(input), first);
 });
