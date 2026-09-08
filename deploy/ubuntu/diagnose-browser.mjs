@@ -24,13 +24,21 @@ const profile='/tmp/niwa-browser';
 const child=spawn('/usr/bin/chromium',['--headless=new','--remote-debugging-pipe','--user-data-dir='+profile,'--no-first-run',
  '--no-default-browser-check','--disable-background-networking','--disable-extensions','about:blank'],
  {stdio:['ignore','ignore','pipe','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:profile,LANG:'C.UTF-8'}});
-let stderr='',ready=false,lastMethod='spawn';
+let stderr='',ready=false,lastMethod='spawn',reported=false;
+const report=()=>{
+ if(reported) return; reported=true;
+ const fs=require('node:fs');
+ for(const name of ['pids.current','pids.max','pids.peak','pids.events','memory.events']) {
+  try {console.log('cgroup '+name+': '+fs.readFileSync('/sys/fs/cgroup/'+name,'utf8').trim())} catch{}
+ }
+ console.error(stderr);
+};
 child.stderr.on('data',chunk=>{if(stderr.length<16384) stderr+=chunk.toString().slice(0,16384-stderr.length)});
 const timer=setTimeout(()=>child.kill('SIGKILL'),45000);
 child.once('error',error=>{clearTimeout(timer); console.error('Chromium spawn failed: '+error.code);process.exitCode=1});
 child.once('exit',(code,signal)=>{
  clearTimeout(timer); console.log('Chromium exit '+JSON.stringify({code,signal,ready,lastMethod}));
- if(!ready) {console.error(stderr);process.exitCode=1;}
+ if(!ready) {report();process.exitCode=1;}
 });
 (async()=>{
  const {CdpPipe}=await import('/app/dist/tools/browser/cdp.js');
@@ -52,7 +60,7 @@ child.once('exit',(code,signal)=>{
   if(snapshot.title!=='Diagnostic') throw Error('Unexpected artificial page');
   ready=true; console.log('PASS: Chromium CDP, production page initialization and artificial-page rendering');
  } catch(error) {
-  console.error('Startup failed: '+error.message+'; stderr: '+stderr);process.exitCode=1;
+  console.error('Startup failed: '+error.message);report();process.exitCode=1;
  } finally {
   await page.close();
   try {await cdp.send('Browser.close')} catch{}

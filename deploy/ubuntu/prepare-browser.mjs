@@ -3,7 +3,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { cpSync, mkdtempSync, readFileSync, writeFileSync, renameSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { browserArguments } from '../../dist/sandbox/browser.js';
+import { browserArguments, BROWSER_PID_LIMIT } from '../../dist/sandbox/browser.js';
 import { configuredProgramRunner } from '../../dist/sandbox/program.js';
 import { BrowserSession } from '../../dist/tools/browser/session.js';
 import { verifyBrowserSession } from './browser-acceptance.mjs';
@@ -48,7 +48,7 @@ try {
     assert.match(fs.readFileSync('/proc/self/status','utf8'),/Seccomp:\\s+2/);
     assert.equal(fs.existsSync('/workspace'),false); assert.equal(fs.existsSync('/home/niwa/niwa/config'),false);
     assert.throws(()=>fs.writeFileSync('/niwa-boundary','forbidden'));
-    for(const [file,value] of [['memory.max','1073741824'],['memory.swap.max','0'],['pids.max','128'],['cpu.max','100000 100000']])
+    for(const [file,value] of [['memory.max','1073741824'],['memory.swap.max','0'],['pids.max','${BROWSER_PID_LIMIT}'],['cpu.max','100000 100000']])
       assert.equal(fs.readFileSync('/sys/fs/cgroup/'+file,'utf8').trim(),value);
     fetch('http://127.0.0.1:3210/',{signal:AbortSignal.timeout(1000)}).then(()=>{process.exitCode=1},()=>console.log('PASS: browser container boundaries'));
   `);
