@@ -153,7 +153,7 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-executor-session.sh --apply
 sudo python3 /home/niwa/niwa/deploy/ubuntu/prepare-disks.py --apply
 ```
 
-ディスク準備が成功したら、空の初期workspaceで[実コンテナの一括検証](deploy/ubuntu/PROGRAM.md)を実行します。固定した公式Pythonイメージの取得と、隔離・容量・メモリ・PID上限の人工データ試験をまとめて行います。
+ディスク準備が成功したら、空の初期workspaceで[実コンテナの一括検証](deploy/ubuntu/PROGRAM.md)を実行します。固定した公式Pythonイメージの取得と、隔離・容量・メモリ・PID上限の人工データ試験をまとめて行います。 起動準備には、コンテナ起動時のUIDへ親ディレクトリの通過専用ACLを設定する処理も含みます。
 
 ```bash
 sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-program.sh --apply

@@ -11,6 +11,7 @@ for path in "$root/workspace" "$root/runtime/executor"; do
   mountpoint -q "$path"
 done
 systemctl is-active --quiet "user@$executor_uid.service"
+python3 "$root/deploy/ubuntu/prepare-container-access.py" --apply
 executor_home=$root/runtime/executor/home
 executor_runtime=/run/user/$executor_uid
 exec runuser -u niwa-exec -- env -i PATH=/usr/bin:/bin HOME="$executor_home" XDG_RUNTIME_DIR="$executor_runtime" \

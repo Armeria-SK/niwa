@@ -6,6 +6,8 @@
 sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-program.sh --apply
 ```
 
+起動前に `prepare-container-access.py` が `/etc/subuid` の専用ユーザー割当を確認し、`keep-id` の名前空間rootに対応するUIDへ、`/home/niwa` と製品ルートの通過専用ACLを設定します。既存のACLマスク・所有者・配下の権限は保持します。単一の十分な割当範囲を要求し、重複割当や想定外の所有者・リンクは拒否します。
+
 一度のsudo認証で、専用user manager内の委譲付き一時サービスから次を行います。
 
 1. workspace/executorが指定容量以下の独立mountで、Podmanがrootless/local・seccomp・cgroup v2を使うことを確認します。
@@ -20,3 +22,9 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/prepare-program.sh --apply
 この処理は本体のexecutor UID設定やNiwaサービスの登録・起動を行いません。初回受入の成功後に、検証済みimage IDを使ってサービス設定を進めます。失敗時は出力を確認し、残存コンテナを無条件で削除して再実行しないでください。以前の成功記録があっても、今回の失敗を成功扱いにはしません。
 
 2026-09-08、スクリプト構文検査と `python3 tests/program-probes.test.py` の3件が成功。実tmpfs上のENOSPCと人工ファイル回収、user namespace内のRLIMIT_NPROCによるPID上限時の子プロセス回収、seccomp/NoNewPrivsの文字列検査を確認しました。実Podmanの受入はまだ実行していません。PIDの補助テストは、コンテナのcgroupによるPID制御の代替ではありません。
+
+### crunの起動時にmergedのPermission deniedが出る場合
+
+`--userns=keep-id` では、起動処理中の名前空間rootがホストのniwa-execとは別のsubordinate UIDに対応します。niwa-execだけの親ディレクトリACLでは、crunが保存領域を開く段階で拒否されます（[upstreamの同種報告](https://github.com/containers/crun/issues/1777)）。この準備手順は該当UIDだけに通過権限を付けます。`chmod o+x` や再帰的な所有権変更は不要です。
+
+2026-09-08の実行ではイメージ取得・executor領域のENOSPC確認が成功し、最初のコンテナ起動で上記エラーになりました。人工の二重user namespaceで失敗を再現し、ACL適用後の到達成功、親一覧・私的領域の拒否を検証済み。実環境のACLも適用済みですが、実コンテナ受入は同じprepare-programコマンドで再実行が必要です。
