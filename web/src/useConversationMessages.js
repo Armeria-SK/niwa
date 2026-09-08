@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
+import { conversationText } from './conversationText.js';
 
 const displayMessage = message => message && ({ ...message, author: message.author_id === 'administrator' ? 'you' : message.author_id,
-  text: message.body, time: new Date(message.created_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) });
+  text: conversationText(message), time: new Date(message.created_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) });
 
 export function useConversationMessages(thread) {
   const [data, setData] = useState({ first: null, items: [], next: null });
