@@ -11,7 +11,7 @@ const db=new DatabaseSync(`${root}/state/control.db`,{readOnly:true});
 assert.equal(db.prepare('PRAGMA quick_check').get().quick_check,'ok');
 const tables=['agents','rooms','messages','tasks','schedules'];
 const ids=Object.fromEntries(tables.map(table=>[table,db.prepare(`SELECT id FROM ${table}`).all().map(row=>row.id)]));
-const settings=db.prepare('SELECT * FROM settings').all();
+const settings=db.prepare('SELECT * FROM settings').all().map(row=>({...row}));
 db.close();
 const exec=(command,args)=>execFileSync(command,args,{encoding:'utf8'}).trim();
 for(const mount of ['workspace','runtime/executor']) exec('mountpoint',['-q',`${root}/${mount}`]);
@@ -25,7 +25,7 @@ assert.equal(exec('runuser',[...env,'is-enabled','niwa-executor.service']),'enab
 const catalog=JSON.parse(readFileSync(`${root}/runtime/executor/environments/catalog/catalog.json`,'utf8'));
 assert.deepEqual(catalog,[],'Production catalog changed; review before acceptance');
 const packageDb=new DatabaseSync(`${root}/runtime/executor/state/packages.db`,{readOnly:true});
-const environment=packageDb.prepare('SELECT * FROM environment').all();packageDb.close();
+const environment=packageDb.prepare('SELECT * FROM environment').all().map(row=>({...row}));packageDb.close();
 if(process.argv[2]==='--prepare') {
  mkdirSync(`${root}/runtime/reboot-acceptance`,{recursive:true,mode:0o700});
  writeFileSync(file,JSON.stringify({boot,ids,settings,environment,prepared_at:new Date().toISOString()})+'\n',{mode:0o600});
