@@ -358,6 +358,22 @@ export class Tasks {
       return output;
     });
   }
+  /** Bind at a task boundary. Existing saved actions keep the old composition until this task ends. */
+  bindPrompt(actor:Actor,lease:TaskLease,preferred:'legacy-v4'|'structured-v5'):'legacy-v4'|'structured-v5'{
+    this.#owned(actor,lease);check(['legacy-v4','structured-v5'].includes(preferred),'invalid','Unknown prompt version');
+    const version=this.steps(actor,lease.task.id).length?'legacy-v4':preferred;
+    this.#db.prepare('INSERT OR IGNORE INTO task_prompt_versions VALUES (?,?)').run(lease.task.id,version);
+    return this.#db.prepare('SELECT version FROM task_prompt_versions WHERE task_id=?').get(lease.task.id)!.version as 'legacy-v4'|'structured-v5';
+  }
+  recordPrompt(actor:Actor,lease:TaskLease,input:{version:string;phase:string;rules_revision:number;memory_revision:number;input_bytes:number;estimated_input_tokens:number;removed_messages:number}){
+    this.#owned(actor,lease);
+    return Number(this.#db.prepare('INSERT INTO prompt_runs(task_id,version,phase,rules_revision,memory_revision,input_bytes,estimated_input_tokens,removed_messages,created_at) VALUES (?,?,?,?,?,?,?,?,?)').run(lease.task.id,input.version,input.phase,input.rules_revision,input.memory_revision,input.input_bytes,input.estimated_input_tokens,input.removed_messages,Date.now()).lastInsertRowid);
+  }
+  finishPrompt(actor:Actor,lease:TaskLease,id:number,events:readonly ModelEvent[]){
+    this.get(actor,lease.task.id);const usage=events.filter(e=>e.type==='usage').at(-1);
+    this.#db.prepare('UPDATE prompt_runs SET status=?,input_tokens=?,output_tokens=? WHERE id=? AND task_id=?').run(events.some(e=>e.type==='failed')?'failed':events.some(e=>e.type==='completed')?'completed':'unknown',usage?.input_tokens??null,usage?.output_tokens??null,id,lease.task.id);
+  }
+  promptRuns(actor:Actor,id:string){this.get(actor,id);return this.#db.prepare('SELECT * FROM prompt_runs WHERE task_id=? ORDER BY id').all(id);}
   steps(actor: Actor, id: string): { step: number; memory_revision: number; rules_revision: number; discarded: number; events: ModelEvent[] }[] {
     const task = this.get(actor, id);
     const db = this.#access.memory(actor, task.agent_id);
