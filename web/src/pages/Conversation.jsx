@@ -5,7 +5,6 @@ import { uid } from '../data.js';
 import { MentionText } from '../MentionText.jsx';
 import { useConversationMessages } from '../useConversationMessages.js';
 import './Conversation.css';
-import { WorkNotes } from '../WorkNotes.jsx';
 import {CoordinationBoard} from '../CoordinationBoard.jsx';
 
 export function Conversation({ thread, tasks, onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
@@ -25,8 +24,8 @@ export function Conversation({ thread, tasks, onNewSession, members, memberMap, 
       <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
     </main>
     {showWork ? <CoordinationBoard roomId={thread.id} members={memberMap} onClose={() => setShowWork(false)} onArtifact={onArtifact}/> : null}
-    <aside className="presence-rail" aria-label="メンバーの様子"><Presence {...presenceProps} />{!showPresence ? <WorkNotes key={thread.id} roomId={thread.id} members={memberMap} /> : null}</aside>
-    {showPresence ? <Modal title="メンバーの様子" onClose={() => setShowPresence(false)} className="presence-modal"><Presence {...presenceProps} noHeading onMember={id => { setShowPresence(false); onMember(id); }} onAppearance={id => { setShowPresence(false); onAppearance(id); }} /><WorkNotes key={thread.id} roomId={thread.id} members={memberMap} /></Modal> : null}
+    <aside className="presence-rail" aria-label="メンバーの様子"><Presence {...presenceProps} /></aside>
+    {showPresence ? <Modal title="メンバーの様子" onClose={() => setShowPresence(false)} className="presence-modal"><Presence {...presenceProps} noHeading onMember={id => { setShowPresence(false); onMember(id); }} onAppearance={id => { setShowPresence(false); onAppearance(id); }} /></Modal> : null}
   </>;
 }
 
