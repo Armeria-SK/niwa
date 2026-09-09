@@ -1,3 +1,4 @@
+import {qualityPlanSchema,qualityReviewSchema,type QualityReview} from './artifact-quality.ts';
 import {initiativeBodySchema} from './initiatives.ts';
 import {environmentDefinitionSchema} from '../tools/environments/registry.ts';
 import type {WorkareaTransport} from './workareas.ts';
@@ -48,6 +49,9 @@ const definitions = {
   workspace_areas: {description:'現在のBot・仕事・会話で扱える作業場所を読む。案件参加者の変更は管理者が行う。',schema:object({})},
   workspace_download: {description:'選択中の作業場所からバイナリをbase64で取得する。最大8MiB。',schema:object({path:Type.String({minLength:1,maxLength:512}),revision:Type.Optional(Type.String({pattern:'^[a-f0-9]{64}$'}))})},
   workspace_share: {description:'選択した作業場所のファイルを現在の会話へ固定版として共有する。target_projectは同じ会話の参加案件ID、nullは会話全体。parent_artifactは同じ公開範囲の自分の旧版ID、新規はnull。元のファイルの変更は共有済み版に影響しない。外部公開や送信ではない。',schema:object({path:Type.String({minLength:1,maxLength:512}),expected_revision:Type.String({pattern:'^[a-f0-9]{64}$'}),target_project:Type.Union([Type.Null(),short()]),parent_artifact:Type.Union([Type.Null(),short()])})},
+  quality_plan:{description:'重要な成果物の作成前に少数の完成条件とレビュー終了条件を保存する。criteria.kindはsource=原文との主張照合、execution=実行証拠、review=内容判断。軽い会話には不要。作成後に条件を下げない。',schema:object({expected_revision:Type.Integer({minimum:0}),plan:qualityPlanSchema})},
+  artifact_manifest:{description:'自分の固定ファイル成果物から、検査対象だけのmanifestを作る。pathは実行時の相対パス。版とSHA256はartifact_inspectで確認する。時刻だけで新しい版を量産しない。',schema:object({name:Type.String({minLength:1,maxLength:200}),files:Type.Array(object({path:Type.String({minLength:1,maxLength:512}),id:short(),sha256:Type.String({pattern:'^[a-f0-9]{64}$'})}),{minItems:1,maxItems:50}),parent:Type.Optional(short())})},
+  artifact_evidence:{description:'固定成果物の完成条件へ証拠を結ぶ。referenceは現在の仕事の保存されたツールoperation_id/実行ID。実行結果と対象ファイルのhashはサービスが照合し、自己申告は未実行と記録する。資料取得は主張の正しさではない。claimと正確な原文excerptを照合し、supports/contradicts/uncertainと限界を残す。別Botへ見せる証拠は同じ案件に置く。',schema:object({artifact_id:short(),sha256:Type.String({pattern:'^[a-f0-9]{64}$'}),criterion:short(),reference:short(),method:Type.String({minLength:1,maxLength:1000}),claim:Type.String({maxLength:2000}),excerpt:Type.String({maxLength:2000}),assessment:Type.Union([Type.Literal('supports'),Type.Literal('contradicts'),Type.Literal('uncertain')]),limits:Type.String({maxLength:2000})})},
   initiative_list:{description:'閲覧権限のある継続する取り組みを確認する。新規作成前に既存を確認する。私的な内容は別会話へ移さない。',schema:object({})},
   initiative_select:{description:'この仕事を既存の取り組みへ結び付ける。認可された同じ会話の取り組みだけ。権限や承認は増えない。',schema:object({id:short()})},
   initiative_save:{description:'一回の仕事とは別に目的・理由・完成条件・次の行動・試した方法と結果・待ち条件を保存する。既存版を更新し、収益仕事への登録は不要。参加者は会話の既存参加者のみ。review_atは次の見直しのUnixミリ秒。approval/user_input/child/model待ちは実在する待機タスクを指定。探索不成功はsearch_failed。休息はresting、終了はcompleted。停止中の取り組みを自分で再開しない。',schema:object({id:Type.Union([Type.Null(),short()]),expected_revision:Type.Integer({minimum:0}),body:initiativeBodySchema,state:Type.Union([Type.Literal('active'),Type.Literal('resting'),Type.Literal('completed')]),review_at:Type.Integer({minimum:0})})},
@@ -55,13 +59,13 @@ const definitions = {
   activity_checkpoint: {description:'自発活動の目的・試行・結果・未着手の候補・次の行動・再開条件を既存の計画へ保存する。探索不成功は管理者対応待ちではなく、方法を変えるか条件を残して休息する。rest_minutes=0なら続行、15〜1440なら保存して休息。単独で使う。',schema:object({purpose:short(),tried:Type.String({minLength:1,maxLength:900}),result:Type.String({minLength:1,maxLength:900}),alternatives:Type.String({minLength:1,maxLength:900}),next_action:Type.String({minLength:1,maxLength:900}),resume_condition:Type.String({minLength:1,maxLength:900}),rest_minutes:Type.Union([Type.Literal(0),Type.Integer({minimum:15,maximum:1440})])})},
   work_note: { description: 'この会話のユーザー向け作業メモを1〜2文で残す。確認できた事実・進捗・方針変更だけを簡潔に書く。内部思考・秘密・内部IDは書かない。新しい気付きがあるときだけ使い、実作業を続ける。本文投稿、返信要求、他Bot起動、完了は発生しない。', schema: object({ body: Type.String({minLength:1,maxLength:300}) }) },
   task_review_ready: {description:'自分の仕事で作成した最新成果物をreview_ready（受け渡し準備完了）にする。固定IDとSHA256が必要。これだけでは他Botを起動しない。',schema:object({artifact_id:short(),sha256:Type.String({pattern:'^[a-f0-9]{64}$'})})},
-  task_handoff: {description:'準備済みの固定成果物を、予定した次担当に明示的に渡して結果を待つ。task_review_readyの登録と具体的な依頼内容が必要。1タスクからの受け渡しは1回だけ。単独で呼ぶ。',schema:object({prompt:Type.String({minLength:1,maxLength:17000})})},
+  task_handoff: {description:'準備済みの固定成果物を、予定した次担当に明示的に渡して結果を待つ。task_review_readyの登録と具体的な依頼内容が必要。重要成果物では必要な証拠が先。purpose=reviewは内容レビューへの依頼、deliveryは確認済み成果物の配送（既定）。1タスクからの受け渡しは1回だけ。単独で呼ぶ。',schema:object({prompt:Type.String({minLength:1,maxLength:17000}),purpose:Type.Optional(Type.Union([Type.Literal('review'),Type.Literal('delivery')]))})},
   task_acknowledge: {description:'実作業の依頼を受領済みとして状態だけ記録する。本文・別Botの起動・作業の完了は発生しない。そのまま作業を続ける。',schema:object({})},
   task_timebox: {description:'現在の仕事と子タスクに今からの制限秒数（1〜86400）を設定する。既存の期限を延長できない。期限で実行を停止し、時間切れとして保存する。',schema:object({seconds:Type.Integer({minimum:1,maximum:86400})})},
   coordination_digest: {description:'この会話の直近24時間の保存成果物、送信記録と結果不明、承認待ち、ブロッカー、期限超過を読む。売上・入金・顧客接点の実績は未検証。発言数や自己申告を実績と数えない。',schema:object({})},
   artifact_inspect: {description:'この会話の成果物の固定ID、SHA256、版一覧、確認記録、凍結状態を読む。本文はhistory_readで確認する。',schema:object({id:short()})},
   artifact_revise: {description:'自分の成果物を旧版を残して改訂する。最新の固定IDとSHA256を指定する。凍結済みは変更できない。',schema:object({id:short(),expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'}),content:Type.String({minLength:1,maxLength:100000})})},
-  artifact_review: {description:'他Botの成果物の内容を確認し、固定IDとSHA256に対して確認済み/要修正を記録する。自己承認や外部操作の承認には使えない。',schema:object({id:short(),expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'}),verdict:Type.Union([Type.Literal('approved'),Type.Literal('changes_requested')]),note:Type.String({minLength:1,maxLength:1000})})},
+  artifact_review: {description:'他Botの成果物の内容を確認し、固定IDとSHA256に対して確認済み/要修正を記録する。自己承認や外部操作の承認には使えない。',schema:object({id:short(),expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'}),verdict:Type.Union([Type.Literal('approved'),Type.Literal('changes_requested')]),note:Type.String({minLength:1,maxLength:1000}),checks:Type.Optional(qualityReviewSchema)})},
   artifact_freeze: {description:'他者による確認済み記録があり未解決の要修正がない、自分の成果物の固定版を凍結する。凍結後は改訂できない。',schema:object({id:short(),expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'})})},
   coordination_read: {description:'この会話の担当・親子タスク・完成条件・待ち理由・次担当・成果物参照を読む。他の会話、私的記憶、思考過程は含まない。',schema:object({})},
   task_status_update: {description:'自分の仕事の完成条件・停止条件・ブロッカー・対応待ち相手・次担当を更新する。expected_revisionはwork_state.coordinationかcoordination_readから取得。blockerがあれば仕事を保留し、再開操作まで再試行しない。notify=involvedは依頼元/対応待ち相手/次担当だけに阻害理由の変更を通知、leaderはブロッカー通知に参加できるリーダーも含む。noneは通知なし。waiting_forとnext_agent_idはBot IDまたはadministratorまたはnull。next_agent_idは次担当の予定表示だけで、タスクを生成しない。単独で呼ぶ。',schema:coordinationUpdateSchema},
@@ -128,7 +132,7 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
   }
   if (call.name === 'history_read') {
     if (!runtime.tasks.active(actor, lease)) return { error: 'Task is no longer active' };
-    try { return runtime.readHistory(actor, lease.task.room_id, args.kind!, args.source_id!, call.arguments.offset as number, call.arguments.revision as string | null); }
+    try { const observed=runtime.readHistory(actor, lease.task.room_id, args.kind!, args.source_id!, call.arguments.offset as number, call.arguments.revision as string | null);return runtime.tasks.once(actor,lease,operationId,{name:call.name,arguments:call.arguments,revision:observed.revision},()=>({...observed,receipt:operationId})); }
     catch (error) { if (error instanceof DomainError) return { error: error.code, message: error.message }; throw error; }
   }
   if (call.name === 'history_search') {
@@ -143,6 +147,9 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
   try {
     return runtime.tasks.once(actor, lease, operationId, { name: call.name, arguments: call.arguments }, () => {
       switch (call.name) {
+        case 'quality_plan': return runtime.quality.plan(actor,lease,call.arguments.expected_revision as number,call.arguments.plan as unknown as Parameters<typeof runtime.quality.plan>[3]);
+        case 'artifact_manifest': return runtime.quality.manifest(actor,lease,args.name!,call.arguments.files as unknown as Parameters<typeof runtime.quality.manifest>[3],args.parent);
+        case 'artifact_evidence': return runtime.quality.record(actor,lease,call.arguments as unknown as Parameters<typeof runtime.quality.record>[2]);
         case 'initiative_list': return {enabled:runtime.initiatives.enabled(),items:JSON.parse(JSON.stringify(runtime.initiatives.list(actor).filter(i=>i.room_id===lease.task.room_id)))};
         case 'initiative_select': return JSON.parse(JSON.stringify(runtime.initiatives.select(actor,lease,args.id!)));
         case 'initiative_save': return JSON.parse(JSON.stringify(runtime.initiatives.save(actor,lease,call.arguments as unknown as Parameters<typeof runtime.initiatives.save>[2])));
@@ -152,13 +159,13 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
           if(item.room_id!==lease.task.room_id) throw new DomainError('forbidden','Artifact belongs to another conversation');
           if(call.name!=='artifact_inspect' && runtime.tasks.independentActivity(actor,lease) && !runtime.tasks.workState(actor,lease).artifacts.some(a=>a.id===args.id)) return {error:'保留中の成果物は変更せず、この独立活動で新規作成した成果物だけを扱ってください。'};
           if(call.name==='artifact_revise') return runtime.artifactVersions.revise(actor,args.id!,args.expected_sha256!,args.content!,lease.task.id);
-          if(call.name==='artifact_review') return runtime.artifactVersions.review(actor,args.id!,args.expected_sha256!,args.verdict as 'approved'|'changes_requested',args.note!);
+          if(call.name==='artifact_review') return runtime.artifactVersions.review(actor,args.id!,args.expected_sha256!,args.verdict as 'approved'|'changes_requested',args.note!,call.arguments.checks as QualityReview|undefined);
           if(call.name==='artifact_freeze') return runtime.artifactVersions.freeze(actor,args.id!,args.expected_sha256!);
           const {content:_content,...metadata}=runtime.artifactVersions.reference(actor,args.id!,lease.task.id);return JSON.parse(JSON.stringify(metadata));
         }
         case 'task_acknowledge': return runtime.tasks.acknowledgeWork(actor,lease);
         case 'task_review_ready': return runtime.reviewReady(actor,lease,args.artifact_id!,args.sha256!);
-        case 'task_handoff': return runtime.handoff(actor,lease,args.prompt!);
+        case 'task_handoff': return runtime.handoff(actor,lease,args.prompt!,args.purpose as 'review'|'delivery'|undefined);
         case 'coordination_read': return {tasks:JSON.parse(JSON.stringify(runtime.coordination(actor,lease.task.room_id)))};
         case 'coordination_digest': return JSON.parse(JSON.stringify(runtime.coordinationDigest(actor,lease.task.room_id)));
         case 'task_timebox': return runtime.tasks.timebox(actor,lease,Number(call.arguments.seconds));

@@ -34,7 +34,7 @@ export class WorkareaStore {
   rmSync(join(this.root,'runs',String(row.id)),{recursive:true,force:true});
   this.db.prepare('UPDATE receipts SET result=? WHERE id=?').run(JSON.stringify({error:'outcome_unknown'}),row.id!);
  }}
- private tree(root:string,destination?:string,sync=false):string {
+ private tree(root:string,destination?:string,sync=false,manifest?:{path:string;sha256:string;stamp?:string}[]):string {
   assertDirectoryPath(root);const device=lstatSync(root).dev;const entries:string[]=[];let bytes=0,count=0;
   const walk=(dir:string,relative:string)=>{for(const item of readdirSync(dir,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){
    const name=relative?`${relative}/${item.name}`:item.name,path=join(dir,item.name),stat=lstatSync(path);
@@ -44,7 +44,7 @@ export class WorkareaStore {
     if(!stat.isFile() || stat.nlink!==1 || stat.size>8*1024*1024 || (bytes+=stat.size)>64*1024*1024)throw new WorkspaceError('unsupported');
     const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
     try{const current=fstatSync(fd);if(current.ino!==stat.ino||current.dev!==device||current.nlink!==1)throw new WorkspaceError('invalid_path');
-     const data=readFileSync(fd);if(sync){chmodSync(path,stat.mode&0o100?0o700:0o600);fsyncSync(fd);}entries.push(`f:${name}:${digest(data)}:${Number(!!(stat.mode&0o100))}`);
+     const data=readFileSync(fd);manifest?.push({path:name,sha256:digest(data),stamp:String(fstatSync(fd,{bigint:true}).ctimeNs)});if(sync){chmodSync(path,stat.mode&0o100?0o700:0o600);fsyncSync(fd);}entries.push(`f:${name}:${digest(data)}:${Number(!!(stat.mode&0o100))}`);
      if(destination)writeFileSync(join(destination,name),data,{flag:'wx',mode:stat.mode&0o100?0o700:0o600});
     }finally{closeSync(fd);}
    }
@@ -158,7 +158,7 @@ export class WorkareaStore {
      const version=selected?await this.environments?.resolve(input.area,input.epoch,selected):undefined;
      if(input.operation!=='run'&&!version)throw new WorkspaceError('unsupported');
      const checkLocks=()=>{for(const file of version?.definition.lockfiles??[])if(new Workspace(stage).download(file.path).revision!==file.sha256)throw new WorkspaceError('conflict');};
-     checkLocks();
+     checkLocks();const inputFiles:{path:string;sha256:string;stamp?:string}[]=[];this.tree(stage,undefined,false,inputFiles);const executedAt=new Date().toISOString();
      const commands=input.operation==='environment_test'?[...version!.definition.prepare,version!.definition.verify]:input.operation==='environment_run'?[...version!.definition.prepare,version!.definition.run,version!.definition.verify]:[input.command??[]];
      const seconds=input.seconds??300;
      if(!Number.isSafeInteger(seconds)||seconds<1||seconds>(input.managed?input.resources!.seconds:300))throw new WorkspaceError('unsupported');
@@ -173,12 +173,12 @@ export class WorkareaStore {
       output={code:step.code,stdout:(output.stdout+step.stdout).slice(-32768),stderr:(output.stderr+step.stderr).slice(-32768)};
       if(step.code!==0)break;
      }
-     signal?.throwIfAborted();checkLocks();const candidate=this.save(area.base,stage);
+     signal?.throwIfAborted();checkLocks();const afterFiles:{path:string;sha256:string;stamp?:string}[]=[];this.tree(stage,undefined,false,afterFiles);const verification={command_sha256:digest(Buffer.from(JSON.stringify(commands))),area:input.area,environment:version?.id??null,image:version?.image??this.environments?.baseImage??null,executed_at:executedAt,files:inputFiles.filter(f=>afterFiles.some(a=>a.path===f.path&&a.sha256===f.sha256&&a.stamp===f.stamp)).map(({path,sha256})=>({path,sha256}))};const candidate=this.save(area.base,stage);
      if(input.operation==='environment_test'){
       // Validation runs on a disposable snapshot; preparing never publishes its files or changes the active version.
       if(output.code===0)this.environments!.tested(input.area,input.epoch,version!.id,area.revision);
-      result={...output,environment:version!.id,image:version!.image,tested_revision:area.revision};
-     }else result={...output,candidate,base_revision:area.revision,...(version?{environment:version.id,image:version.image}: {})}; // Authorization and CAS happen separately after execution.
+      result={...output,verification,environment:version!.id,image:version!.image,tested_revision:area.revision};
+     }else result={...output,verification,candidate,base_revision:area.revision,...(version?{environment:version.id,image:version.image}: {})}; // Authorization and CAS happen separately after execution.
     }
    }
   }catch(error){result={error:error instanceof WorkspaceError?error.code:'outcome_unknown'};}

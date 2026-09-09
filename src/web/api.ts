@@ -1,3 +1,4 @@
+import {qualityReviewSchema,type QualityReview} from '../runtime/artifact-quality.ts';
 import {environmentDefinitionSchema} from '../tools/environments/registry.ts';
 import {randomUUID} from 'node:crypto';
 import type {WorkareaTransport} from '../runtime/workareas.ts';
@@ -117,9 +118,11 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/backups$/, schema: object({}), run: async () => {
       if (!backups) throw new DomainError('conflict', 'Backup service unavailable');
       const item = await backups.create(); return { id: item.id, created_at: item.created_at }; } },
+    {method:'GET',path:/^\/api\/quality$/,run:()=>runtime.quality.settings(admin)},
+    {method:'PATCH',path:/^\/api\/quality$/,schema:object({enabled:Type.Boolean()}),run:(_m,b)=>{runtime.quality.enable(admin,b.enabled as boolean);return {ok:true};}},
     { method: 'GET', path: /^\/api\/artifacts$/, run: (_m, _b, url) => runtime.artifacts(admin, url.searchParams.get('query') ?? '') },
     { method: 'GET', path: /^\/api\/artifacts\/([0-9a-f-]{36})$/, run: m => runtime.artifactVersions.inspect(admin, m[1]!) },
-    { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/review$/, schema: object({expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'}),verdict:Type.Union([Type.Literal('approved'),Type.Literal('changes_requested')]),note:Type.String({minLength:1,maxLength:1000})}),run:(m,b)=>runtime.artifactVersions.review(admin,m[1]!,b.expected_sha256 as string,b.verdict as 'approved'|'changes_requested',b.note as string) },
+    { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/review$/, schema: object({expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'}),verdict:Type.Union([Type.Literal('approved'),Type.Literal('changes_requested')]),note:Type.String({minLength:1,maxLength:1000}),checks:Type.Optional(qualityReviewSchema)}),run:(m,b)=>runtime.artifactVersions.review(admin,m[1]!,b.expected_sha256 as string,b.verdict as 'approved'|'changes_requested',b.note as string,b.checks as QualityReview|undefined) },
     { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/freeze$/, schema: object({expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'})}),run:(m,b)=>runtime.artifactVersions.freeze(admin,m[1]!,b.expected_sha256 as string) },
     { method: 'DELETE', path: /^\/api\/artifacts\/([0-9a-f-]{36})$/, schema: object({}), run: m => { runtime.deleteContent(admin, 'artifact', m[1]!); return { ok: true }; } },
     { method: 'DELETE', path: /^\/api\/rooms\/([0-9a-f-]{36})$/, schema: object({}), run: async m => { runtime.deleteContent(admin, 'room', m[1]!); if(workareas)await runtime.workareas.purgeRetired(workareas);return { ok: true }; } },

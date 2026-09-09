@@ -1,3 +1,5 @@
+import {artifactQualitySchema} from '../storage/artifact-quality-schema.ts';
+import {ArtifactQuality} from './artifact-quality.ts';
 import {initiativeSchema} from '../storage/initiative-schema.ts';
 import {Initiatives} from './initiatives.ts';
 import {executionSchema} from '../storage/execution-schema.ts';
@@ -69,6 +71,7 @@ type Principal = { kind: 'admin'; id: 'administrator' } | { kind: 'agent'; id: s
 
 /** Trusted application service. Do not expose this object to generated code or models. */
 export class Runtime {
+  readonly quality: ArtifactQuality;
   readonly initiatives: Initiatives;
   readonly workareas: Workareas;
   readonly tasks: Tasks;
@@ -84,7 +87,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -107,6 +110,7 @@ export class Runtime {
     this.workareas = new Workareas(this.#db,this,actor=>this.#principal(actor));
     this.initiatives = new Initiatives(this.#db,this,actor=>this.#principal(actor));
     this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id,this.initiatives);
+    this.quality = new ArtifactQuality(this.#db,this,actor=>this.#principal(actor));
     this.artifactVersions = new ArtifactVersions(this.#db,this,actor=>this.#principal(actor));
     this.schedules = new Schedules(this.#db, this.tasks, actor => this.#admin(actor), (actor, agentId, roomId) => {
       this.#room(actor, roomId);
@@ -487,6 +491,7 @@ export class Runtime {
     return transaction(this.#db, () => {
       const id = randomUUID();
       this.#db.prepare('INSERT INTO artifacts VALUES (?,?,?,?,?,?,?,?)').run(id, roomId, principal.id, name, kind, description, content, Date.now());
+      this.quality.attach(id,taskId);
       this.reportUpdate(actor, roomId, 'done', `${name}ができました`, description, taskId, id);
       return id;
     });
@@ -496,11 +501,11 @@ export class Runtime {
     const rooms = new Set(this.rooms(actor).map(room => room.id));
     return this.#db.prepare(`SELECT id,room_id,author_id,name,kind,description,created_at FROM artifacts
       WHERE instr(lower(name || ' ' || description || ' ' || content), lower(?)) > 0 ORDER BY created_at DESC`)
-      .all(query.trim()).filter(row => rooms.has(row.room_id as string)&&this.workareas.visible(actor,String(row.id)));
+      .all(query.trim()).filter(row => rooms.has(row.room_id as string)&&this.workareas.visible(actor,String(row.id))&&this.quality.readable(actor,String(row.id)));
   }
   artifact(actor: Actor, id: string): Record<string, unknown> {
     const row = this.#db.prepare('SELECT * FROM artifacts WHERE id=?').get(text(id, 100));
-    check(row&&this.workareas.visible(actor,id), 'not_found', 'Artifact not found'); this.#room(actor, row.room_id as string);
+    check(row&&this.workareas.visible(actor,id)&&this.quality.readable(actor,id), 'not_found', 'Artifact not found'); this.#room(actor, row.room_id as string);
     return row;
   }
   reportUpdate(actor: Actor, roomId: string, kind: 'done' | 'decision' | 'question', title: string, detail: string, taskId?: string, artifactId?: string): void {
@@ -682,7 +687,7 @@ export class Runtime {
   coordinationDigest(actor: Actor, roomId: string, now=Date.now()) {
     this.#room(actor,roomId);
     const since=now-86_400_000;
-    const artifacts=this.#db.prepare('SELECT a.id,a.name,a.author_id,a.created_at,coalesce(v.version,1) AS version FROM artifacts a LEFT JOIN artifact_versions v ON v.artifact_id=a.id WHERE a.room_id=? AND a.created_at>=? ORDER BY a.created_at DESC LIMIT 20').all(roomId,since).filter(row=>this.workareas.visible(actor,String(row.id)));
+    const artifacts=this.#db.prepare('SELECT a.id,a.name,a.author_id,a.created_at,coalesce(v.version,1) AS version FROM artifacts a LEFT JOIN artifact_versions v ON v.artifact_id=a.id WHERE a.room_id=? AND a.created_at>=? ORDER BY a.created_at DESC LIMIT 20').all(roomId,since).filter(row=>this.workareas.visible(actor,String(row.id))&&this.quality.readable(actor,String(row.id)));
     const artifactCount=this.artifacts(actor).filter(item=>item.room_id===roomId&&Number(item.created_at)>=since).length;
     const operations=this.#db.prepare(`SELECT l.tool_name,count(*) AS intents,sum(e.output IS NOT NULL) AS recorded,sum(e.output IS NULL) AS unknown
       FROM external_operation_labels l JOIN external_operations e USING(task_id,operation_id) JOIN tasks t ON t.id=l.task_id
@@ -703,10 +708,11 @@ export class Runtime {
     check(artifact.sha256===sha256 && artifact.versions[0]!.id===artifactId,'conflict','Use the latest fixed artifact version');
     check(this.#db.prepare('SELECT 1 FROM updates WHERE task_id=? AND artifact_id=?').get(lease.task.id,artifactId),'invalid','Artifact must belong to this task');
     check(!this.#db.prepare('SELECT child_id FROM task_handoffs WHERE task_id=? AND child_id IS NOT NULL').get(lease.task.id),'conflict','This task has already handed off its artifact');
+    this.quality.ready(actor,artifactId);
     this.#db.prepare('INSERT INTO task_handoffs VALUES (?,?,?,NULL) ON CONFLICT(task_id) DO UPDATE SET artifact_id=excluded.artifact_id,sha256=excluded.sha256').run(lease.task.id,artifactId,sha256);
     return {phase:'review_ready',artifact_id:artifactId,sha256};
   }
-  handoff(actor: Actor, lease: TaskLease, prompt:string) {
+  handoff(actor: Actor, lease: TaskLease, prompt:string,purpose:'review'|'delivery'='delivery') {
     check(this.tasks.active(actor,lease),'conflict','Task is no longer active');text(prompt,17_000);
     return transaction(this.#db,()=>{
       const ready=this.#db.prepare('SELECT * FROM task_handoffs WHERE task_id=?').get(lease.task.id);
@@ -716,7 +722,8 @@ export class Runtime {
       check(typeof next==='string' && next!=='administrator','invalid','Choose the next Bot before handing off');
       const item=this.artifactVersions.inspect(actor,String(ready.artifact_id));
       check(item.sha256===ready.sha256 && item.versions[0]!.id===ready.artifact_id,'conflict','Prepared artifact changed; prepare the latest version');
-      const child=this.tasks.delegate(actor,lease,next,`成果物の受け渡し\n親タスク：${lease.task.id}\n親の段階：review_ready\n成果物ID：${ready.artifact_id}\nSHA-256：${ready.sha256}\n依頼内容：${prompt}`);
+      if(purpose==='review')this.quality.ready(actor,String(ready.artifact_id));else this.quality.verified(actor,String(ready.artifact_id));
+      const child=this.tasks.delegate(actor,lease,next,`成果物の受け渡し\n親タスク：${lease.task.id}\n親の段階：review_ready\n成果物ID：${ready.artifact_id}\nSHA-256：${ready.sha256}\n依頼内容：${purpose==='review'?'内容のレビュー依頼です。まだ確認済みとしての引渡しではありません。\n':''}${prompt}`);
       this.#db.prepare('UPDATE task_handoffs SET child_id=? WHERE task_id=?').run(child.id,lease.task.id);
       this.#db.prepare('INSERT INTO artifact_references VALUES (?,?,?,?) ON CONFLICT DO NOTHING').run(child.id,ready.artifact_id!,ready.sha256!,Date.now());
       return {task_id:child.id,artifact_id:ready.artifact_id,sha256:ready.sha256};
@@ -1076,7 +1083,7 @@ export class Runtime {
       if (summary) summaries.push({ kind: 'summary', source_id: String(candidate.id), room_id: summary.room_id, ...excerpt(summary.body) });
       if (summaries.length >= 20) break;
     }
-    return [...entries.filter(entry=>entry.kind!=='artifact'||this.workareas.visible(actor,entry.source_id)).map(entry => ({ kind: entry.kind, source_id: entry.source_id, room_id: entry.room_id, ...excerpt(entry.body) })), ...summaries,
+    return [...entries.filter(entry=>entry.kind!=='artifact'||(this.workareas.visible(actor,entry.source_id)&&this.quality.readable(actor,entry.source_id))).map(entry => ({ kind: entry.kind, source_id: entry.source_id, room_id: entry.room_id, ...excerpt(entry.body) })), ...summaries,
       ...memories.map(item => ({ kind: 'memory', source_id: item.id, room_id: item.source_room_id, revision: item.revision,
         source_message_id: item.source_message_id, ...excerpt(item.body) }))];
   }

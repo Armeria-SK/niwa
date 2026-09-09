@@ -56,7 +56,7 @@ test('restored work disables fresh wakeups until explicit review, and deleted bo
  assert.ok(!r.autonomousWakes.list(admin).some(row=>row.agent_id===bot.id));
  r.tasks.protectRestoredWork(admin);assert.equal(r.settings(admin).autonomous,false);
  r.autonomousWakes.dispatch(admin,now+60000);assert.equal(r.tasks.list(admin).length,0);
- const db=new DatabaseSync(join(root,'control.db'),{readOnly:true});try{assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,40);}finally{db.close();}
+ const db=new DatabaseSync(join(root,'control.db'),{readOnly:true});try{assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,41);}finally{db.close();}
 });
 
 test('a normal request interrupts an in-flight wake before claiming the same Bot again',async t=>{

@@ -245,8 +245,10 @@ export class Tasks {
     const memory = this.#access.memory(actor, task.agent_id);
     const plan = memory.prepare('SELECT revision,remaining FROM task_plans WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)').get(task.id);
     return {
-      observations: this.#db.prepare("SELECT operation_id,json_extract(output,'$.url') AS url FROM tool_receipts WHERE task_id=? AND json_extract(output,'$.fetched_at') IS NOT NULL").all(task.id),
+      observations: this.#db.prepare("SELECT operation_id,json_extract(output,'$.url') AS url,json_extract(output,'$.source_id') AS source_id FROM tool_receipts WHERE task_id=? AND (json_extract(output,'$.fetched_at') IS NOT NULL OR json_extract(output,'$.revision') IS NOT NULL)").all(task.id),
       initiative: this.#access.initiative(actor,task.id),
+      quality_enabled: this.#db.prepare('SELECT enabled FROM quality_settings WHERE id=1').get()?.enabled===1,
+      completion_checks: this.#db.prepare('SELECT revision,body FROM task_quality WHERE task_id=?').get(task.id)??null,
       workarea: this.#db.prepare('SELECT w.id,w.kind,w.name,w.room_id FROM task_workareas t JOIN workareas w ON w.id=t.area_id WHERE t.task_id=?').get(task.id) ?? null,
       independent_activity: this.independentActivity(actor,lease),
       recent_autonomous_work: this.#autonomous(task.id) ? this.#db.prepare(`SELECT t.id,t.room_id,substr(t.prompt,1,300) AS prompt,t.state,substr(t.result,1,1000) AS result,t.wait_reason
@@ -616,7 +618,7 @@ export class Tasks {
   protectRestoredWork(actor: Actor): void {
     this.#admin(actor);
     transaction(this.#db, () => {
-      this.#db.exec('INSERT OR IGNORE INTO restored_tasks SELECT id FROM tasks; UPDATE settings SET autonomous=0 WHERE id=1; UPDATE initiative_settings SET enabled=0; UPDATE workarea_settings SET enabled=0; UPDATE workareas SET available=0; UPDATE artifact_files SET available=0; DELETE FROM task_workareas;');
+      this.#db.exec('INSERT OR IGNORE INTO restored_tasks SELECT id FROM tasks; UPDATE settings SET autonomous=0 WHERE id=1; UPDATE quality_settings SET enabled=0; UPDATE initiative_settings SET enabled=0; UPDATE workarea_settings SET enabled=0; UPDATE workareas SET available=0; UPDATE artifact_files SET available=0; DELETE FROM task_workareas;');
       this.#db.prepare("UPDATE execution_bindings SET state='cancelled',waiting=0,result=NULL").run();
       this.#db.prepare('UPDATE workarea_settings SET epoch=?').run(randomUUID());
       this.#db.prepare("UPDATE schedules SET enabled=0,wait_reason=? WHERE deleted=0")
