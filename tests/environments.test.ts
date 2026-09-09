@@ -46,14 +46,14 @@ test('snapshot test and pinned runs check lockfiles, retain candidates and preve
  const scope={area:f.area,epoch:f.epoch};
  const write=()=>store.execute({...scope,operation:'write',operation_id:randomUUID(),allow_start:true,path:'lock.json',content:'{}',expected_revision:null});await write();
  const version=await store.execute({...scope,operation:'environment_prepare',definition:f.definition,allow_start:true});assert.ok(version.id);
- assert.equal((await store.execute({...scope,operation:'environment_activate',environment:version.id as string,expected_environment:null})).error,'workarea_changed_retest_required');
+ assert.equal((await store.execute({...scope,operation:'environment_activate',operation_id:randomUUID(),allow_start:true,environment:version.id as string,expected_environment:null})).error,'workarea_changed_retest_required');
  const tested=await store.execute({...scope,operation:'environment_test',environment:version.id as string,operation_id:randomUUID(),allow_start:true,seconds:5});assert.equal(tested.code,0);assert.equal(tested.candidate,undefined);
- await store.execute({...scope,operation:'environment_activate',environment:version.id as string,expected_environment:null});
+ await store.execute({...scope,operation:'environment_activate',operation_id:randomUUID(),allow_start:true,environment:version.id as string,expected_environment:null});
  const run={...scope,operation:'environment_run',operation_id:randomUUID(),allow_start:true,seconds:5};const result=await store.execute(run);assert.equal(result.image,base);assert.ok(result.candidate);
  assert.deepEqual(await store.execute(run),result);assert.equal(calls,3);assert.deepEqual(images,[base,base,base]);
  await store.execute({...scope,operation:'write',path:'parallel',content:'other Bot',expected_revision:null,allow_start:true,operation_id:randomUUID()});
  assert.equal((await store.execute({...scope,operation:'commit',candidate:result.candidate as string,expected_revision:result.base_revision as string})).error,'conflict');
- assert.equal((await store.execute({...scope,operation:'environment_activate',environment:version.id as string,expected_environment:null})).error,'workarea_changed_retest_required');
+ assert.equal((await store.execute({...scope,operation:'environment_activate',operation_id:randomUUID(),allow_start:true,environment:version.id as string,expected_environment:null})).error,'workarea_changed_retest_required');
  await store.execute({...scope,operation:'write',path:'lock.json',content:'changed',expected_revision:sha('{}'),allow_start:true,operation_id:randomUUID()});
  assert.equal((await store.execute({...run,operation_id:randomUUID()})).error,'conflict');assert.equal(calls,3);
 });
@@ -96,4 +96,14 @@ test('canonical definitions deduplicate reordered keys; deleted areas erase defi
  const retired=f.registry.get(f.area,f.epoch,first.id);assert.equal(retired.state,'retired');assert.deepEqual(retired.definition,{});
  await assert.rejects(f.registry.resolve(f.area,f.epoch,first.id));
  assert.equal((await f.registry.prepare(f.area,f.epoch,f.definition,true) as {state:string}).state,'retired');assert.equal(f.installs,0);
+});
+
+test('adoption receipts never roll back a newer selection or execute an unrecorded retry',async t=>{
+ const f=setup(t),a=await f.registry.prepare(f.area,f.epoch,f.definition,true),b=await f.registry.prepare(f.area,f.epoch,{...f.definition,name:'new version'},true);assert.ok('id' in a&&'id' in b);
+ f.registry.tested(f.area,f.epoch,a.id,'revision');f.registry.tested(f.area,f.epoch,b.id,'revision');
+ const op=randomUUID();assert.deepEqual(f.registry.activate(f.area,f.epoch,a.id,null,op,false),{error:'outcome_unknown'});assert.equal(f.registry.active(f.area,f.epoch),null);
+ assert.deepEqual(f.registry.activate(f.area,f.epoch,a.id,null,op,true),{active:a.id});
+ f.registry.activate(f.area,f.epoch,b.id,a.id);f.reopen();
+ assert.deepEqual(f.registry.activate(f.area,f.epoch,a.id,null,op,false),{active:a.id});assert.equal(f.registry.active(f.area,f.epoch),b.id);
+ assert.throws(()=>f.registry.activate(f.area,f.epoch,b.id,null,op,false));
 });

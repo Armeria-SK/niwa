@@ -76,9 +76,10 @@ export class WorkareaStore {
   }
   if(input.operation==='environment_activate'){
    if(!this.environments||!input.environment)return {error:'environments_disabled'};
+   if(!input.operation_id||!uuid.test(input.operation_id))throw new WorkspaceError('unsupported');
    const version=await this.environments.resolve(input.area,input.epoch,input.environment);
    if(version.tested_revision!==area.current)return {error:'workarea_changed_retest_required'};
-   return this.environments.activate(input.area,input.epoch,input.environment,input.expected_environment??null);
+   return this.environments.activate(input.area,input.epoch,input.environment,input.expected_environment??null,input.operation_id,input.allow_start===true);
   }
   if(input.operation==='list'||input.operation==='read'||input.operation==='download'){
    const workspace=new Workspace(area.path);return {...(input.operation==='list'?workspace.list(input.path??''):input.operation==='read'?workspace.read(input.path??''):workspace.download(input.path??'')),area_revision:area.revision,shared:false};

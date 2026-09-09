@@ -39,11 +39,11 @@ try{
   await invoke(area,'write',{...operation(),path:'lock.json',content:'{}'});
   const prepared=await invoke(area,'environment_prepare',{definition,allow_start:true});assert.equal(prepared.state,'ready');ids.push(prepared.id);
   assert.equal((await invoke(area,'environment_test',{...operation(),environment:prepared.id})).code,0);
-  await invoke(area,'environment_activate',{environment:prepared.id,expected_environment:null});
+  await invoke(area,'environment_activate',{...operation(),environment:prepared.id,expected_environment:null});
  }
  const upgraded=await invoke(a,'environment_prepare',{definition:{...definition,dependencies:[{name:'niwa-environment-acceptance',version}]},allow_start:true});assert.equal(upgraded.state,'ready',JSON.stringify(upgraded));assert.notEqual(upgraded.image,image);
  assert.equal((await invoke(a,'environment_test',{...operation(),environment:upgraded.id})).code,0);
- await invoke(a,'environment_activate',{environment:upgraded.id,expected_environment:ids[0]});
+ await invoke(a,'environment_activate',{...operation(),environment:upgraded.id,expected_environment:ids[0]});
  const request=operation(),first=await invoke(a,'environment_run',request);assert.equal(first.code,0);assert.equal(first.image,upgraded.image);
  store.close();registry.close();open();
  assert.deepEqual(await invoke(a,'environment_run',request),first);assert.equal(installs,1);

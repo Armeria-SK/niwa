@@ -30,8 +30,8 @@ export class EnvironmentRegistry {
  private busy=false;
  constructor(path:string,readonly baseImage:string,private catalog:PackageCatalog,private install:Installer,private exists:(image:string)=>Promise<boolean>){
   if(!/^sha256:[a-f0-9]{64}$/.test(baseImage))throw Error('Fixed base image required');
-  this.db=openDatabase(path,`CREATE TABLE versions(id TEXT PRIMARY KEY,area TEXT NOT NULL,epoch TEXT NOT NULL,definition TEXT NOT NULL,image TEXT,state TEXT NOT NULL,container TEXT NOT NULL,tested_revision TEXT) STRICT;
-   CREATE TABLE selections(area TEXT PRIMARY KEY,epoch TEXT NOT NULL,version TEXT NOT NULL REFERENCES versions(id)) STRICT;`);
+  this.db=openDatabase(path,[`CREATE TABLE versions(id TEXT PRIMARY KEY,area TEXT NOT NULL,epoch TEXT NOT NULL,definition TEXT NOT NULL,image TEXT,state TEXT NOT NULL,container TEXT NOT NULL,tested_revision TEXT) STRICT;
+   CREATE TABLE selections(area TEXT PRIMARY KEY,epoch TEXT NOT NULL,version TEXT NOT NULL REFERENCES versions(id)) STRICT;`, `CREATE TABLE adoption_receipts(id TEXT PRIMARY KEY,input TEXT NOT NULL,result TEXT NOT NULL) STRICT;`]);
   this.db.exec('PRAGMA synchronous=FULL');
  }
  close(){this.db.close();}
@@ -88,13 +88,17 @@ export class EnvironmentRegistry {
   return version as EnvironmentVersion & {image:string};
  }
  tested(area:string,epoch:string,id:string,revision:string){this.get(area,epoch,id);this.db.prepare('UPDATE versions SET tested_revision=? WHERE id=?').run(revision,id);}
- activate(area:string,epoch:string,id:string,expected:string|null){
+ activate(area:string,epoch:string,id:string,expected:string|null,operationId:string=randomUUID(),allowStart=true){
   return transaction(this.db,()=>{
+   const input=hash(JSON.stringify([area,epoch,id,expected]));
+   const prior=this.db.prepare('SELECT input,result FROM adoption_receipts WHERE id=?').get(operationId);
+   if(prior){if(prior.input!==input)throw new WorkspaceError('conflict');return JSON.parse(String(prior.result)) as {active:string};}
+   if(!allowStart)return {error:'outcome_unknown'};
    const version=this.get(area,epoch,id);
    if(version.state!=='ready'||!version.tested_revision)throw new WorkspaceError('unsupported');
-   if(this.active(area,epoch)===id)return {active:id};
-   if(this.active(area,epoch)!==expected)throw new WorkspaceError('conflict');
+   if(this.active(area,epoch)!==id&&this.active(area,epoch)!==expected)throw new WorkspaceError('conflict');
    this.db.prepare('INSERT INTO selections VALUES (?,?,?) ON CONFLICT(area) DO UPDATE SET epoch=excluded.epoch,version=excluded.version').run(area,epoch,id);
+   this.db.prepare('INSERT INTO adoption_receipts VALUES (?,?,?)').run(operationId,input,JSON.stringify({active:id}));
    return {active:id};
   });
  }
