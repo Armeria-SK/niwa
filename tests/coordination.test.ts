@@ -81,7 +81,7 @@ test('planned next owners never dispatch work; one explicit fixed-version handof
  const child=r.tasks.claim(admin)!;assert.equal(child.task.id,handoff.task_id);assert.equal(child.task.agent_id,bot.id);
  const childActor=r.agentSession(bot.id);r.tasks.acknowledgeWork(childActor,child);
  const inspected=r.artifactVersions.reference(childActor,revised.id,child.task.id);assert.equal(inspected.content,'version two');
- assert.match(r.messages(admin,room.id)[0]!.body,/review_ready/);assert.ok(r.messages(admin,room.id)[0]!.body.includes(revised.sha256));
+ assert.match(r.messages(admin,room.id).find(m=>m.body.includes('review_ready'))!.body,/review_ready/);assert.ok(r.messages(admin,room.id).some(m=>m.body.includes(revised.sha256)));
  r.updateCoordination(childActor,child,{...fields,next_agent_id:leader.id,expected_revision:0});assert.equal(r.tasks.list(admin).length,2);
  r.artifactVersions.review(childActor,revised.id,revised.sha256,'approved','version twoを確認');r.tasks.finish(childActor,child,'固定版の確認完了');
  const resumed=r.tasks.claim(admin)!;r.artifactVersions.freeze(actor,revised.id,revised.sha256);
@@ -90,4 +90,13 @@ test('planned next owners never dispatch work; one explicit fixed-version handof
  r.tasks.finish(actor,resumed,'改訂・レビュー・凍結まで完了');
  assert.ok(r.tasks.create(admin,leader.id,room.id,'20分の動画の内容を調べる').deadline_at>Date.now()+86400000);
  assert.ok(r.tasks.create(admin,leader.id,room.id,'0.5時間以内の表現を確認').deadline_at>Date.now()+86400000);
+});
+
+test('work receipt is durable once, visible in its room and never dispatches a reply',t=>{
+ const {r,admin,actor,leader,room}=fixture(t);
+ r.tasks.create(admin,leader.id,room.id,'人工の依頼');const lease=r.tasks.claim(admin)!;
+ r.tasks.acknowledgeWork(actor,lease);r.tasks.acknowledgeWork(actor,lease);
+ assert.equal(r.messages(admin,room.id).length,1);assert.equal(r.tasks.list(admin).length,1);
+ assert.equal(r.tasks.get(admin,lease.task.id).state,'running');assert.equal(r.tasks.progress(admin,lease.task.id).work_acknowledged,true);assert.ok(Number.isFinite(Date.parse(r.messages(admin,room.id)[0]!.created_at)));
+ r.tasks.pause(admin,lease.task.id);assert.throws(()=>r.tasks.acknowledgeWork(actor,lease));assert.equal(r.messages(admin,room.id).length,1);
 });

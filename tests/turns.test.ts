@@ -399,6 +399,8 @@ test('task history tool reads saved results without executing the original tool 
 
 test('long room history is retained in storage and fitted automatically for known and unknown capacity', async t => {
   const f = fixture(t); let requests = 0;
+  // Isolate history fitting from the configurable administrator policy size.
+  f.runtime.updateCommonRules(f.admin, f.runtime.commonRules(f.admin).revision, '人工の短い共通指示');
   for (let n = 0; n < 5; n++) f.runtime.post(f.admin, f.room.id, '大'.repeat(10_000));
   for (const capacity of [undefined, 20000]) {
     const runner = new TurnRunner(f.runtime, async () => ({ ...model(request => { requests++; assert.match(JSON.stringify(request.messages), /大きな会話/); return complete('完了'); }),

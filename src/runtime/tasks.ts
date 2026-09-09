@@ -181,10 +181,19 @@ export class Tasks {
     });
   }
   acknowledgeWork(actor:Actor,lease:TaskLease) {
-    const task=this.#owned(actor,lease);
-    if(!this.#db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='work_acknowledged'").get(task.id)) this.#event(task.id,'work_acknowledged');
-    return {acknowledged:true,state:task.state};
+    return transaction(this.#db,()=>{
+      const task=this.#owned(actor,lease);this.#access.room(actor,task.room_id);
+      check(!this.#paused(),'conflict','Activity is paused');
+      if(!this.#db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='work_acknowledged'").get(task.id)) {
+        const id=randomUUID();
+        this.#db.prepare('INSERT INTO messages(id,room_id,author_id,body,created_at) VALUES (?,?,?,?,?)').run(id,task.room_id,task.agent_id,'依頼を受け取りました。作業を進めます。',new Date().toISOString());
+        this.#db.prepare('INSERT INTO task_message_links VALUES (?,?,?)').run(id,task.id,'progress');
+        this.#event(task.id,'work_acknowledged');
+      }
+      return {acknowledged:true,state:task.state};
+    });
   }
+
   /** Acknowledgment ends a conversational reply, never an assigned deliverable. */
   acknowledge(actor: Actor, lease: TaskLease): void {
     transaction(this.#db, () => {
@@ -518,7 +527,7 @@ export class Tasks {
     const waitingTasks=task.state==='waiting_child'?this.#db.prepare(`SELECT t.id,t.agent_id,a.name,t.prompt,t.state FROM tasks t JOIN agents a ON a.id=t.agent_id
       LEFT JOIN task_child_dependencies d ON d.task_id=t.id WHERE t.parent_id=? AND t.room_id=? AND t.state NOT IN ('completed','failed','cancelled') AND coalesce(d.required,1)=1`).all(id,task.room_id):[];
     const summary=this.#summaries.get(id);
-    return {task_id:id,agent_id:task.agent_id,state:task.state,kind,label:active?(phases[String(row.phase)]??'作業中'):(labels[kind]??'状態を確認中'),
+    return {work_acknowledged:!!this.#db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='work_acknowledged'").get(id),task_id:id,agent_id:task.agent_id,state:task.state,kind,label:active?(phases[String(row.phase)]??'作業中'):(labels[kind]??'状態を確認中'),
       phase:current?row?.phase:null,status:active?row.status:task.state,started_at:current?row?.started_at:null,last_activity_at:Math.max(task.updated_at, current?Number(row?.updated_at??0):0),
       retry_at:task.state==='waiting_provider'?task.provider_retry_at:null,
       summary:!factsOnly&&active&&summary&&summary.call===row.call_id&&summary.revision===revision?summary.text:null,

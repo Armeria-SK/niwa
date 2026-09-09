@@ -25,3 +25,7 @@
 .presence-job-count .progress-chevron { display: inline-block; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(45deg); color: var(--muted); }
 .presence-job-count[aria-expanded="true"] .progress-chevron { transform: rotate(225deg); }
 .presence-job-count:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; }
+
+.presence-job-request .request-open-label { display:none; }
+.presence-job-request[open] .request-preview { display:none; }
+.presence-job-request[open] .request-open-label { display:inline; }
