@@ -1,3 +1,4 @@
+import {environmentDefinitionSchema} from '../tools/environments/registry.ts';
 import type {WorkareaTransport} from './workareas.ts';
 import { interactionSchema, type BrowserInteraction } from '../tools/browser/interaction.ts';
 import { Type, type TSchema } from '@sinclair/typebox';
@@ -32,6 +33,11 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  environment_list:{description:'選択した個人/案件の固定環境版、採用版、offline catalogと資源枠を確認する。未登録依存は準備待ち。認証情報を定義やコマンドへ入れない。',schema:object({})},
+  environment_prepare:{description:'固定base imageとcatalogから案件専用の候補環境を準備する。共有環境や他案件は変わらない。lockfilesは作業ファイルのSHA256を指定する。準備・実行・検証コマンドは通信なしの隔離環境で扱う。準備後にenvironment_testで検証する。',schema:object({definition:environmentDefinitionSchema})},
+  environment_test:{description:'候補環境のprepareとverifyを現在の作業場のコピーで順に実行する。成功後だけ採用可能。試験ファイルは正本へ反映しない。',schema:object({environment:Type.String({pattern:'^[a-f0-9]{64}$'}),seconds:Type.Integer({minimum:1,maximum:300})})},
+  environment_activate:{description:'検証済み候補をこの作業場所の採用版にする。expected_environmentは現在版、初回null。作業場が試験後に変わった場合は再検証が必要。旧版は保持される。',schema:object({environment:Type.String({pattern:'^[a-f0-9]{64}$'}),expected_environment:Type.Union([Type.Null(),Type.String({pattern:'^[a-f0-9]{64}$'})])})},
+  environment_run:{description:'選択した作業場所の採用環境のrunコマンドを実行する。固定imageとlockfileを照合し、変更は既存CASで反映する。短時間実行専用。',schema:object({seconds:Type.Integer({minimum:1,maximum:300})})},
   artifact_download: {description:'閲覧できるバイナリ成果物の固定版をbase64で取得する。最大8MiB。案件の参加資格を取得のたびに確認する。テキスト成果物はhistory_readで読む。',schema:object({id:short()})},
   workspace_select: {description:'この仕事の作業場所を選ぶ。personalは現在のBot・会話専用（管理者は閲覧可能）、案件はworkspace_areasで返されたID、nullは従来の全員共有。ホストパスは指定不可。私的会話の内容を別会話へ持ち込まない。',schema:object({area:Type.Union([Type.Null(),short()])})},
   workspace_areas: {description:'現在のBot・仕事・会話で扱える作業場所を読む。案件参加者の変更は管理者が行う。',schema:object({})},
@@ -95,7 +101,7 @@ const definitions = {
 export function turnTools(isLeader: boolean, external: ExternalTools = {}, sharedRoom = false, autonomous = false, workareasEnabled = false): ModelToolDefinition[] {
   const scoped=!!external.workareas&&workareasEnabled;
   return Object.entries(definitions).filter(([name]) => (name!=='artifact_download'||external.workareas) && (name !== 'web_download' || ((external.workspaceWrite && sharedRoom)||scoped)) && (!['browser_form_submit','browser_request_submit'].includes(name) || (external.forms && sharedRoom)) && (!name.startsWith('packages_') || (external.packages && sharedRoom)) && (!name.startsWith('x_') || external.x) && (name !== 'x_post' || sharedRoom) && (!name.startsWith('browser_') || external.browser) && (name !== 'program_run' || ((external.program && sharedRoom)||scoped)) && (name !== 'task_rest' || autonomous) && (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
-    (!['workspace_select','workspace_areas','workspace_share','workspace_download'].includes(name)||scoped) && (!name.startsWith('workspace_') || external.workspace||scoped) && (name !== 'workspace_write' || ((external.workspaceWrite && sharedRoom)||scoped))).map(([name, value]) => ({
+    (!name.startsWith('environment_')||scoped) && (!['workspace_select','workspace_areas','workspace_share','workspace_download'].includes(name)||scoped) && (!name.startsWith('workspace_') || external.workspace||scoped) && (name !== 'workspace_write' || ((external.workspaceWrite && sharedRoom)||scoped))).map(([name, value]) => ({
     name, description: scoped&&['workspace_list','workspace_read','workspace_write','program_run','web_download'].includes(name) ? `選択中の作業場所に適用。個人・案件領域はworkspace_selectで選ぶ。未選択時だけ従来の全員共有の制限に従う。個人・案件なら私的会話でもその領域の読書き・隔離実行が可能。プログラムは競合検査して反映し、conflict時はcandidate版を保持する。以下の説明中の共有フォルダ・共有会話限定は未選択時を指す。${value.description}`:value.description, input_schema: JSON.parse(JSON.stringify(value.schema)) as JsonObject,
   }));
 }
@@ -194,6 +200,21 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
 async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease, call: ModelToolCall, operationId: string,
   signal?: AbortSignal, external: ExternalTools = {}): Promise<JsonObject> {
   if (runtime.tasks.active(actor,lease) && ['browser_request_submit','browser_form_submit','x_post','program_run','web_download','workspace_write','workspace_share','artifact_download','packages_install'].includes(call.name) && runtime.tasks.independentActivity(actor,lease)) return {error:'independent_activity_scope',message:'保留操作とは別の活動です。公開情報の読取と新規テキスト成果物で進め、実行・書込・送信は元の仕事で確認してください。'};
+  if(call.name.startsWith('environment_')){
+    const definition=definitions[call.name as keyof typeof definitions];
+    if(!definition||!Value.Check(definition.schema,call.arguments)||!external.workareas||!runtime.tasks.active(actor,lease))return {error:'Environment unavailable'};
+    const area=runtime.workareas.selected(actor,lease);
+    if(!area)return {error:'Select a personal or project workarea first'};
+    const authorize=()=>{
+      runtime.workareas.authorize(actor,area,lease);
+      if(!runtime.workareas.settings(actor).enabled||runtime.tasks.independentActivity(actor,lease))throw new DomainError('forbidden','Environment access is unavailable in this activity');
+    };authorize();
+    const cancellation=AbortSignal.any([AbortSignal.timeout(Math.max(1,Math.min(2_147_483_647,runtime.tasks.get(actor,lease.task.id).deadline_at-Date.now()))),...(signal?[signal]:[])]);
+    const input={name:call.name,arguments:call.arguments,area};
+    const invoke=(extra:JsonObject={})=>runtime.workareas.execute(actor,area,{...call.arguments,...extra,operation:call.name},external.workareas!,lease,cancellation);
+    const result=call.name==='environment_list'?await invoke():await runtime.tasks.externalOnce(actor,lease,operationId,input,(executionId,firstAttempt)=>invoke({operation_id:executionId,allow_start:firstAttempt}));
+    authorize();return result;
+  }
   if(call.name==='artifact_download'){
     if(!external.workareas||!Value.Check(definitions.artifact_download.schema,call.arguments))return {error:'Artifact file unavailable'};
     const id=call.arguments.id as string;
@@ -303,6 +324,7 @@ async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease
     if (!external.packages || !Value.Check(definitions[call.name].schema, call.arguments)) return { error: 'Invalid or unavailable packages' };
     if (!runtime.tasks.active(actor, lease) || signal?.aborted) return { error: 'Task is no longer active' };
     if (runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility !== 'shared') return { error: 'Use a shared conversation for shared packages' };
+    if(call.name==='packages_install'&&runtime.workareas.selected(actor,lease))return {error:'Use environment_prepare for a selected workarea; shared package adoption is separate'};
     if (call.name === 'packages_list') return runtime.tasks.readOnce(actor, lease, operationId, { name: call.name, arguments: call.arguments }, () => external.packages!.list(signal));
     return runtime.tasks.externalOnce(actor, lease, operationId, { name: call.name, arguments: call.arguments }, (executionId, firstAttempt) => external.packages!.execute({
       operation_id: executionId, agent_id: lease.task.agent_id, room_id: lease.task.room_id, task_id: lease.task.id,

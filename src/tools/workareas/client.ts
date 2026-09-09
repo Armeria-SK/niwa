@@ -7,7 +7,7 @@ import type {JsonObject} from '../../contracts/model.ts';
 export function workareaClient(socket:string,uid:number):WorkareaTransport{
  const verify=verifyExecutorEndpoint(socket,uid);
  return async(input,signal)=>{
-  const result=await callWorkspace(socket,verify,input as unknown as JsonObject,signal,12*1024*1024,'/workareas', input.operation==='run' ? 330_000 : 10_000);
+  const result=await callWorkspace(socket,verify,input as unknown as JsonObject,signal,12*1024*1024,'/workareas', ['run','environment_prepare','environment_test','environment_run'].includes(input.operation) ? 3_000_000 : 10_000);
   if(!result||typeof result!=='object'||Array.isArray(result))throw Error('Invalid workarea reply');
   const output=result as JsonObject;
   if (!output.error && ['download','published'].includes(input.operation)) {

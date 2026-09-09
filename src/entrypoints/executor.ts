@@ -1,3 +1,4 @@
+import {EnvironmentRegistry} from '../tools/environments/registry.ts';
 import {verifyWorkareaLayout} from '../tools/workareas/layout.ts';
 import {WorkareaStore} from '../tools/workareas/store.ts';
 import { chmodSync, lstatSync, rmSync } from 'node:fs';
@@ -17,12 +18,13 @@ import { installPackages, packageVerificationName } from '../tools/packages/inst
 
 let broker: ReturnType<typeof createProgramServer> | undefined;
 let browser: ReturnType<typeof createBrowserServer> | undefined;
+let environments: EnvironmentRegistry | undefined;
 let workareas: WorkareaStore | undefined;
 let packages: PackageLog | undefined;
 let log: ProgramLog | undefined; let unlock: (() => void) | undefined; let closing: Promise<void> | undefined;
-const close = () => closing ??= (async () => { await browser?.stop(); await broker?.stop(); await packages?.close(); log?.close(); workareas?.close(); unlock?.(); })();
+const close = () => closing ??= (async () => { await browser?.stop(); await broker?.stop(); await packages?.close(); log?.close(); workareas?.close(); environments?.close(); unlock?.(); })();
 try {
-  const { values } = parseArgs({ options: Object.fromEntries(['workspace', 'socket', 'state', 'home', 'runtime', 'image', 'browser-image', 'packages', 'workareas'].map(key => [key, { type: 'string' as const }])) });
+  const { values } = parseArgs({ options: Object.fromEntries(['workspace', 'socket', 'state', 'home', 'runtime', 'image', 'browser-image', 'packages', 'workareas', 'environments'].map(key => [key, { type: 'string' as const }])) });
   if (process.platform !== 'linux' || !process.getuid?.() || Object.values(values).some(value => typeof value !== 'string') ||
       !values.workspace || !values.socket || !values.state || !values.home || !values.runtime || !values.image) throw new Error('Executor configuration required');
   if (!isAbsolute(values.workspace as string)) throw new Error('Absolute workspace required');
@@ -65,14 +67,28 @@ try {
   log = new ProgramLog(join(state, 'programs.db'), JSON.stringify(environment), run);
   // Recovery only terminates saved containers. It does not infer success or repeat their commands.
   for (const pending of log.pending()) await run.cleanup(pending.container);
+  if(values.environments){
+    if(values.environments!=='enabled'||!values.workareas||!values.packages)throw Error('Environments require workareas and offline catalog');
+    const catalog=new PackageCatalog(resolve(values.packages));
+    environments=new EnvironmentRegistry(join(state,'environments.db'),environment.image,catalog,async(image,name,entries,signal)=>{
+      const stage=join(state,name);
+      try{catalog.stage(entries.map(entry=>entry.name),stage);return await installPackages(image,stage,name,entries,run.call,signal);}
+      finally{rmSync(stage,{recursive:true,force:true});}
+    },async image=>(await run.call(['image','exists',image],15)).code===0);
+    for(const name of environments.pending()){
+      for(const container of [name,packageVerificationName(name)])if((await run.call(['rm','--force','--ignore',container],15)).code!==0)throw Error('Environment recovery failed');
+      rmSync(join(state,name),{recursive:true,force:true});
+    }
+    environments.recovered();
+  }
   if(values.workareas){
     const root=resolve(values.workareas as string);
     // Explicitly prepared sibling inside the bounded executor mount, never inside legacy workspace.
     verifyWorkareaLayout(root,state,workspace,environment.uid);
-    workareas=new WorkareaStore(root,async(snapshot,request,signal,name)=>{
-      const scoped=configuredProgramRunner({...environment,workspace:snapshot},()=>packages?.currentImage()??environment.image);
+    workareas=new WorkareaStore(root,async(snapshot,request,signal,name,image)=>{
+      const scoped=configuredProgramRunner({...environment,workspace:snapshot},()=>image??packages?.currentImage()??environment.image);
       return scoped(request,signal,name);
-    },run.cleanup);
+    },run.cleanup,environments);
     await workareas.recover();
   }
   broker = createProgramServer(log, packages, workareas);

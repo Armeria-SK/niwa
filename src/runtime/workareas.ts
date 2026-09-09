@@ -68,14 +68,14 @@ export class Workareas {
   try{return await result;}finally{if(this.gates.get(id)===result)this.gates.delete(id);}
  }
  async execute(actor:Actor,id:string,input:Omit<WorkareaRequest,'area'|'epoch'>,transport:WorkareaTransport,lease?:TaskLease,signal?:AbortSignal):Promise<JsonObject>{
-  check(['list','read','download','write','run','publish'].includes(input.operation),'forbidden','Internal operation');
+  check(['list','read','download','write','run','publish','environment_list','environment_prepare','environment_test','environment_activate','environment_run'].includes(input.operation),'forbidden','Internal operation');
   const authorized=()=>{
    this.authorize(actor,id,lease);check(this.settings(actor).enabled,'conflict','Workareas are disabled');
    if(lease)check(!this.runtime.tasks.independentActivity(actor,lease),'forbidden','Independent activity remains limited to public reads and new text artifacts; scoped files are unavailable');
    return String(this.db.prepare('SELECT epoch FROM workarea_settings WHERE id=1').get()!.epoch);
   };
   const invoke=()=>{signal?.throwIfAborted();return transport({...input,area:id,epoch:authorized()},signal);};
-  if(input.operation==='run'){
+  if(['run','environment_test','environment_run','environment_prepare'].includes(input.operation)){
    // No canonical files are mounted. Other writes may finish while this copy is running.
    const controller=new AbortController(),entry={bot:this.principal(actor).id,controller};
    const cancellation=AbortSignal.any([controller.signal,...(signal?[signal]:[])]);
