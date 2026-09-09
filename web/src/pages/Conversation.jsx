@@ -132,6 +132,7 @@ function Message({ acknowledgments = [], message, isRoot = false, title, memberM
 }
 
 function Presence({ members, paused, onPause, onAppearance, onMember, isPrivate, noHeading = false }) {
+  const [openJobs,setOpenJobs]=useState({});
   const active = members.filter(item => item.status !== 'sleeping');
   return <div className="presence-content">
     {!noHeading ? <h2>メンバーの様子</h2> : null}
@@ -139,7 +140,8 @@ function Presence({ members, paused, onPause, onAppearance, onMember, isPrivate,
     {isPrivate ? <p className="presence-scope"><LockIcon size={14} />あなたとの個別の会話</p> : null}
     <div className="presence-members">{members.map(member => <div key={member.id} className={`presence-member ${member.status === 'sleeping' ? 'sleeping' : ''}`}>
       <button className="avatar-button presence-avatar" aria-label={`${member.name}のアイコンを変更`} title="アイコンを変更" onClick={() => onAppearance(member.id)}><Avatar member={member} size={57} /><span className="avatar-edit-hint"><PaletteIcon size={12} /></span></button>
-      <button className="presence-member-info" onClick={() => onMember(member.id)}><strong>{member.name}</strong><StatusLabel member={member} paused={paused} /></button>{member.jobs?.length ? <details className="presence-jobs"><summary>担当する仕事（{member.jobs.length}件）</summary>{member.jobs.map(job=><p key={job.id}>{job.progress?.label || job.step} — {job.title}{job.progress?.waiting_for?.length?`／待ち先：${job.progress.waiting_for.join('、')}`:''}</p>)}</details> : null}{member.status === 'sleeping' ? <MoonIcon size={19} className="sleep-icon" /> : null}
+      <button className="presence-member-info" onClick={() => onMember(member.id)}><strong>{member.name}</strong><StatusLabel member={member} paused={paused} /></button>{member.jobs?.length ? <button className="presence-job-count" aria-label={`${member.name}の担当する仕事（${member.jobs.length}件）`} aria-expanded={!!openJobs[member.id]} aria-controls={`jobs-${member.id}`} onClick={()=>setOpenJobs(current=>({...current,[member.id]:!current[member.id]}))}>{member.jobs.length}件<span className="progress-chevron" aria-hidden="true" /></button> : null}
+      {openJobs[member.id]&&member.jobs?.length ? <div className="presence-job-list" id={`jobs-${member.id}`}>{member.jobs.map(job=><div key={job.id}><span>{job.progress?.label || job.step}</span><p>{job.title}</p>{job.progress?.waiting_for?.length?<small>待ち先：{job.progress.waiting_for.join('、')}</small>:null}</div>)}</div>:null}{member.status === 'sleeping' ? <MoonIcon size={19} className="sleep-icon" /> : null}
     </div>)}</div>
   </div>;
 }

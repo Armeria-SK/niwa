@@ -9,11 +9,15 @@
 
 .message-reply-label { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; color: var(--muted); font-size: 11px; }
 
-.presence-member { flex-wrap: wrap; }
-.presence-jobs { width: 100%; padding-left: 67px; font-size: 12px; overflow-wrap: anywhere; }
-.presence-jobs summary { cursor: pointer; }
-.presence-jobs p { margin: 6px 0; }
-
+/* Keep operational detail out of the member list until requested. */
+.presence-members .presence-member { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 10px 12px; }
+.presence-job-count { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.presence-job-count:hover { color: var(--text); background: var(--surface,transparent); }
+.presence-job-count[aria-expanded="true"] .progress-chevron { transform: rotate(225deg); }
+.presence-job-list { grid-column: 2 / -1; min-width: 0; border-left: 1px solid var(--border); padding-left: 12px; }
+.presence-job-list > div + div { margin-top: 12px; }
+.presence-job-list span, .presence-job-list small { color: var(--muted); font-size: 11px; }
+.presence-job-list p { margin: 3px 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .composer-context { font-size: 12px; margin-bottom: 5px; }
 .composer-context summary { cursor: pointer; }
 .composer-context label { display: block; margin: 5px 0; }
