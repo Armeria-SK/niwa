@@ -1,3 +1,4 @@
+import {standardProfile,type ResourceProfile} from '../../sandbox/resources.ts';
 import {createHash, randomUUID} from 'node:crypto';
 import {Type, type Static} from '@sinclair/typebox';
 import {Value} from '@sinclair/typebox/value';
@@ -17,10 +18,10 @@ export const environmentDefinitionSchema=object({
  lockfiles:Type.Array(object({path:Type.String({minLength:1,maxLength:512}),sha256:sha}),{maxItems:16}),
  workdir:Type.Literal('/workspace'),
  prepare:Type.Array(command,{maxItems:8}),run:command,verify:command,
- profile:Type.Literal('standard'),
+ profile:Type.String({pattern:'^[a-z][a-z0-9_-]{0,31}$'}),
 });
 export type EnvironmentDefinition=Static<typeof environmentDefinitionSchema>;
-export interface EnvironmentVersion {id:string;area:string;epoch:string;definition:EnvironmentDefinition;image:string|null;state:'preparing'|'ready'|'failed'|'outcome_unknown'|'retired';tested_revision:string|null}
+export interface EnvironmentVersion {id:string;area:string;epoch:string;definition:EnvironmentDefinition;image:string|null;state:'preparing'|'ready'|'failed'|'outcome_unknown'|'retired';tested_revision:string|null;resources:ResourceProfile}
 type Installer=(image:string,name:string,entries:ApprovedPackage[],signal?:AbortSignal)=>Promise<PackageResult>;
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 
@@ -28,10 +29,10 @@ const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 export class EnvironmentRegistry {
  private db;
  private busy=false;
- constructor(path:string,readonly baseImage:string,private catalog:PackageCatalog,private install:Installer,private exists:(image:string)=>Promise<boolean>){
+ constructor(path:string,readonly baseImage:string,private catalog:PackageCatalog,private install:Installer,private exists:(image:string)=>Promise<boolean>,private profiles:Record<string,ResourceProfile>={standard:standardProfile}){
   if(!/^sha256:[a-f0-9]{64}$/.test(baseImage))throw Error('Fixed base image required');
   this.db=openDatabase(path,[`CREATE TABLE versions(id TEXT PRIMARY KEY,area TEXT NOT NULL,epoch TEXT NOT NULL,definition TEXT NOT NULL,image TEXT,state TEXT NOT NULL,container TEXT NOT NULL,tested_revision TEXT) STRICT;
-   CREATE TABLE selections(area TEXT PRIMARY KEY,epoch TEXT NOT NULL,version TEXT NOT NULL REFERENCES versions(id)) STRICT;`, `CREATE TABLE adoption_receipts(id TEXT PRIMARY KEY,input TEXT NOT NULL,result TEXT NOT NULL) STRICT;`]);
+   CREATE TABLE selections(area TEXT PRIMARY KEY,epoch TEXT NOT NULL,version TEXT NOT NULL REFERENCES versions(id)) STRICT;`, `CREATE TABLE adoption_receipts(id TEXT PRIMARY KEY,input TEXT NOT NULL,result TEXT NOT NULL) STRICT;`, `ALTER TABLE versions ADD COLUMN resources TEXT NOT NULL DEFAULT '${JSON.stringify(standardProfile)}';`, `ALTER TABLE versions ADD COLUMN retired_at INTEGER;`]);
   this.db.exec('PRAGMA synchronous=FULL');
  }
  close(){this.db.close();}
@@ -39,24 +40,39 @@ export class EnvironmentRegistry {
  purgeArea(area:string){transaction(this.db,()=>{
   this.db.prepare('DELETE FROM selections WHERE area=?').run(area);
   // Keep replay tombstones and image references, erase commands and dependency/lockfile metadata.
-  this.db.prepare("UPDATE versions SET definition='{}',state='retired',tested_revision=NULL WHERE area=?").run(area);
+  this.db.prepare("UPDATE versions SET definition='{}',state='retired',tested_revision=NULL,retired_at=? WHERE area=?").run(Date.now(),area);
  });}
+ retire(area:string,epoch:string,id:string){
+  this.get(area,epoch,id);if(this.active(area,epoch)===id)throw new WorkspaceError('conflict');
+  this.db.prepare("UPDATE versions SET state='retired',retired_at=? WHERE id=?").run(Date.now(),id);return {retired:true};
+ }
+ async collect(remove:(image:string)=>Promise<boolean>,referenced:(id:string)=>boolean,now=Date.now()){
+  let removed=0;const visited=new Set<string>();
+  for(const row of this.db.prepare("SELECT id,image FROM versions WHERE state='retired' AND retired_at<=? AND image IS NOT NULL").all(now-86400000)){
+   const image=String(row.image);
+   if(visited.has(image))continue;visited.add(image);
+   const references=this.db.prepare('SELECT id,state,retired_at FROM versions WHERE image=?').all(image);
+   if(image===this.baseImage||references.some(version=>version.state!=='retired'||Number(version.retired_at)>now-86400000||referenced(String(version.id))))continue;
+   if(await remove(image)){this.db.prepare("UPDATE versions SET image=NULL WHERE image=? AND state='retired'").run(image);removed++;}
+  }return {removed};
+ }
  pending(){return this.db.prepare("SELECT container FROM versions WHERE state='preparing'").all().map(row=>String(row.container));}
  recovered(){this.db.prepare("UPDATE versions SET state='outcome_unknown' WHERE state='preparing'").run();}
- list(area:string,epoch:string){return {base_image:this.baseImage,catalog_revision:this.catalog.revision,catalog:this.catalog.list(),profiles:[{name:'standard',memory_mib:512,cpu:1,pids:64,seconds:300}],active:this.active(area,epoch),versions:this.db.prepare('SELECT id FROM versions WHERE area=? AND epoch=? ORDER BY rowid').all(area,epoch).map(row=>this.get(area,epoch,String(row.id)))};}
+ list(area:string,epoch:string){return {base_image:this.baseImage,catalog_revision:this.catalog.revision,catalog:this.catalog.list(),profiles:Object.entries(this.profiles).map(([name,profile])=>({name,...profile})),active:this.active(area,epoch),versions:this.db.prepare('SELECT id FROM versions WHERE area=? AND epoch=? ORDER BY rowid').all(area,epoch).map(row=>this.get(area,epoch,String(row.id)))};}
  get(area:string,epoch:string,id:string):EnvironmentVersion{
   const row=this.db.prepare('SELECT * FROM versions WHERE id=? AND area=? AND epoch=?').get(id,area,epoch);
   if(!row)throw new WorkspaceError('invalid_path');
-  return {id,area,epoch,definition:JSON.parse(String(row.definition)),image:row.image as string|null,state:row.state as EnvironmentVersion['state'],tested_revision:row.tested_revision as string|null};
+  return {id,area,epoch,definition:JSON.parse(String(row.definition)),image:row.image as string|null,state:row.state as EnvironmentVersion['state'],tested_revision:row.tested_revision as string|null,resources:JSON.parse(String(row.resources))};
  }
  active(area:string,epoch:string){return this.db.prepare('SELECT version FROM selections WHERE area=? AND epoch=?').get(area,epoch)?.version as string??null;}
  async prepare(area:string,epoch:string,input:unknown,allowStart:boolean,signal?:AbortSignal){
   if(!Value.Check(environmentDefinitionSchema,input))throw new WorkspaceError('unsupported');
   const definition:EnvironmentDefinition={...input,dependencies:[...input.dependencies].sort((a,b)=>a.name.localeCompare(b.name)),lockfiles:[...input.lockfiles].sort((a,b)=>a.path.localeCompare(b.path))};
   if(definition.base_image!==this.baseImage||new Set(definition.dependencies.map(d=>d.name)).size!==definition.dependencies.length||new Set(definition.lockfiles.map(f=>f.path)).size!==definition.lockfiles.length||definition.lockfiles.some(f=>f.path.startsWith('/')||f.path.includes('\\')||f.path.split('/').some(p=>!p||p==='.'||p==='..')||/[\x00-\x1f]/.test(f.path)))throw new WorkspaceError('invalid_path');
-  const encoded=JSON.stringify({name:definition.name,base_image:definition.base_image,catalog_revision:definition.catalog_revision,dependencies:definition.dependencies.map(({name,version})=>({name,version})),lockfiles:definition.lockfiles.map(({path,sha256})=>({path,sha256})),workdir:definition.workdir,prepare:definition.prepare,run:definition.run,verify:definition.verify,profile:definition.profile}),id=hash(JSON.stringify([area,epoch,encoded]));
-  const prior=this.db.prepare('SELECT id FROM versions WHERE id=?').get(id);
-  if(prior)return this.get(area,epoch,id);
+  const resources=this.profiles[definition.profile];if(!resources)throw new WorkspaceError('unsupported');
+  const encoded=JSON.stringify({name:definition.name,base_image:definition.base_image,catalog_revision:definition.catalog_revision,dependencies:definition.dependencies.map(({name,version})=>({name,version})),lockfiles:definition.lockfiles.map(({path,sha256})=>({path,sha256})),workdir:definition.workdir,prepare:definition.prepare,run:definition.run,verify:definition.verify,profile:definition.profile}),id=hash(JSON.stringify([area,epoch,encoded,resources]));
+  const prior=this.db.prepare('SELECT id FROM versions WHERE id=? OR (area=? AND epoch=? AND definition=? AND resources=?) ORDER BY rowid LIMIT 1').get(id,area,epoch,encoded,JSON.stringify(resources));
+  if(prior)return this.get(area,epoch,String(prior.id));
   if(!allowStart)return {error:'outcome_unknown'};
   const available=this.catalog.list();
   const missing=definition.dependencies.filter(d=>!available.some(e=>e.name===d.name&&e.version===d.version));
@@ -65,7 +81,7 @@ export class EnvironmentRegistry {
   signal?.throwIfAborted();
   const entries=definition.dependencies.length?this.catalog.select(definition.dependencies.map(d=>d.name)):[];
   const name=`niwa-package-${randomUUID()}`;
-  this.db.prepare("INSERT INTO versions VALUES (?,?,?,?,NULL,'preparing',?,NULL)").run(id,area,epoch,encoded,name);
+  this.db.prepare("INSERT INTO versions VALUES (?,?,?,?,NULL,'preparing',?,NULL,?,NULL)").run(id,area,epoch,encoded,name,JSON.stringify(resources));
   this.busy=true;
   try{
    if(!await this.exists(this.baseImage))throw Error('Base image missing');

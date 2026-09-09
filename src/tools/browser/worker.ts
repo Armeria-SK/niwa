@@ -37,6 +37,7 @@ export async function browserWorker(input: Readable, output: Writable, executabl
     busy = true;
     try {
       await ready;
+      if(method==='browser.capture'&&Value.Check(Type.Object({mobile:Type.Boolean()},{additionalProperties:false}),args))return await page.capture(args.mobile,signal);
       if (method === 'browser.navigate' && Value.Check(navigateSchema, args)) return await page.navigate(args.url, signal);
       if (method === 'browser.complete' && Value.Check(requestCompletionSchema, args)) return await page.completeRequest(args, signal);
       if (method === 'browser.follow' && Value.Check(followSchema, args)) return await page.follow(args.revision, args.ref, signal);

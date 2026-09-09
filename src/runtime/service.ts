@@ -37,11 +37,12 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
   let xPosts: XPostLog | undefined;
   let xAuth: XOAuth | undefined;
   let forms: FormLog | undefined;
+  let executionPoll:ReturnType<typeof setInterval>|undefined;let executionPending=Promise.resolve();
   let workareaCleanup:ReturnType<typeof setInterval>|undefined;
   let cleanupPending=Promise.resolve();
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {
-    clearInterval(workareaCleanup);await cleanupPending;
+    clearInterval(workareaCleanup);clearInterval(executionPoll);await executionPending;await cleanupPending;
     const closed = server ? new Promise<void>(done => { server!.close(() => done()); server!.closeAllConnections(); }) : Promise.resolve();
     xAuth?.close(); await scheduler?.stop(); await forms?.close(); await xPosts?.close(); await subscription?.close(); await backups?.stop(); await closed;
     runtime?.close(); unlock();
@@ -61,6 +62,8 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     if (xAuth && xApi) xPosts = new XPostLog(join(paths.runtime, 'x-posts.db'), xAuth.accountId, (post, signal) => xApi.post(post, signal));
     const workareas=config.workareasEnabled&&config.programExecutorUid ? workareaClient(join(paths.runtime,'sockets','program.sock'),config.programExecutorUid):undefined;
     if(workareas){
+      await runtime.workareas.syncExecutions(workareas);
+      executionPoll=setInterval(()=>{executionPending=executionPending.then(()=>runtime!.workareas.syncExecutions(workareas)).catch(()=>{});},1000);executionPoll.unref();
       await runtime.workareas.purgeRetired(workareas);
       workareaCleanup=setInterval(()=>{cleanupPending=cleanupPending.then(()=>runtime!.workareas.purgeRetired(workareas)).catch(()=>{});},30_000);workareaCleanup.unref();
     }

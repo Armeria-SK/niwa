@@ -27,12 +27,12 @@ export function configuredBrowserRunner(environment: ProgramEnvironment) {
     execFile('/usr/bin/podman', ['rm', '--force', '--ignore', name], { cwd: environment.home, env, timeout: 15_000, maxBuffer: 65536 },
       error => error ? reject(new Error('Browser container cleanup failed')) : resolve());
   });
-  const create = () => {
+  const create = (broker?:ConstructorParameters<typeof BrowserSession>[3]) => {
     const name = `niwa-browser-${randomUUID()}`;
     const child = spawn('/usr/bin/podman', browserArguments(environment, name), { cwd: environment.home, env, stdio: ['pipe', 'pipe', 'ignore'] });
     const session = new BrowserSession(child.stdout, child.stdin, async () => {
       try { await cleanup(name); } finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }
-    });
+    },broker);
     child.once('error', () => { void session.close().catch(() => {}); });
     child.once('exit', () => { void session.close().catch(() => {}); });
     return session;

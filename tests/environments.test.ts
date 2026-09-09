@@ -107,3 +107,13 @@ test('adoption receipts never roll back a newer selection or execute an unrecord
  assert.deepEqual(f.registry.activate(f.area,f.epoch,a.id,null,op,false),{active:a.id});assert.equal(f.registry.active(f.area,f.epoch),b.id);
  assert.throws(()=>f.registry.activate(f.area,f.epoch,b.id,null,op,false));
 });
+
+test('collection keeps shared images until every version is retired, old and unreferenced',async t=>{
+ const f=setup(t),definition={...f.definition,dependencies:[{name:'example',version:'1.0'}]};
+ const a=await f.registry.prepare(f.area,f.epoch,definition,true),b=await f.registry.prepare(f.other,f.epoch,definition,true);assert.ok('id' in a&&'id' in b);
+ f.registry.retire(f.area,f.epoch,a.id);let removed=0;const remove=async(image:string)=>{assert.equal(image,derived);removed++;return true;};
+ await f.registry.collect(remove,()=>false,Date.now()+90000000);assert.equal(removed,0);
+ f.registry.retire(f.other,f.epoch,b.id);await f.registry.collect(remove,()=>false);assert.equal(removed,0);
+ await f.registry.collect(remove,id=>id===b.id,Date.now()+90000000);assert.equal(removed,0);
+ await f.registry.collect(remove,()=>false,Date.now()+90000000);assert.equal(removed,1);
+});

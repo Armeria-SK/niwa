@@ -48,6 +48,11 @@ export class BrowserSession {
   completeRequest(input: Parameters<import('./page.ts').BrowserPage['completeRequest']>[0], signal?: AbortSignal) {
     return this.#action('browser.complete', input, undefined, signal);
   }
+  async capture(mobile:boolean,signal?:AbortSignal){
+    const value=await this.#wire.request('browser.capture',{mobile},signal);
+    if(!Value.Check(Type.Object({data:Type.String({maxLength:400000}),width:Type.Integer(),height:Type.Integer()},{additionalProperties:false}),value))throw Error('Invalid preview image');
+    const bytes=Buffer.from(value.data,'base64');if(bytes.toString('base64')!==value.data||bytes[0]!==255||bytes[1]!==216)throw Error('Invalid JPEG');return value;
+  }
   snapshot(signal?: AbortSignal) { return this.#action('browser.snapshot', {}, undefined, signal); }
   follow(revision: string, ref: number, signal?: AbortSignal) {
     const element = this.#snapshot?.elements.find(item => item.ref === ref);

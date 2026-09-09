@@ -74,7 +74,7 @@ export class Tasks {
   }
   queuedRequestAgents(actor: Actor): Set<string> {
     this.#admin(actor);
-    return new Set(this.#db.prepare("SELECT DISTINCT agent_id FROM tasks WHERE state='queued' AND paused=0 AND internal_autonomous=0").all().map(row=>String(row.agent_id)));
+    return new Set(this.#db.prepare("SELECT DISTINCT agent_id FROM tasks WHERE state='queued' AND paused=0 AND internal_autonomous=0 AND NOT EXISTS(SELECT 1 FROM execution_bindings e WHERE e.task_id=tasks.id AND e.waiting=1 AND e.state='pending')").all().map(row=>String(row.agent_id)));
   }
   /** Claims one task atomically; waiting parents consume no execution slot. */
   claim(actor: Actor, excludedAgents: ReadonlySet<string> = new Set()): TaskLease | undefined {
@@ -86,7 +86,7 @@ export class Tasks {
       const { count } = this.#db.prepare("SELECT count(*) AS count FROM tasks WHERE state='running'").get()!;
       if (typeof concurrency_limit === 'number' && Number(count) >= concurrency_limit) return undefined;
       const next = (this.#db.prepare(`SELECT t.id,t.agent_id FROM tasks t JOIN agents a ON a.id=t.agent_id
-        WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS
+        WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS (SELECT 1 FROM execution_bindings e WHERE e.task_id=t.id AND e.waiting=1 AND e.state='pending') AND NOT EXISTS
           (SELECT 1 FROM tasks running WHERE running.agent_id=t.agent_id AND running.state='running')
         ORDER BY t.internal_autonomous,t.updated_at,t.rowid`).all() as { id: string; agent_id: string }[]).find(task => !excludedAgents.has(task.agent_id) && this.#autonomyAllowed(task.id));
       if (!next) return undefined;
@@ -101,7 +101,7 @@ export class Tasks {
     return transaction(this.#db, () => {
       this.#owned(actor, lease);
       const waiting = this.#db.prepare(`SELECT t.id,t.updated_at FROM tasks t JOIN agents a ON a.id=t.agent_id
-        WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS
+        WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS (SELECT 1 FROM execution_bindings e WHERE e.task_id=t.id AND e.waiting=1 AND e.state='pending') AND NOT EXISTS
           (SELECT 1 FROM tasks r WHERE r.agent_id=t.agent_id AND r.state='running' AND r.id<>?)
         ORDER BY t.updated_at,t.rowid`).all(lease.task.id).find(row => this.#autonomyAllowed(row.id as string));
       if (!waiting) return false;
@@ -118,6 +118,20 @@ export class Tasks {
     check(task.lease_token === lease.token && !task.paused && (!requireRunning || task.state === 'running'), 'conflict', 'Task lease is no longer active');
     check(this.#autonomyAllowed(task.id), 'conflict', 'Autonomous activity is paused');
     return task;
+  }
+  executionAllowed(actor:Actor,id:string,token:string,waiting:boolean){
+    try{const task=this.#read(id),who=this.#access.principal(actor);this.#access.room(actor,task.room_id);
+      return who.kind==='agent'&&who.id===task.agent_id&&!this.#paused()&&!task.paused&&task.deadline_at>Date.now()&&this.#autonomyAllowed(id)&&this.#access.participant(task.agent_id,task.room_id)&&
+       ((task.state==='running'&&task.lease_token===token)||(waiting&&task.state==='queued'));
+    }catch{return false;}
+  }
+  waitExecution(actor:Actor,lease:TaskLease,id:string){
+    return transaction(this.#db,()=>{
+      this.#owned(actor,lease);const row=this.#db.prepare('SELECT state FROM execution_bindings WHERE id=? AND task_id=?').get(id,lease.task.id);check(row,'not_found','Execution not found');
+      if(row.state!=='pending')return {waiting:false};
+      this.#db.prepare('UPDATE execution_bindings SET waiting=1 WHERE id=?').run(id);
+      this.#change(lease.task.id,'queued',null,'隔離実行の結果待ち');this.#db.prepare('UPDATE tasks SET lease_token=NULL WHERE id=?').run(lease.task.id);return {waiting:true};
+    });
   }
   active(actor: Actor, lease: TaskLease): boolean {
     try { this.#owned(actor, lease); return true; } catch { return false; }
@@ -596,6 +610,7 @@ export class Tasks {
     this.#admin(actor);
     transaction(this.#db, () => {
       this.#db.exec('INSERT OR IGNORE INTO restored_tasks SELECT id FROM tasks; UPDATE settings SET autonomous=0 WHERE id=1; UPDATE workarea_settings SET enabled=0; UPDATE workareas SET available=0; UPDATE artifact_files SET available=0; DELETE FROM task_workareas;');
+      this.#db.prepare("UPDATE execution_bindings SET state='cancelled',waiting=0,result=NULL").run();
       this.#db.prepare('UPDATE workarea_settings SET epoch=?').run(randomUUID());
       this.#db.prepare("UPDATE schedules SET enabled=0,wait_reason=? WHERE deleted=0")
         .run('バックアップから復元した予定です。実行済みの履歴と次回日時を確認してから再開してください。');

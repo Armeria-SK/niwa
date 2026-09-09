@@ -33,6 +33,10 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  execution_start:{description:'選択中の固定環境で長時間処理または一時Webサーバーを開始し、実行IDを返す。資源待ちは自動処理。preview=trueのサーバーはコンテナ内127.0.0.1:8080だけで待受ける。外部公開ではない。結果待ちはexecution_waitを使い、同じ処理を新IDで再開しない。',schema:object({seconds:Type.Integer({minimum:1,maximum:86400}),preview:Type.Boolean()})},
+  execution_status:{description:'この仕事の実行状態・限定ログ・保存結果を確認する。結果不明は再実行せず照合する。',schema:object({execution_id:short()})},
+  execution_stop:{description:'この仕事の指定実行と資源待ちを停止する。案件ファイルや環境は消さない。',schema:object({execution_id:short()})},
+  execution_wait:{description:'指定実行の結果を待ち、モデルの処理枠を解放する。完了後は自動で仕事を再開する。単独で使う。',schema:object({execution_id:short()})},
   environment_list:{description:'選択した個人/案件の固定環境版、採用版、offline catalogと資源枠を確認する。未登録依存は準備待ち。認証情報を定義やコマンドへ入れない。',schema:object({})},
   environment_prepare:{description:'固定base imageとcatalogから案件専用の候補環境を準備する。共有環境や他案件は変わらない。lockfilesは作業ファイルのSHA256を指定する。準備・実行・検証コマンドは通信なしの隔離環境で扱う。準備後にenvironment_testで検証する。',schema:object({definition:environmentDefinitionSchema})},
   environment_test:{description:'候補環境のprepareとverifyを現在の作業場のコピーで順に実行する。成功後だけ採用可能。試験ファイルは正本へ反映しない。',schema:object({environment:Type.String({pattern:'^[a-f0-9]{64}$'}),seconds:Type.Integer({minimum:1,maximum:300})})},
@@ -101,7 +105,7 @@ const definitions = {
 export function turnTools(isLeader: boolean, external: ExternalTools = {}, sharedRoom = false, autonomous = false, workareasEnabled = false): ModelToolDefinition[] {
   const scoped=!!external.workareas&&workareasEnabled;
   return Object.entries(definitions).filter(([name]) => (name!=='artifact_download'||external.workareas) && (name !== 'web_download' || ((external.workspaceWrite && sharedRoom)||scoped)) && (!['browser_form_submit','browser_request_submit'].includes(name) || (external.forms && sharedRoom)) && (!name.startsWith('packages_') || (external.packages && sharedRoom)) && (!name.startsWith('x_') || external.x) && (name !== 'x_post' || sharedRoom) && (!name.startsWith('browser_') || external.browser) && (name !== 'program_run' || ((external.program && sharedRoom)||scoped)) && (name !== 'task_rest' || autonomous) && (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
-    (!name.startsWith('environment_')||scoped) && (!['workspace_select','workspace_areas','workspace_share','workspace_download'].includes(name)||scoped) && (!name.startsWith('workspace_') || external.workspace||scoped) && (name !== 'workspace_write' || ((external.workspaceWrite && sharedRoom)||scoped))).map(([name, value]) => ({
+    (!name.startsWith('environment_')&&!name.startsWith('execution_')||scoped) && (!['workspace_select','workspace_areas','workspace_share','workspace_download'].includes(name)||scoped) && (!name.startsWith('workspace_') || external.workspace||scoped) && (name !== 'workspace_write' || ((external.workspaceWrite && sharedRoom)||scoped))).map(([name, value]) => ({
     name, description: scoped&&['workspace_list','workspace_read','workspace_write','program_run','web_download'].includes(name) ? `選択中の作業場所に適用。個人・案件領域はworkspace_selectで選ぶ。未選択時だけ従来の全員共有の制限に従う。個人・案件なら私的会話でもその領域の読書き・隔離実行が可能。プログラムは競合検査して反映し、conflict時はcandidate版を保持する。以下の説明中の共有フォルダ・共有会話限定は未選択時を指す。${value.description}`:value.description, input_schema: JSON.parse(JSON.stringify(value.schema)) as JsonObject,
   }));
 }
@@ -200,6 +204,18 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
 async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease, call: ModelToolCall, operationId: string,
   signal?: AbortSignal, external: ExternalTools = {}): Promise<JsonObject> {
   if (runtime.tasks.active(actor,lease) && ['browser_request_submit','browser_form_submit','x_post','program_run','web_download','workspace_write','workspace_share','artifact_download','packages_install'].includes(call.name) && runtime.tasks.independentActivity(actor,lease)) return {error:'independent_activity_scope',message:'保留操作とは別の活動です。公開情報の読取と新規テキスト成果物で進め、実行・書込・送信は元の仕事で確認してください。'};
+  if(call.name.startsWith('execution_')){
+    const definition=definitions[call.name as keyof typeof definitions];
+    if(!definition||!Value.Check(definition.schema,call.arguments)||!external.workareas||!runtime.tasks.active(actor,lease)||runtime.tasks.independentActivity(actor,lease))return {error:'Execution unavailable'};
+    const args:JsonObject=call.arguments;
+    const area=runtime.workareas.selected(actor,lease);if(!area)return {error:'Select a workarea'};
+    runtime.workareas.authorize(actor,area,lease);
+    if(call.name==='execution_wait')return runtime.tasks.waitExecution(actor,lease,args.execution_id as string);
+    if(call.name==='execution_start')return runtime.tasks.externalOnce(actor,lease,operationId,{name:call.name,arguments:call.arguments,area},(id,firstAttempt)=>runtime.workareas.execution(actor,area,{operation:call.name,...args,operation_id:id,allow_start:firstAttempt},external.workareas!,lease));
+    const result=await runtime.workareas.execution(actor,area,{operation:call.name,...args},external.workareas,lease);
+    const recorded=runtime.workareas.executionResult(actor,args.execution_id as string,lease);
+    return {...result,...(recorded.state!=='pending'?recorded:{})};
+  }
   if(call.name.startsWith('environment_')){
     const definition=definitions[call.name as keyof typeof definitions];
     if(!definition||!Value.Check(definition.schema,call.arguments)||!external.workareas||!runtime.tasks.active(actor,lease))return {error:'Environment unavailable'};

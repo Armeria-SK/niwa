@@ -8,7 +8,7 @@ import { validatePodmanInfo } from './preflight.ts';
 export interface ProgramEnvironment { workspace: string; image: string; uid: number; gid: number; home: string; runtime: string }
 export interface ProgramRequest { command: string[]; seconds: number }
 export interface ProgramOutput { code: number; stdout: string; stderr: string }
-export type PodmanCall = (args: string[], seconds: number, signal?: AbortSignal) => Promise<ProgramOutput>;
+export type PodmanCall = (args: string[], seconds: number, signal?: AbortSignal, maxBytes?: number) => Promise<ProgramOutput>;
 
 /** Only trusted executor configuration chooses mounts, identity and an already installed image. */
 export function programArguments(environment: ProgramEnvironment, request: ProgramRequest, name: string): string[] {
@@ -54,8 +54,9 @@ export function configuredProgramRunner(environment: ProgramEnvironment, current
     if (!relation || (!relation.startsWith('../') && relation !== '..') || info.uid !== environment.uid || (info.mode & 0o077))
       throw new Error('Executor state must be private and outside the shared mount');
   }
-  const call: PodmanCall = (args, seconds, signal) => new Promise((resolve, reject) => {
-    execFile('/usr/bin/podman', args, { cwd: environment.home, encoding: 'utf8', timeout: seconds * 1000, maxBuffer: 65536,
+  const call: PodmanCall = (args, seconds, signal, maxBytes = 65536) => new Promise((resolve, reject) => {
+    if(!Number.isSafeInteger(maxBytes)||maxBytes<1||maxBytes>96*1024*1024){reject(new Error('Invalid output limit'));return;}
+    execFile('/usr/bin/podman', args, { cwd: environment.home, encoding: 'utf8', timeout: seconds * 1000, maxBuffer: maxBytes,
       killSignal: 'SIGKILL', signal, env: { PATH: '/usr/bin:/bin', HOME: environment.home, XDG_RUNTIME_DIR: environment.runtime } },
     (error, stdout, stderr) => {
       if (error && (typeof error.code !== 'number' || error.killed || error.signal)) reject(new Error('Isolated program interrupted; outcome unknown'));

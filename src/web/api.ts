@@ -50,6 +50,16 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     return runtime.workareas.execute(admin,area,input,workareas);
   };
   const routes: Route[] = [
+    {method:'GET',path:/^\/api\/workareas\/([0-9a-f-]{36})\/executions$/,run:m=>{
+      if(!workareas)throw new DomainError('conflict','Executor unavailable');return runtime.workareas.execution(admin,m[1]!,{operation:'execution_list'},workareas);}},
+    {method:'POST',path:/^\/api\/workareas\/([0-9a-f-]{36})\/executions\/([0-9a-f-]{36})\/stop$/,schema:object({}),run:m=>{
+      if(!workareas)throw new DomainError('conflict','Executor unavailable');return runtime.workareas.execution(admin,m[1]!,{operation:'execution_stop',execution_id:m[2]!},workareas);}},
+    {method:'GET',path:/^\/api\/workareas\/([0-9a-f-]{36})\/executions\/([0-9a-f-]{36})\/preview$/,run:(m,_b,u)=>{
+      if(!workareas)throw new DomainError('conflict','Executor unavailable');return runtime.workareas.execution(admin,m[1]!,{operation:'execution_preview',execution_id:m[2]!,path:u.searchParams.get('path')??'/',mobile:u.searchParams.get('mobile')==='true'},workareas);}},
+    {method:'GET',path:/^\/api\/workareas\/([0-9a-f-]{36})\/executions\/([0-9a-f-]{36})$/,run:m=>{
+      if(!workareas)throw new DomainError('conflict','Executor unavailable');return runtime.workareas.execution(admin,m[1]!,{operation:'execution_status',execution_id:m[2]!},workareas);}},
+    {method:'POST',path:/^\/api\/workareas\/([0-9a-f-]{36})\/environments\/([a-f0-9]{64})\/retire$/,schema:object({}),run:m=>scoped(m[1]!,{operation:'environment_retire',environment:m[2]!})},
+    {method:'POST',path:/^\/api\/workareas\/([0-9a-f-]{36})\/environments\/collect$/,schema:object({}),run:m=>scoped(m[1]!,{operation:'environment_collect'})},
     {method:'GET',path:/^\/api\/workareas\/([0-9a-f-]{36})\/environments$/,run:m=>scoped(m[1]!,{operation:'environment_list'})},
     {method:'POST',path:/^\/api\/workareas\/([0-9a-f-]{36})\/environments$/,schema:object({definition:environmentDefinitionSchema}),run:(m,b)=>scoped(m[1]!,{operation:'environment_prepare',definition:b.definition,allow_start:true})},
     {method:'POST',path:/^\/api\/workareas\/([0-9a-f-]{36})\/environments\/([a-f0-9]{64})\/test$/,schema:object({seconds:Type.Integer({minimum:1,maximum:300}),operation_id:id}),run:(m,b)=>scoped(m[1]!,{operation:'environment_test',environment:m[2]!,seconds:b.seconds as number,operation_id:b.operation_id as string,allow_start:true})},

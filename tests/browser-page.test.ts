@@ -104,7 +104,9 @@ test('browser session and worker exchange bounded observations and resources thr
     return { url: address, content_type: 'text/html', body_base64: Buffer.from(body).toString('base64'), fetched_at: new Date().toISOString(), untrusted: true };
   }));
   try {
-    const first = await session.navigate('https://fixture.invalid/');
+    let first = await session.navigate('https://fixture.invalid/');
+    // The page's asynchronous fetch can be intercepted after the load snapshot.
+    for(let attempt=0;attempt<20&&!first.blocked.includes('approval_required');attempt++)first=await session.snapshot();
     assert.equal(first.title, 'Worker'); assert.ok(first.blocked.includes('approval_required'));
     await assert.rejects(async () => session.follow('forged', 0), /stale/);
     const prepared = await session.prepareForm(first.revision, first.elements.find(el => el.name === 'Send')!.ref,

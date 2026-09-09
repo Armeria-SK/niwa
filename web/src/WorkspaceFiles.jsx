@@ -1,3 +1,4 @@
+import {EnvironmentSettings} from './EnvironmentSettings.jsx';
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './components.jsx';
 import { FileIcon, DownloadIcon } from './icons.jsx';
@@ -54,6 +55,7 @@ export function WorkspaceFiles({ onClose }) {
     .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name, 'ja') : a.kind === 'directory' ? -1 : 1));
   return <Modal title="共有フォルダー" onClose={onClose} className="artifact-modal"><div className="modal-body form-stack">
     {areas?.available ? <WorkareaSettings value={areas} onChange={setAreas} area={area} onSelect={id=>{setPath('');setArea(id);}}/>:null}
+    {area?<EnvironmentSettings key={area} area={area}/>:null}
     <div className="inline-actions"><button className="button secondary" disabled={busy || (!path && !file)} onClick={() => file ? setFile(null) : setPath(path.split('/').slice(0, -1).join('/'))}>戻る</button><button className="button subtle" disabled={busy} onClick={load}>再読み込み</button></div>
     <p className="muted">{selected?.name||'全員共有'}{path ? ` / ${path}` : ''}{file ? ` / ${file.name}` : ''}</p>
     {busy ? <p role="status">ファイルを確認しています…</p> : null}

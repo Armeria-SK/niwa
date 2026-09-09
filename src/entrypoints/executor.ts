@@ -1,7 +1,10 @@
+import {isolatedPreview} from '../sandbox/preview.ts';
+import {ResourcePool,standardProfile,type ResourceConfig} from '../sandbox/resources.ts';
+import {managedProgramRunner} from '../sandbox/managed.ts';
 import {EnvironmentRegistry} from '../tools/environments/registry.ts';
 import {verifyWorkareaLayout} from '../tools/workareas/layout.ts';
 import {WorkareaStore} from '../tools/workareas/store.ts';
-import { chmodSync, lstatSync, rmSync } from 'node:fs';
+import { chmodSync, lstatSync, rmSync, readFileSync, statfsSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { assertDirectoryPath } from '../config/paths.ts';
@@ -22,9 +25,9 @@ let environments: EnvironmentRegistry | undefined;
 let workareas: WorkareaStore | undefined;
 let packages: PackageLog | undefined;
 let log: ProgramLog | undefined; let unlock: (() => void) | undefined; let closing: Promise<void> | undefined;
-const close = () => closing ??= (async () => { await browser?.stop(); await broker?.stop(); await packages?.close(); log?.close(); workareas?.close(); environments?.close(); unlock?.(); })();
+const close = () => closing ??= (async () => { await browser?.stop(); await broker?.stop(); if(!broker)await workareas?.stop(); await packages?.close(); log?.close(); workareas?.close(); environments?.close(); unlock?.(); })();
 try {
-  const { values } = parseArgs({ options: Object.fromEntries(['workspace', 'socket', 'state', 'home', 'runtime', 'image', 'browser-image', 'packages', 'workareas', 'environments'].map(key => [key, { type: 'string' as const }])) });
+  const { values } = parseArgs({ options: Object.fromEntries(['workspace', 'socket', 'state', 'home', 'runtime', 'image', 'browser-image', 'packages', 'workareas', 'environments', 'resources'].map(key => [key, { type: 'string' as const }])) });
   if (process.platform !== 'linux' || !process.getuid?.() || Object.values(values).some(value => typeof value !== 'string') ||
       !values.workspace || !values.socket || !values.state || !values.home || !values.runtime || !values.image) throw new Error('Executor configuration required');
   if (!isAbsolute(values.workspace as string)) throw new Error('Absolute workspace required');
@@ -41,6 +44,22 @@ try {
   process.umask(0o077);
   const environment = { workspace, image: values.image as string, uid: process.getuid(), gid: process.getgid!(), home: values.home as string, runtime: values.runtime as string };
   const run = configuredProgramRunner(environment, () => packages?.currentImage() ?? environment.image);
+  let pool:ResourcePool|undefined;
+  if(values.resources){
+    if(!values.environments)throw Error('Managed resources require environments');
+    const path=resolve(values.resources),stat=lstatSync(path);assertDirectoryPath(dirname(path));
+    if(!isAbsolute(values.resources)||!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||(stat.mode&0o022)||stat.size>65536)throw Error('Protected resource configuration required');
+    pool=new ResourcePool(JSON.parse(readFileSync(path,'utf8')) as ResourceConfig,required=>{
+      try{return [workspace,environment.home].every(root=>{const fs=statfsSync(root,{bigint:true});return fs.bavail*fs.bsize>=BigInt(Math.ceil(required))*1048576n;});}catch{return false;}
+    });
+  }
+  const limited:typeof run=(Object.assign(async(request:Parameters<typeof run>[0],signal?:AbortSignal,name?:string)=>{
+    const release=await pool?.acquire(standardProfile,signal);try{return await run(request,signal,name);}finally{release?.();}
+  },run));
+  const install=async(image:string,stage:string,name:string,entries:Parameters<typeof installPackages>[3],signal?:AbortSignal)=>{
+    const release=await pool?.acquire({memory_mib:1024,cpu:1,pids:128,disk_mib:1024,seconds:300},signal);
+    try{return await installPackages(image,stage,name,entries,run.call,signal);}finally{release?.();}
+  };
   await run.verify();
   unlock = acquireProcessLock(join(state, 'program-lock.db'));
   if (values.packages) {
@@ -58,13 +77,13 @@ try {
     };
     packages = new PackageLog(join(state, 'packages.db'), environment.image, catalog, async (image, name, entries, signal) => {
       const stage = join(state, name);
-      try { catalog.stage(entries.map(entry => entry.name), stage); return await installPackages(image, stage, name, entries, run.call, signal); }
+      try { catalog.stage(entries.map(entry => entry.name), stage); return await install(image, stage, name, entries, signal); }
       finally { await cleanup(name); }
     });
     for (const name of packages.pending()) await cleanup(name);
     await run.verify();
   }
-  log = new ProgramLog(join(state, 'programs.db'), JSON.stringify(environment), run);
+  log = new ProgramLog(join(state, 'programs.db'), JSON.stringify(environment), limited);
   // Recovery only terminates saved containers. It does not infer success or repeat their commands.
   for (const pending of log.pending()) await run.cleanup(pending.container);
   if(values.environments){
@@ -72,32 +91,33 @@ try {
     const catalog=new PackageCatalog(resolve(values.packages));
     environments=new EnvironmentRegistry(join(state,'environments.db'),environment.image,catalog,async(image,name,entries,signal)=>{
       const stage=join(state,name);
-      try{catalog.stage(entries.map(entry=>entry.name),stage);return await installPackages(image,stage,name,entries,run.call,signal);}
+      try{catalog.stage(entries.map(entry=>entry.name),stage);return await install(image,stage,name,entries,signal);}
       finally{rmSync(stage,{recursive:true,force:true});}
-    },async image=>(await run.call(['image','exists',image],15)).code===0);
+    },async image=>(await run.call(['image','exists',image],15)).code===0,pool?.config.profiles);
     for(const name of environments.pending()){
       for(const container of [name,packageVerificationName(name)])if((await run.call(['rm','--force','--ignore',container],15)).code!==0)throw Error('Environment recovery failed');
       rmSync(join(state,name),{recursive:true,force:true});
     }
     environments.recovered();
   }
+  const browsers=values['browser-image']?configuredBrowserRunner({...environment,image:values['browser-image']}):undefined;
+  if(browsers)await browsers.verify();
   if(values.workareas){
     const root=resolve(values.workareas as string);
     // Explicitly prepared sibling inside the bounded executor mount, never inside legacy workspace.
     verifyWorkareaLayout(root,state,workspace,environment.uid);
     workareas=new WorkareaStore(root,async(snapshot,request,signal,name,image)=>{
       const scoped=configuredProgramRunner({...environment,workspace:snapshot},()=>image??packages?.currentImage()??environment.image);
-      return scoped(request,signal,name);
-    },run.cleanup,environments);
+      const release=await pool?.acquire(standardProfile,signal);try{return await scoped(request,signal,name);}finally{release?.();}
+    },run.cleanup,environments,pool?{pool,removeImage:async image=>{if([environment.image,packages?.currentImage(),values['browser-image']].includes(image))return false;return (await run.call(['rmi','--no-prune',image],30)).code===0;},runner:managedProgramRunner(environment,run.call),...(browsers?{preview:isolatedPreview(browsers)}:{})}:undefined);
     await workareas.recover();
   }
   broker = createProgramServer(log, packages, workareas);
   await recoverExecutorSocket(socket, environment.uid);
   await new Promise<void>((resolve, reject) => { broker!.server.once('error', reject); broker!.server.listen(socket, resolve); });
   chmodSync(socket, 0o660);
-  if (values['browser-image']) {
-    const browsers = configuredBrowserRunner({ ...environment, image: values['browser-image'] as string }); await browsers.verify();
-    browser = createBrowserServer(browsers.create);
+  if (browsers) {
+    browser = createBrowserServer(browsers.create,pool?signal=>pool.acquire({memory_mib:1024,cpu:1,pids:256,disk_mib:320,seconds:900},signal):undefined);
     const browserSocket = join(dirname(socket), 'browser.sock');
     await recoverExecutorSocket(browserSocket, environment.uid);
     await new Promise<void>((resolve, reject) => { browser!.server.once('error', reject); browser!.server.listen(browserSocket, resolve); });

@@ -53,5 +53,5 @@ try{
  console.log('PASS: real offline preparation, project A/B image separation, fixed lockfile, new containers, reopen and receipt reuse; production adoption unchanged');
 }finally{
  store?.close();registry?.close();
- if(adopted&&adopted!==image)assert.equal((await clean.call(['rmi',adopted],30)).code,0,'Remove only artificial derived image');
+ if(adopted&&adopted!==image)assert.equal((await clean.call(['rmi','--no-prune',adopted],30)).code,0,'Remove only artificial derived image');
 }

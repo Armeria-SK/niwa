@@ -26,6 +26,14 @@ export class BrowserPage {
   constructor(private cdp: CdpPipe, private broker: Broker = url => new BrowserRequests(url)) {
     this.#unsubscribe = cdp.onEvent(event => { void this.#event(event).catch(() => this.close()); });
   }
+  async capture(mobile:boolean,signal?:AbortSignal){
+    if(!this.#session||this.#closed||this.#busy)throw Error('Browser page unavailable');
+    const width=mobile?390:1280,height=mobile?844:800;
+    await this.#send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile},signal);
+    const image=await this.#send('Page.captureScreenshot',{format:'jpeg',quality:60,captureBeyondViewport:false},signal);
+    if(typeof image.data!=='string'||image.data.length>400000)throw Error('Preview image exceeds limit');
+    return {data:image.data,width,height};
+  }
   async open(signal?: AbortSignal) {
     if (this.#context || this.#closed) throw new Error('Browser page already opened or closed');
     const options = signal ? { signal } : {};

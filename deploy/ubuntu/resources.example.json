@@ -1,0 +1,8 @@
+{
+  "capacity": {"memory_mib": 8192, "cpu": 8, "pids": 2048, "disk_mib": 8192},
+  "reserve": {"memory_mib": 3072, "cpu": 2, "pids": 512, "disk_mib": 2048},
+  "profiles": {
+    "standard": {"memory_mib": 512, "cpu": 1, "pids": 64, "disk_mib": 64, "seconds": 300},
+    "extended": {"memory_mib": 1024, "cpu": 1, "pids": 128, "disk_mib": 64, "seconds": 3600}
+  }
+}

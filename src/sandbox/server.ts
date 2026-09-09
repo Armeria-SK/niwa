@@ -49,6 +49,6 @@ export function createProgramServer(log: Pick<ProgramLog, 'execute'>, packages?:
   server.requestTimeout = 10_000; server.headersTimeout = 10_000;
   return { server, stop: async () => {
     stopping = true; for (const controller of active) controller.abort();
-    server.close(); server.closeAllConnections(); await Promise.all(work);
+    server.close(); server.closeAllConnections(); await Promise.all(work); await workareas?.stop();
   } };
 }

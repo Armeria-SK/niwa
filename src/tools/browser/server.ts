@@ -5,7 +5,8 @@ import type { BrowserSession } from './session.ts';
 
 type Session = Pick<BrowserSession, 'navigate' | 'snapshot' | 'follow' | 'close'> & Partial<Pick<BrowserSession, 'prepareForm' | 'interact' | 'completeRequest'>>;
 /** Bind to the protected executor Unix socket only. Caller identities come from the trusted runtime, not model arguments. */
-export function createBrowserServer(create: () => Session) {
+export function createBrowserServer(create: () => Session, reserve?: (signal:AbortSignal)=>Promise<()=>void>) {
+  const creating=new Set<string>();
   const sessions = new Map<string, { session: Session; used: number; busy: boolean }>();
   const active = new Set<AbortController>(); const work = new Set<Promise<void>>(); let stopping = false;
   const server = createServer((request, response) => {
@@ -26,8 +27,12 @@ export function createBrowserServer(create: () => Session) {
         const key = JSON.stringify([input.agent_id, input.room_id]);
         let entry = sessions.get(key);
         if (!entry) {
-          if (input.action.kind !== 'navigate' || sessions.size >= 16) throw new Error('Navigate again or wait for a browser slot');
-          entry = { session: create(), used: Date.now(), busy: false }; sessions.set(key, entry);
+          if (input.action.kind !== 'navigate' || sessions.size+creating.size >= 16 || creating.has(key)) throw new Error('Navigate again or wait for a browser slot');
+          creating.add(key);let release:(()=>void)|undefined;
+          try{release=await reserve?.(controller.signal);controller.signal.throwIfAborted();const session=create(),close=session.close.bind(session);let closed=false;
+            session.close=async()=>{if(closed)return;closed=true;try{await close();}finally{release?.();}};
+            entry={session,used:Date.now(),busy:false};sessions.set(key,entry);
+          }catch(error){release?.();throw error;}finally{creating.delete(key);}
         }
         if (entry.busy) throw new Error('Browser busy'); entry.busy = true;
         try {
