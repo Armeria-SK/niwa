@@ -22,14 +22,14 @@ const listSchema = Type.Object({ path: Type.String(), entries: Type.Array(Type.O
   truncated: Type.Boolean() }, { additionalProperties: false });
 
 /** Transport only. The composition root supplies a protected endpoint and validates its ownership on every call. */
-async function callWorkspace(socketPath: string, verifySocket: () => void, input: JsonObject, signal?: AbortSignal, maxResponse = 512 * 1024): Promise<unknown> {
+export async function callWorkspace(socketPath: string, verifySocket: () => void, input: JsonObject, signal?: AbortSignal, maxResponse = 512 * 1024, route = '/files', timeout = 10_000): Promise<unknown> {
     verifySocket();
-    const cancellation = AbortSignal.any([AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]);
+    const cancellation = AbortSignal.any([AbortSignal.timeout(timeout), ...(signal ? [signal] : [])]);
     cancellation.throwIfAborted();
     const body = JSON.stringify(input);
     if (Buffer.byteLength(body) > (input.operation === 'write' && input.encoding === 'base64' ? 12 * 1024 * 1024 : 512 * 1024)) throw new Error('Workspace request too large');
     const output = await new Promise<unknown>((resolve, reject) => {
-      const req = request({ socketPath, method: 'POST', path: '/files', agent: false, signal: cancellation,
+      const req = request({ socketPath, method: 'POST', path: route, agent: false, signal: cancellation,
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, response => {
         if (response.statusCode !== 200 || !response.headers['content-type']?.startsWith('application/json')) {
           response.destroy(); reject(new Error('Workspace request failed')); return;

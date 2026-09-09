@@ -227,6 +227,7 @@ export class Tasks {
     const memory = this.#access.memory(actor, task.agent_id);
     const plan = memory.prepare('SELECT revision,remaining FROM task_plans WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)').get(task.id);
     return {
+      workarea: this.#db.prepare('SELECT w.id,w.kind,w.name,w.room_id FROM task_workareas t JOIN workareas w ON w.id=t.area_id WHERE t.task_id=?').get(task.id) ?? null,
       independent_activity: this.independentActivity(actor,lease),
       recent_autonomous_work: this.#autonomous(task.id) ? this.#db.prepare(`SELECT t.id,t.room_id,substr(t.prompt,1,300) AS prompt,t.state,substr(t.result,1,1000) AS result,t.wait_reason
         FROM tasks t JOIN rooms r ON r.id=t.room_id WHERE t.agent_id=? AND t.id<>? AND r.visibility='shared'
@@ -594,7 +595,8 @@ export class Tasks {
   protectRestoredWork(actor: Actor): void {
     this.#admin(actor);
     transaction(this.#db, () => {
-      this.#db.exec('INSERT OR IGNORE INTO restored_tasks SELECT id FROM tasks; UPDATE settings SET autonomous=0 WHERE id=1;');
+      this.#db.exec('INSERT OR IGNORE INTO restored_tasks SELECT id FROM tasks; UPDATE settings SET autonomous=0 WHERE id=1; UPDATE workarea_settings SET enabled=0; UPDATE workareas SET available=0; UPDATE artifact_files SET available=0; DELETE FROM task_workareas;');
+      this.#db.prepare('UPDATE workarea_settings SET epoch=?').run(randomUUID());
       this.#db.prepare("UPDATE schedules SET enabled=0,wait_reason=? WHERE deleted=0")
         .run('バックアップから復元した予定です。実行済みの履歴と次回日時を確認してから再開してください。');
     });

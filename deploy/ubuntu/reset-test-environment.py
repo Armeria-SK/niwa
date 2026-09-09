@@ -33,6 +33,11 @@ def validate(root):
     if not os.path.ismount(root / 'workspace'):
         raise RuntimeError('Expected bounded workspace mount; no data removed')
     workspace_entries(root / 'workspace')
+    workareas = root / 'runtime/executor/workareas'
+    if os.path.lexists(workareas):
+        if any(p.is_symlink() for p in [workareas, *workareas.parents]) or not workareas.is_dir() or not os.path.ismount(workareas.parent) or workareas.stat().st_dev != workareas.parent.stat().st_dev:
+            raise RuntimeError('Expected workareas inside the bounded executor mount')
+        workspace_entries(workareas)
 
 
 def workspace_entries(workspace):
@@ -81,8 +86,8 @@ def reset(root, apply=False):
     validate(root)
     with sqlite3.connect(f'file:{root}/state/control.db?mode=ro', uri=True) as db:
         print('Task states:', db.execute('SELECT state,count(*) FROM tasks GROUP BY state').fetchall())
-    print('Delete: conversations, Bots, memories, artifacts, tasks, schedules and workspace files.')
-    print('Keep: authentication, settings, common rules, model choices, images, catalogs, journals and existing backups.')
+    print('Delete: conversations, Bots, memories, artifacts, tasks, schedules and legacy/personal/project/shared-version work files.')
+    print('Keep: authentication, settings, common rules, model choices, images, catalogs, external-operation journals and existing backups.')
     if not apply:
         print('Check only. Use --apply to erase test data, rebuild and restart.')
         return
@@ -100,7 +105,9 @@ def reset(root, apply=False):
         validate(root)
         if fingerprint(root) != protected:
             raise RuntimeError('Configuration changed; no data removed')
-        for path in workspace_entries(root / 'workspace'):
+        workareas = root / 'runtime/executor/workareas'
+        entries = workspace_entries(root / 'workspace') + (workspace_entries(workareas) if workareas.exists() else [])
+        for path in entries:
             if path.is_dir() and not path.is_symlink():
                 shutil.rmtree(path)
             else:

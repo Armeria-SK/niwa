@@ -49,7 +49,14 @@ export function ArtifactPreview({ onDelete, artifact, members, onClose, onThread
     try {await api(`/artifacts/${artifact.id}/${action}`,'POST',{expected_sha256:artifact.sha256,...(action==='review'?{verdict,note}: {})});await onOpen(artifact.id);setNote('');}
     catch(e){setError(e.message);}finally{setBusy(false);}
   }
-  function download() { const url = URL.createObjectURL(new Blob([artifact.content], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href = url; a.download = artifact.name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  async function download() {
+    setBusy(true);setError('');
+    try{const result=artifact.file?await api(`/artifacts/${artifact.id}/file`):null;
+      const content=result?Uint8Array.from(atob(result.data),c=>c.charCodeAt(0)):artifact.content;
+      const url=URL.createObjectURL(new Blob([content],{type:artifact.file?'application/octet-stream':'text/plain;charset=utf-8'}));
+      const a=document.createElement('a');a.href=url;a.download=artifact.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }catch(e){setError(e.message);}finally{setBusy(false);}
+  }
   return <Modal title={artifact.name} onClose={onClose} className="artifact-modal"><div className="modal-body"><p className="muted">{members[artifact.member || artifact.author_id]?.name} · 更新 {artifact.updated || new Date(artifact.created_at).toLocaleString('ja-JP')} · {artifact.scope === 'shared' ? '共有' : '個別'}</p>
     {artifact.sha256 ? <div className="form-stack artifact-version-info"><p>第{artifact.version}版 · {artifact.frozen?'凍結済み':'未凍結'} · 参照する依頼 {artifact.referenced_by.length}件</p>
       <details><summary>版・確認記録</summary><p>固定ID：{artifact.id}<br/>SHA-256：{artifact.sha256}</p>
@@ -59,5 +66,5 @@ export function ArtifactPreview({ onDelete, artifact, members, onClose, onThread
         <p className="muted">内容の確認記録です。外部操作の実行を承認するものではありません。凍結すると、この版からの改訂はできません。</p>
         {!artifact.frozen ? <button className="button secondary" disabled={busy || !artifact.reviews.some(item=>item.verdict==='approved') || artifact.reviews.some(item=>item.verdict==='changes_requested')} onClick={()=>record('freeze')}>確認済みの版を凍結</button> : null}
       </details>{error ? <p role="alert">{error}</p> : null}
-    </div> : null}<pre className="artifact-document">{artifact.content}</pre></div><div className="form-actions"><button className="button subtle" onClick={() => { onClose(); onThread(artifact.thread || artifact.room_id); }}>関連する会話</button><button className="button subtle" onClick={onDelete}>この版を削除</button><button className="button primary" onClick={download}><DownloadIcon size={17} />ダウンロード</button></div></Modal>;
+    </div> : null}{artifact.file?<p>固定ファイル · {artifact.file.size.toLocaleString()}バイト。ファイル本体は通常バックアップに含まれません。{!artifact.file.available?'復元後のため取得できません。':''}</p>:<pre className="artifact-document">{artifact.content}</pre>}</div><div className="form-actions"><button className="button subtle" onClick={() => { onClose(); onThread(artifact.thread || artifact.room_id); }}>関連する会話</button><button className="button subtle" onClick={onDelete}>この版を削除</button><button className="button primary" disabled={busy||artifact.file?.available===0} onClick={download}><DownloadIcon size={17} />ダウンロード</button></div></Modal>;
 }

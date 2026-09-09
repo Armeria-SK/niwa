@@ -1,3 +1,5 @@
+import {randomUUID} from 'node:crypto';
+import type {WorkareaTransport} from '../runtime/workareas.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Type, type TSchema } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
@@ -39,10 +41,29 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 
 /** This server exposes administrator routes only. Model tools use the separate actor-bound API. */
 export function createApiServer(runtime: Runtime, auth: WebAuth, models = new ModelGateway(runtime), webRoot?: string, backups?: Backups,
-  workspace?: { read: WorkspaceRead; download: WorkspaceDownload }, x?: XOAuth) {
+  workspace?: { read: WorkspaceRead; download: WorkspaceDownload }, x?: XOAuth, workareas?:WorkareaTransport) {
   const admin = runtime.administrator();
   type Route = { method: string; path: RegExp; schema?: TSchema; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL) => unknown };
+  const scoped=(area:string,input:Parameters<Runtime['workareas']['execute']>[2])=>{
+    if(!workareas)throw new DomainError('conflict','Workareas are not configured');
+    return runtime.workareas.execute(admin,area,input,workareas);
+  };
   const routes: Route[] = [
+    {method:'GET',path:/^\/api\/workareas$/,run:()=>({available:!!workareas,...runtime.workareas.settings(admin),areas:runtime.workareas.list(admin),agents:runtime.agents(admin).map(a=>({id:a.id,name:a.name})),rooms:runtime.rooms(admin).map(r=>({id:r.id,title:r.title,visibility:r.visibility,participants:runtime.participants(admin,r.id)})),backup:'metadata_only'})},
+    {method:'PATCH',path:/^\/api\/workareas$/,schema:object({enabled:Type.Boolean()}),run:(_m,b)=>{
+      if(b.enabled&&!workareas)throw new DomainError('conflict','Prepare the workarea executor first');
+      runtime.workareas.enable(admin,b.enabled as boolean);return {ok:true};}},
+    {method:'POST',path:/^\/api\/workareas\/projects$/,schema:object({id:Type.Optional(id),name:Type.String({minLength:1,maxLength:100}),room_id:id,members:Type.Array(id,{minItems:1,maxItems:100,uniqueItems:true}),expected_revision:Type.Optional(Type.Integer({minimum:1}))}),run:(_m,b)=>runtime.workareas.project(admin,b as unknown as Parameters<Runtime['workareas']['project']>[1])},
+    {method:'GET',path:/^\/api\/workareas\/([0-9a-f-]{36})\/files$/,run:(m,_b,u)=>scoped(m[1]!,{operation:'list',path:u.searchParams.get('path')??'',...(u.searchParams.has('revision')?{revision:u.searchParams.get('revision')!}:{})})},
+    {method:'GET',path:/^\/api\/workareas\/([0-9a-f-]{36})\/file$/,run:(m,_b,u)=>scoped(m[1]!,{operation:'download',path:u.searchParams.get('path')??'',...(u.searchParams.has('revision')?{revision:u.searchParams.get('revision')!}:{})})},
+    {method:'PUT',path:/^\/api\/workareas\/([0-9a-f-]{36})\/file$/,schema:object({path:Type.String({minLength:1,maxLength:512}),content:Type.String({maxLength:20000}),expected_revision:Type.Union([Type.Null(),Type.String({pattern:'^[a-f0-9]{64}$'})])}),run:(m,b)=>scoped(m[1]!,{operation:'write',path:b.path as string,content:b.content as string,expected_revision:b.expected_revision as string|null,operation_id:randomUUID(),allow_start:true})},
+    {method:'GET',path:/^\/api\/artifacts\/([0-9a-f-]{36})\/file$/,run:async m=>{
+      if(!workareas)throw new DomainError('conflict','Workarea executor unavailable');
+      const file=runtime.workareas.file(admin,m[1]!);
+      const bytes=await workareas({operation:'published',artifact:String(file.blob_id),area:String(file.blob_id),epoch:runtime.workareas.epoch()});
+      runtime.workareas.file(admin,m[1]!);
+      if(bytes.revision!==file.sha256)throw new DomainError('conflict','Published file mismatch');return bytes;}},
+
     { method: 'GET', path: /^\/api\/x$/, run: () => x ? x.status() : { available: false, connected: false, pending: false } },
     { method: 'POST', path: /^\/api\/x\/login$/, schema: object({}), run: () => {
       if (!x) throw new DomainError('conflict', 'X is not configured'); return x.begin(auth.origin + '/api/x/callback'); } },
@@ -83,7 +104,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/review$/, schema: object({expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'}),verdict:Type.Union([Type.Literal('approved'),Type.Literal('changes_requested')]),note:Type.String({minLength:1,maxLength:1000})}),run:(m,b)=>runtime.artifactVersions.review(admin,m[1]!,b.expected_sha256 as string,b.verdict as 'approved'|'changes_requested',b.note as string) },
     { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/freeze$/, schema: object({expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'})}),run:(m,b)=>runtime.artifactVersions.freeze(admin,m[1]!,b.expected_sha256 as string) },
     { method: 'DELETE', path: /^\/api\/artifacts\/([0-9a-f-]{36})$/, schema: object({}), run: m => { runtime.deleteContent(admin, 'artifact', m[1]!); return { ok: true }; } },
-    { method: 'DELETE', path: /^\/api\/rooms\/([0-9a-f-]{36})$/, schema: object({}), run: m => { runtime.deleteContent(admin, 'room', m[1]!); return { ok: true }; } },
+    { method: 'DELETE', path: /^\/api\/rooms\/([0-9a-f-]{36})$/, schema: object({}), run: async m => { runtime.deleteContent(admin, 'room', m[1]!); if(workareas)await runtime.workareas.purgeRetired(workareas);return { ok: true }; } },
     { method: 'POST', path: /^\/api\/approvals\/([0-9a-f-]{36})$/, schema: object({ approved: Type.Boolean(), version: id }), run: (m, b) => { runtime.decideApproval(admin, m[1]!, b.approved as boolean, b.version as string); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/updates$/, run: () => runtime.updates(admin) },
     { method: 'POST', path: /^\/api\/updates\/read$/, schema: object({ ids: Type.Array(Type.Integer({ minimum: 1 }), { maxItems: 1000, uniqueItems: true }) }),
@@ -106,7 +127,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'PUT', path: /^\/api\/agents\/([0-9a-f-]{36})\/model$/, schema: object({ provider: Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription')]), model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.Optional(Type.String({ maxLength: 20 })) }),
       run: (m, b) => b.provider === 'ollama' ? models.select(m[1]!, b.model as string) : models.selectSubscription(m[1]!, b.model as string, b.reasoning as string) },
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/profile$/, schema: object({ patch: profileSchema, version: Type.String({ pattern: '^[0-9a-f]{64}$' }), selection: Type.Optional(object({ provider: Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription')]), model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 20 }) })) }), run: (m, b) => models.updateProfile(m[1]!, b.patch as Record<string, unknown>, b.version as string, b.selection as Pick<Agent, 'provider' | 'model' | 'reasoning'> | undefined) },
-    { method: 'DELETE', path: /^\/api\/agents\/([0-9a-f-]{36})$/, schema: object({ version: Type.String({ pattern: '^[0-9a-f]{64}$' }) }), run: (m, b) => { runtime.deleteAgent(admin, m[1]!, b.version as string); return { ok: true }; } },
+    { method: 'DELETE', path: /^\/api\/agents\/([0-9a-f-]{36})$/, schema: object({ version: Type.String({ pattern: '^[0-9a-f]{64}$' }) }), run: async (m, b) => { runtime.deleteAgent(admin, m[1]!, b.version as string);if(workareas)await runtime.workareas.purgeRetired(workareas);return { ok: true }; } },
     { method: 'GET', path: /^\/api\/state$/, run: () => ({ approvals: runtime.approvals(admin), businessTasks: runtime.businessTasks(admin), deletedAgents: runtime.deletedAgents(admin), agents: runtime.agents(admin).map(agent => ({ ...agent, profile: runtime.profile(admin, agent.id), profile_version: runtime.profileVersion(admin, agent.id), memory_version: runtime.memoryVersion(admin, agent.id) })),
       rooms: runtime.rooms(admin).map(room => ({ ...room, ...runtime.roomPreferences(admin, room.id), ...runtime.messageSummary(admin, room.id), acknowledgments: runtime.acknowledgments(admin, room.id), participants: runtime.participants(admin, room.id) })), settings: runtime.settings(admin), commonRules: runtime.commonRules(admin), tasks: runtime.tasks.list(admin).map(task => ({ ...task, replies: runtime.tasks.replies(admin, task.id) })) }) },
     { method: 'PATCH', path: /^\/api\/rooms\/([0-9a-f-]{36})\/organization$/, schema: object({ pinned: Type.Optional(Type.Boolean()), archived: Type.Optional(Type.Boolean()) }),

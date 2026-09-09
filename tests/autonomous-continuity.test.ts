@@ -92,9 +92,9 @@ test('schema36 migration retains existing waits, administrator settings, persona
  const db=new DatabaseSync(join(root,'control.db'));
  const snapshot=()=>JSON.stringify(['tasks','settings','agents','approval_requests'].map(table=>db.prepare(`SELECT * FROM ${table}`).all()));
  const before=snapshot(),context=JSON.stringify(r.context(actor,room.id));
- db.exec('DROP TABLE autonomous_boundaries; ALTER TABLE autonomous_wakes DROP COLUMN evidence; ALTER TABLE autonomous_wakes DROP COLUMN stagnant; PRAGMA user_version=36;');
+ db.exec('DROP TRIGGER retire_workarea_file; DROP TABLE retired_workarea_files; DROP TABLE task_workareas; DROP TABLE artifact_files; DROP TABLE artifact_audiences; DROP TABLE workarea_members; DROP TABLE workareas; DROP TABLE workarea_settings; DROP TABLE autonomous_boundaries; ALTER TABLE autonomous_wakes DROP COLUMN evidence; ALTER TABLE autonomous_wakes DROP COLUMN stagnant; PRAGMA user_version=36;');
  const reopened=new Runtime(root);try{
-  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,37);assert.equal(snapshot(),before);
+  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,38);assert.equal(snapshot(),before);
   assert.equal(JSON.stringify(reopened.context(reopened.agentSession(leader.id),room.id)),context);
   assert.equal(db.prepare('PRAGMA quick_check').get()!.quick_check,'ok');
  }finally{reopened.close();db.close();}

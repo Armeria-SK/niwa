@@ -1,3 +1,5 @@
+import {Workareas} from './workareas.ts';
+import {workareasSchema} from '../storage/workareas-schema.ts';
 import { restoreSafetySchema } from '../storage/restore-safety-schema.ts';
 import { userActionsSchema } from '../storage/user-actions-schema.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -64,6 +66,7 @@ type Principal = { kind: 'admin'; id: 'administrator' } | { kind: 'agent'; id: s
 
 /** Trusted application service. Do not expose this object to generated code or models. */
 export class Runtime {
+  readonly workareas: Workareas;
   readonly tasks: Tasks;
   readonly autonomousWakes: AutonomousWakes;
   readonly artifactVersions: ArtifactVersions;
@@ -77,7 +80,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -95,6 +98,7 @@ export class Runtime {
           || !!this.#db.prepare('SELECT 1 FROM participants WHERE room_id=? AND agent_id=?').get(roomId, agentId));
       },
     });
+    this.workareas = new Workareas(this.#db,this,actor=>this.#principal(actor));
     this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id);
     this.artifactVersions = new ArtifactVersions(this.#db,this,actor=>this.#principal(actor));
     this.schedules = new Schedules(this.#db, this.tasks, actor => this.#admin(actor), (actor, agentId, roomId) => {
@@ -222,6 +226,8 @@ export class Runtime {
   }
   #purgeAgent(agentId: string): void {
     check(/^[0-9a-f-]{36}$/.test(agentId), 'invalid', 'Invalid Bot deletion');
+    this.#db.prepare("UPDATE workareas SET deleted=1 WHERE kind='personal' AND owner_id=?").run(agentId);
+    this.#db.prepare('DELETE FROM workarea_members WHERE agent_id=?').run(agentId);
     this.#memories.get(agentId)?.close(); this.#memories.delete(agentId);
     const directory = join(this.#root, 'agents', agentId);
     assertDirectoryPath(directory);
@@ -481,11 +487,11 @@ export class Runtime {
     const rooms = new Set(this.rooms(actor).map(room => room.id));
     return this.#db.prepare(`SELECT id,room_id,author_id,name,kind,description,created_at FROM artifacts
       WHERE instr(lower(name || ' ' || description || ' ' || content), lower(?)) > 0 ORDER BY created_at DESC`)
-      .all(query.trim()).filter(row => rooms.has(row.room_id as string));
+      .all(query.trim()).filter(row => rooms.has(row.room_id as string)&&this.workareas.visible(actor,String(row.id)));
   }
   artifact(actor: Actor, id: string): Record<string, unknown> {
     const row = this.#db.prepare('SELECT * FROM artifacts WHERE id=?').get(text(id, 100));
-    check(row, 'not_found', 'Artifact not found'); this.#room(actor, row.room_id as string);
+    check(row&&this.workareas.visible(actor,id), 'not_found', 'Artifact not found'); this.#room(actor, row.room_id as string);
     return row;
   }
   reportUpdate(actor: Actor, roomId: string, kind: 'done' | 'decision' | 'question', title: string, detail: string, taskId?: string, artifactId?: string): void {
@@ -581,6 +587,7 @@ export class Runtime {
           this.#db.prepare('DELETE FROM artifacts WHERE room_id=?').run(record.id);
           this.#db.prepare('DELETE FROM submissions WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)').run(record.id);
           this.#db.prepare('DELETE FROM messages WHERE room_id=?').run(record.id);
+          this.#db.prepare('UPDATE workareas SET deleted=1 WHERE room_id=?').run(record.id);
           this.#db.prepare("UPDATE rooms SET title='' WHERE id=?").run(record.id);
           this.#db.prepare('DELETE FROM task_coordination WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
           this.#db.prepare("UPDATE tasks SET prompt='',result=NULL,wait_reason=NULL,source_message_id=NULL WHERE room_id=?").run(record.id);
@@ -666,8 +673,8 @@ export class Runtime {
   coordinationDigest(actor: Actor, roomId: string, now=Date.now()) {
     this.#room(actor,roomId);
     const since=now-86_400_000;
-    const artifacts=this.#db.prepare('SELECT a.id,a.name,a.author_id,a.created_at,coalesce(v.version,1) AS version FROM artifacts a LEFT JOIN artifact_versions v ON v.artifact_id=a.id WHERE a.room_id=? AND a.created_at>=? ORDER BY a.created_at DESC LIMIT 20').all(roomId,since);
-    const artifactCount=this.#db.prepare('SELECT count(*) AS n FROM artifacts WHERE room_id=? AND created_at>=?').get(roomId,since)!.n;
+    const artifacts=this.#db.prepare('SELECT a.id,a.name,a.author_id,a.created_at,coalesce(v.version,1) AS version FROM artifacts a LEFT JOIN artifact_versions v ON v.artifact_id=a.id WHERE a.room_id=? AND a.created_at>=? ORDER BY a.created_at DESC LIMIT 20').all(roomId,since).filter(row=>this.workareas.visible(actor,String(row.id)));
+    const artifactCount=this.artifacts(actor).filter(item=>item.room_id===roomId&&Number(item.created_at)>=since).length;
     const operations=this.#db.prepare(`SELECT l.tool_name,count(*) AS intents,sum(e.output IS NOT NULL) AS recorded,sum(e.output IS NULL) AS unknown
       FROM external_operation_labels l JOIN external_operations e USING(task_id,operation_id) JOIN tasks t ON t.id=l.task_id
       WHERE t.room_id=? AND l.started_at>=? AND l.tool_name IN ('browser_form_submit','browser_request_submit','x_post') GROUP BY l.tool_name`).all(roomId,since);
@@ -1060,7 +1067,7 @@ export class Runtime {
       if (summary) summaries.push({ kind: 'summary', source_id: String(candidate.id), room_id: summary.room_id, ...excerpt(summary.body) });
       if (summaries.length >= 20) break;
     }
-    return [...entries.map(entry => ({ kind: entry.kind, source_id: entry.source_id, room_id: entry.room_id, ...excerpt(entry.body) })), ...summaries,
+    return [...entries.filter(entry=>entry.kind!=='artifact'||this.workareas.visible(actor,entry.source_id)).map(entry => ({ kind: entry.kind, source_id: entry.source_id, room_id: entry.room_id, ...excerpt(entry.body) })), ...summaries,
       ...memories.map(item => ({ kind: 'memory', source_id: item.id, room_id: item.source_room_id, revision: item.revision,
         source_message_id: item.source_message_id, ...excerpt(item.body) }))];
   }
@@ -1074,6 +1081,7 @@ export class Runtime {
       artifact: 'SELECT room_id,name || char(10) || description || char(10) || content AS body FROM artifacts WHERE id=?',
     };
     check(kind === 'memory' || kind === 'summary' || Object.hasOwn(queries, kind), 'invalid', 'Unknown source kind');
+    if(kind==='artifact')this.artifact(actor,sourceId);
     const record = (kind === 'summary' ? this.#summary(actor, roomId, sourceId) : kind === 'memory'
       ? this.#memory(actor, principal.id).prepare('SELECT source_room_id AS room_id,body,revision FROM memories WHERE id=?').get(sourceId)
       : this.#db.prepare(queries[kind]!).get(sourceId)) as { room_id: string; body: string; revision?: number } | undefined;

@@ -111,13 +111,13 @@ export class TurnRunner {
         const repeating = recentCalls.length === 3 && recentCalls.every(calls => calls === recentCalls[0]);
         const RULES = `${BASE_RULES}\n管理者が設定した共通の指示（権限と停止・予算の制約は引き続き守る）: ${rules.body}${repeating ? '\n同じ引数のツール操作が3回続いています。直近の結果を確認し、進展がなければ別の方法へ変更してください。' : ''}`;
         const sharedRoom = runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared';
-        const configuredTools = turnTools(agent.role === 'leader', this.#external, sharedRoom, workState.autonomous);
+        const configuredTools = turnTools(agent.role === 'leader', this.#external, sharedRoom, workState.autonomous, !!this.#runtime.workareas.settings(actor).enabled);
         const settings = runtime.settings(actor);
         const environment = { conversation: sharedRoom ? 'shared' : 'private', model_supports_tools: adapter.capabilities.supports_tool_calls,
           configured_tools_here: configuredTools.map(tool => tool.name),
           configured_tools_in_shared_room: turnTools(agent.role === 'leader', this.#external, true).map(tool => tool.name),
           autonomous_enabled: settings.autonomous, activity_paused: settings.paused, this_task_autonomous: workState.autonomous,
-          execution_boundary: 'program_runは共有会話の隔離コンテナ内。共有workspaceのみ書込可能、外部通信・ホスト操作不可。workspace_writeとweb_downloadも共有会話限定。自律活動は設定・停止・予算・予定・権限に従う。' };
+          execution_boundary: (this.#runtime.workareas.settings(actor).enabled&&this.#external.workareas?'個人・案件の作業場所が有効。workspace_selectで現在のBot・会話に許可された作業場所を選ぶと、私的会話でもその領域の書込・隔離実行が可能。未選択時の境界は次の通り。':'')+'program_runは共有会話の隔離コンテナ内。共有workspaceのみ書込可能、外部通信・ホスト操作不可。workspace_writeとweb_downloadも共有会話限定。自律活動は設定・停止・予算・予定・権限に従う。' };
         const makeRequest = (): ModelRequest => ({
           system_instructions: `${RULES}\n現在の実行環境: ${JSON.stringify(environment)}${workState.autonomous ? '\n今回は自発活動の機会です。自分の関心・人格、最近の会話、過去の成果を確認し、管理者の方針の範囲で役立つ活動を自分で選んでください。毎回の発言や作業は必須ではありません。今は必要がなければtask_restを単独で呼んで休んでください。私的な経験をそのまま共有会話へ公開しないでください。' : ''}${workState.task.conversation_reply ? '\n今回は別のBotからあなたへの会話です。現在の依頼に応答し、返信相手がいる場合は@名前から始めてください。話題を引き継ぐ必要がなければ短く答えるか休息してください。' : ''}\nあなた: ${JSON.stringify({ id: agent.id, name: agent.name, role: agent.role, profile: runtime.profile(actor, agent.id) })}\nメンバー: ${JSON.stringify(members)}\n利用できる自分の記憶: ${JSON.stringify(context.memories.slice(-20).map(memory => ({ id: memory.id, body: memory.body })))}`,
           messages: [...base, { role: 'user', content: `現在の依頼: ${lease.task.prompt}` }, ...history,

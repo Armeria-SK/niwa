@@ -11,6 +11,7 @@ export const formSchema = Type.Object({
   json: Type.Optional(Type.String({ maxLength: 1000 })),
   files: Type.Optional(Type.Array(Type.Object({
     name: Type.String({minLength:1,maxLength:100,pattern:'^[A-Za-z0-9_.-]+$'}),
+    workarea_id: Type.Optional(Type.String({pattern:'^[a-f0-9-]{36}$'})),
     path: Type.String({minLength:1,maxLength:512}),
     filename: Type.String({minLength:1,maxLength:100,pattern:'^[A-Za-z0-9_.-]+$'}),
     revision: Type.String({pattern:'^[a-f0-9]{64}$'}),
@@ -18,6 +19,7 @@ export const formSchema = Type.Object({
   },{additionalProperties:false}),{minItems:1,maxItems:4})),
 }, { additionalProperties: false });
 export type PublicForm = Static<typeof formSchema>;
+export type FormFileReader=(path:string,signal?:AbortSignal,area?:string)=>Promise<{data:string;revision:string}>;
 export interface FormResponse { url: string; status: number; text: string; truncated: boolean; untrusted: true; content_type?: string }
 
 /** This value is also the complete human-readable approval payload. No hidden caller-selected headers. */
@@ -62,7 +64,7 @@ const transport: FormTransport = (url, method, body, address, signal, contentTyp
 
 /** Only invoke after exact-content approval and a durable intent. No cookies, auth, redirect or retry. */
 export async function submitPublicForm(input: PublicForm, signal?: AbortSignal, send: FormTransport = transport,
-  resolveAddress: typeof publicAddress = publicAddress, readFile?: (path: string, signal?: AbortSignal) => Promise<{data: string; revision: string}>): Promise<FormResponse> {
+  resolveAddress: typeof publicAddress = publicAddress, readFile?: FormFileReader): Promise<FormResponse> {
   const form = normalizeForm(input); const url = new URL(form.url);
   const body = new URLSearchParams(form.fields.map(({ name, value }) => [name, value])).toString();
   if (form.method === 'GET') url.search = body;
@@ -75,7 +77,7 @@ export async function submitPublicForm(input: PublicForm, signal?: AbortSignal, 
     const append = (text: string) => chunks.push(Buffer.from(text));
     for (const field of form.fields) append(`--${boundary}\r\nContent-Disposition: form-data; name="${field.name}"\r\n\r\n${field.value}\r\n`);
     for (const file of form.files) {
-      const saved = await readFile(file.path, cancellation), bytes = Buffer.from(saved.data, 'base64');
+      const saved = await readFile(file.path, cancellation, file.workarea_id), bytes = Buffer.from(saved.data, 'base64');
       if (bytes.length !== file.size || saved.revision !== file.revision || bytes.toString('base64') !== saved.data ||
           createHash('sha256').update(bytes).digest('hex') !== file.revision) throw new Error('Approved file changed');
       append(`--${boundary}\r\nContent-Disposition: form-data; name="${file.name}"; filename="${file.filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`);

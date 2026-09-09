@@ -1,3 +1,5 @@
+import {verifyWorkareaLayout} from '../tools/workareas/layout.ts';
+import {WorkareaStore} from '../tools/workareas/store.ts';
 import { chmodSync, lstatSync, rmSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -15,11 +17,12 @@ import { installPackages, packageVerificationName } from '../tools/packages/inst
 
 let broker: ReturnType<typeof createProgramServer> | undefined;
 let browser: ReturnType<typeof createBrowserServer> | undefined;
+let workareas: WorkareaStore | undefined;
 let packages: PackageLog | undefined;
 let log: ProgramLog | undefined; let unlock: (() => void) | undefined; let closing: Promise<void> | undefined;
-const close = () => closing ??= (async () => { await browser?.stop(); await broker?.stop(); await packages?.close(); log?.close(); unlock?.(); })();
+const close = () => closing ??= (async () => { await browser?.stop(); await broker?.stop(); await packages?.close(); log?.close(); workareas?.close(); unlock?.(); })();
 try {
-  const { values } = parseArgs({ options: Object.fromEntries(['workspace', 'socket', 'state', 'home', 'runtime', 'image', 'browser-image', 'packages'].map(key => [key, { type: 'string' as const }])) });
+  const { values } = parseArgs({ options: Object.fromEntries(['workspace', 'socket', 'state', 'home', 'runtime', 'image', 'browser-image', 'packages', 'workareas'].map(key => [key, { type: 'string' as const }])) });
   if (process.platform !== 'linux' || !process.getuid?.() || Object.values(values).some(value => typeof value !== 'string') ||
       !values.workspace || !values.socket || !values.state || !values.home || !values.runtime || !values.image) throw new Error('Executor configuration required');
   if (!isAbsolute(values.workspace as string)) throw new Error('Absolute workspace required');
@@ -62,7 +65,17 @@ try {
   log = new ProgramLog(join(state, 'programs.db'), JSON.stringify(environment), run);
   // Recovery only terminates saved containers. It does not infer success or repeat their commands.
   for (const pending of log.pending()) await run.cleanup(pending.container);
-  broker = createProgramServer(log, packages);
+  if(values.workareas){
+    const root=resolve(values.workareas as string);
+    // Explicitly prepared sibling inside the bounded executor mount, never inside legacy workspace.
+    verifyWorkareaLayout(root,state,workspace,environment.uid);
+    workareas=new WorkareaStore(root,async(snapshot,request,signal,name)=>{
+      const scoped=configuredProgramRunner({...environment,workspace:snapshot},()=>packages?.currentImage()??environment.image);
+      return scoped(request,signal,name);
+    },run.cleanup);
+    await workareas.recover();
+  }
+  broker = createProgramServer(log, packages, workareas);
   await recoverExecutorSocket(socket, environment.uid);
   await new Promise<void>((resolve, reject) => { broker!.server.once('error', reject); broker!.server.listen(socket, resolve); });
   chmodSync(socket, 0o660);

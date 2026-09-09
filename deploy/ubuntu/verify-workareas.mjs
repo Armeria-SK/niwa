@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import {mkdirSync,writeFileSync,rmSync,chmodSync,statSync} from 'node:fs';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {pathToFileURL} from 'node:url';
+const compiled=process.argv[4];
+if(!compiled?.startsWith('/'))throw Error('Explicit staged compiled src directory required');
+const {WorkareaStore}=await import(pathToFileURL(join(compiled,'tools/workareas/store.js')).href);
+const {configuredProgramRunner}=await import(pathToFileURL(join(compiled,'sandbox/program.js')).href);
+const root=process.argv[2],image=process.argv[3],uid=process.getuid(),gid=process.getgid();
+const home='/home/niwa/niwa/runtime/executor/home',runtime=`/run/user/${uid}`;
+const storage=join(root,'store');mkdirSync(storage,{mode:0o711});chmodSync(storage,0o711);
+writeFileSync(join(root,'admin.db'),'artificial management data');writeFileSync(join(root,'credentials'),'artificial credential sentinel');
+const clean=configuredProgramRunner({workspace:root,image,uid,gid,home,runtime});
+const store=new WorkareaStore(storage,(workspace,request,signal,name)=>configuredProgramRunner({workspace,image,uid,gid,home,runtime})(request,signal,name),clean.cleanup);
+const epoch=randomUUID(),a=randomUUID(),b=randomUUID();
+const invoke=(area,operation,args={})=>store.execute({area,epoch,operation,...args});
+try{
+ await invoke(a,'write',{path:'draft.txt',content:'A draft',operation_id:randomUUID(),allow_start:true});
+ await invoke(b,'write',{path:'secret.txt',content:'B draft',operation_id:randomUUID(),allow_start:true});
+ const code=`import os,json,pathlib\np=pathlib.Path('/workspace')\nassert (p/'draft.txt').read_text()=='A draft'\nfor x in ${JSON.stringify([join(root,'admin.db'),join(root,'credentials'),storage, '/home/niwa/niwa/state/control.db','/home/niwa/niwa/secrets/codex.json','/home/niwa/niwa/workspace'])}:\n assert not os.path.exists(x), x\nassert not (p/'secret.txt').exists()\n(p/'out.txt').write_text('isolated result')\nos.chmod(p/'out.txt',0o777)\nmounts=pathlib.Path('/proc/self/mountinfo').read_text()\nassert mounts.count(' /workspace ')==1\nprint('selected workspace only; management, credentials, legacy and other Bot files unreachable')`;
+ const result=await invoke(a,'run',{command:['python','-c',code],seconds:15,operation_id:randomUUID(),allow_start:true});
+ assert.equal(result.code,0,JSON.stringify(result));assert.ok(result.candidate);
+ assert.equal((await invoke(a,'commit',{candidate:result.candidate,expected_revision:result.base_revision})).area_revision,result.candidate);
+ assert.equal((await invoke(a,'read',{path:'out.txt'})).content,'isolated result');
+ assert.equal(statSync(join(storage,'areas',a,result.candidate,'out.txt')).mode&0o777,0o700);
+ const running=invoke(a,'run',{command:['python','-c',"import pathlib,time;pathlib.Path('/workspace/program-result').write_text('candidate');time.sleep(1)"],seconds:15,operation_id:randomUUID(),allow_start:true});
+ await new Promise(resolve=>setTimeout(resolve,300));
+ await invoke(a,'write',{path:'concurrent.txt',content:'other editor',operation_id:randomUUID(),allow_start:true});
+ const candidate=await running;assert.equal(candidate.code,0,JSON.stringify(candidate));
+ assert.equal((await invoke(a,'commit',{candidate:candidate.candidate,expected_revision:candidate.base_revision})).error,'conflict');
+ assert.equal((await invoke(a,'read',{path:'program-result',revision:candidate.candidate})).content,'candidate');
+ assert.equal((await invoke(a,'read',{path:'concurrent.txt'})).content,'other editor');
+ const links=await invoke(a,'run',{command:['python','-c',"import os;os.link('/workspace/draft.txt','/workspace/hardlink')"],seconds:15,operation_id:randomUUID(),allow_start:true});
+ assert.equal(links.error,'unsupported');
+ assert.equal((await invoke(a,'read',{path:'draft.txt'})).content,'A draft');
+ console.log('PASS: real rootless container scope, immutable snapshot commit, hardlink rejection and original generation retained');
+}finally{store.close();rmSync(root,{recursive:true,force:true});}

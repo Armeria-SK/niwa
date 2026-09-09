@@ -34,6 +34,9 @@ r.post(a,room.id,'old message');r.tasks.create(a,b.id,room.id,'old work');r.clos
             root = Path(tmp); self.fixture(root)
             outside = root / 'outside'; outside.write_text('keep outside')
             (root / 'workspace/link').symlink_to(outside)
+            workareas = root / 'runtime/executor/workareas'; workareas.mkdir(parents=True)
+            (workareas / 'index.db').write_text('synthetic scoped journal')
+            (workareas / 'areas').mkdir(); (workareas / 'areas/draft').write_text('synthetic personal draft')
             before = reset.fingerprint(root); calls = []
             actual_run = subprocess.run
             def command(*args):
@@ -43,6 +46,7 @@ r.post(a,room.id,'old message');r.tasks.create(a,b.id,room.id,'old work');r.clos
             with patch.object(reset, 'validate'), patch.object(reset, 'run', side_effect=command), patch.object(reset, 'wait_http'), patch.object(reset.subprocess, 'run'):
                 reset.reset(root, True)
             self.assertEqual(reset.fingerprint(root), before)
+            self.assertEqual(list(workareas.iterdir()), [])
             self.assertEqual(outside.read_text(), 'keep outside')
             self.assertEqual([p.name for p in (root / 'workspace').iterdir()], ['lost+found'])
             self.assertTrue((root / 'backups/old').exists()); self.assertTrue((root / 'runtime/journal').exists())

@@ -3,7 +3,7 @@ import { lstatSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
 import { assertDirectoryPath } from '../../config/paths.ts';
 import { openDatabase } from '../../storage/database.ts';
-import { normalizeForm, type PublicForm, type FormResponse } from './form.ts';
+import { normalizeForm, type PublicForm, type FormFileReader, type FormResponse } from './form.ts';
 
 export interface FormOperation { operation_id: string; agent_id: string; room_id: string; task_id: string; allow_start: boolean; form: PublicForm }
 export type FormResult = FormResponse | { error: 'outcome_unknown' };
@@ -11,14 +11,14 @@ export type FormResult = FormResponse | { error: 'outcome_unknown' };
 /** Runtime-private journal outside normal backups. An unresolved intent is never automatically sent again. */
 export class FormLog {
   #db; #closed = false; #active = new Set<Promise<FormResult>>();
-  constructor(file: string, private send: (form: PublicForm, signal?: AbortSignal) => Promise<FormResponse>) {
+  constructor(file: string, private send: (form: PublicForm, signal?: AbortSignal, readFile?:FormFileReader) => Promise<FormResponse>) {
     if (!isAbsolute(file)) throw new Error('Explicit form journal required'); assertDirectoryPath(dirname(file));
     try { const info = lstatSync(file); if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new Error('Unsafe form journal'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     this.#db = openDatabase(file, 'CREATE TABLE forms (operation_id TEXT PRIMARY KEY,input_hash TEXT NOT NULL,output TEXT) STRICT;');
     this.#db.exec('PRAGMA synchronous=FULL;');
   }
-  execute(input: FormOperation, signal?: AbortSignal): Promise<FormResult> {
+  execute(input: FormOperation, signal?: AbortSignal, readFile?:FormFileReader): Promise<FormResult> {
     if (this.#closed || typeof input.allow_start !== 'boolean' ||
       ![input.operation_id, input.agent_id, input.room_id, input.task_id].every(id => typeof id === 'string' && /^[A-Za-z0-9:_-]{1,160}$/.test(id))) throw new Error('Invalid form operation');
     const form = normalizeForm(input.form); const id = input.operation_id;
@@ -32,7 +32,7 @@ export class FormLog {
     this.#db.prepare('INSERT INTO forms VALUES (?,?,NULL)').run(id, hash);
     const work = (async (): Promise<FormResult> => {
       try {
-        const result = await this.send(form, signal);
+        const result = await this.send(form, signal, readFile);
         if (!Number.isInteger(result.status) || result.status < 100 || result.status > 599 || result.untrusted !== true ||
           typeof result.url !== 'string' || result.url.length > 4096 || typeof result.text !== 'string' || result.text.length > 20000 || typeof result.truncated !== 'boolean') throw new Error('Invalid form response');
         this.#db.prepare('UPDATE forms SET output=? WHERE operation_id=?').run(JSON.stringify(result), id); return result;
