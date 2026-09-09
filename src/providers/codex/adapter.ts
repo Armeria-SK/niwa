@@ -73,6 +73,7 @@ export interface OpenAISubscriptionAdapterConfig {
   readonly experimental_opt_in: boolean;
   /** Host-only opt-in after endpoint compatibility acceptance; never enabled from model input. */
   readonly reasoning_summary?: 'auto';
+  readonly on_summary_unsupported?: () => void;
   readonly credential_store: CredentialStore;
   readonly base_url?: string;
   readonly fetch?: typeof globalThis.fetch;
@@ -135,7 +136,8 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
   readonly context_window?: number;
 
   readonly #profile: ModelProfile;
-  readonly #summary: 'auto'|undefined;
+  #summary: 'auto'|undefined;
+  #summaryUnsupported: (() => void) | undefined;
   readonly #store: CredentialStore;
   readonly #baseUrl: string;
   readonly #fetch: typeof globalThis.fetch;
@@ -150,7 +152,7 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
 
   constructor(config: OpenAISubscriptionAdapterConfig) {
     if (config.experimental_opt_in !== true) throw new Error('GPT subscription runtime requires explicit experimental opt-in.');
-    this.#summary=config.reasoning_summary;
+    this.#summary=config.reasoning_summary;this.#summaryUnsupported=config.on_summary_unsupported;
     this.#profile = Object.freeze({ ...config.model_profile });
     if (this.#profile.runtime !== 'gpt' || this.#profile.provider_id !== 'openai_subscription') throw new Error('GPT subscription requires a gpt/openai_subscription model profile.');
     this.capabilities = Object.freeze(
@@ -217,9 +219,21 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
         observation.content_type = safeContentType(response.headers.get('content-type'));
         observation.request_id_present = observation.request_id_present || hasRequestIdHeader(response.headers);
       }
+      if (this.#summary && response.status===400) {
+        const body=await readBoundedBody(response,this.#maxErrorBodyBytes,requestScope);
+        let rejected=false;
+        try {const error=JSON.parse(body)?.error;rejected=error?.param==='reasoning.summary'&&['unsupported_parameter','unsupported_value','unknown_parameter'].includes(error.code);}catch{/* Unknown errors are not option rejection. */}
+        if(!rejected)throw httpFailure(response.status,body,[...exactCredentials]);
+        this.#summary=undefined;this.#summaryUnsupported?.();
+        response=await this.#performRequest(request,credential,[...exactCredentials],requestScope,markProviderRequestSent);
+        observation.http_status=response.status;
+      }
       if (!response.ok) {
         const body = await readBoundedBody(response, this.#maxErrorBodyBytes, requestScope);
-        throw httpFailure(response.status, body, [...exactCredentials]);
+        const error=httpFailure(response.status, body, [...exactCredentials]);
+        const retry=response.headers.get('retry-after');
+        const reset=retry?(/^\d+$/.test(retry)?Math.ceil(Date.now()/1000)+Number(retry):Math.ceil(Date.parse(retry)/1000)):undefined;
+        throw error.details.retryable&&reset!==undefined&&Number.isSafeInteger(reset)&&reset>=0&&reset<=8640000000000?new SubscriptionFailure({...error.details,reset_at:reset}):error;
       }
       const parsed = await readCodexResponse(response, this.#maxResponseBodyBytes, requestScope, [...exactCredentials], summary=>onDisplay?.({type:'reasoning_summary',summary}));
       requestScope.throwIfAborted();

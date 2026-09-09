@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {ResponseThinking,useResponseProgress} from '../ResponseThinking.jsx';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
 import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon } from '../icons.jsx';
 import { uid } from '../data.js';
@@ -31,6 +32,8 @@ export function Conversation({ thread, tasks, onNewSession, members, memberMap, 
 
 function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
   const history = useConversationMessages(thread);
+  const responseProgress=useResponseProgress(thread.id);
+  const followBottom=useRef(true);
   const deletedConversation = thread.scope === 'private' && thread.members.length > 0 && thread.members.every(id => memberMap[id]?.deleted);
   const readOnly = thread.archived || deletedConversation;
   const [draft, setDraft] = useState('');
@@ -56,11 +59,12 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
   }
   const previousLast = useRef(null); const prependPosition = useRef(null);
   const lastId = history.items.at(-1)?.id || history.first?.id;
-  useEffect(() => { if (lastId && lastId !== previousLast.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: previousLast.current ? 'smooth' : 'instant' }); previousLast.current = lastId; }, [lastId]);
+  useEffect(() => { if (lastId && lastId !== previousLast.current && followBottom.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: previousLast.current ? 'smooth' : 'instant' }); previousLast.current = lastId; }, [lastId]);
   useLayoutEffect(() => {
     if (prependPosition.current && listRef.current) listRef.current.scrollTop = prependPosition.current.top + listRef.current.scrollHeight - prependPosition.current.height;
     prependPosition.current = null;
   }, [history.olderVersion]);
+  useLayoutEffect(()=>{if(followBottom.current&&listRef.current)listRef.current.scrollTop=listRef.current.scrollHeight;},[responseProgress]);
   async function loadEarlier() {
     const position = { top: listRef.current.scrollTop, height: listRef.current.scrollHeight }; prependPosition.current = position;
     if (!await history.loadMore() && prependPosition.current === position) prependPosition.current = null;
@@ -74,17 +78,23 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
       setDraft(''); setRequestKind('auto');setTargetId(''); setAttachments([]); setReplyTo(null); setRecipients([]); setCaret(0); inputRef.current?.focus();
     } } finally { setSending(false); }
   }
+  const shownMessages=[history.first,...history.items].filter(Boolean);
+  const shownIds=new Set(shownMessages.map(m=>m.id));
+  const spans=responseProgress.filter(p=>!p.anchor_id||shownIds.has(p.anchor_id));
+  const attachedReplies=new Set(spans.filter(p=>p.reply_id&&shownIds.has(p.reply_id)).map(p=>p.reply_id));
+  const messageNode=message=><Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} onMember={onMember} onReply={message=>{setReplyTo(message);inputRef.current?.focus();}} onArtifact={onArtifact}/>;
+  const thinkingAfter=id=>spans.filter(p=>p.anchor_id===id).reverse().map(p=><Fragment key={p.id}><ResponseThinking item={p} member={memberMap[p.agent_id]}/>{shownMessages.find(m=>m.id===p.reply_id)?messageNode(shownMessages.find(m=>m.id===p.reply_id)):null}</Fragment>);
   return <>
     <header className="message-scroll conversation-header" aria-label="会話のヘッダー">
       <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" onClick={onShowWork}>共同作業</button><button className="text-button" disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={15} />新規セッション</button><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : 'アーカイブ'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
     </header>
-    <div className="message-scroll conversation-replies" ref={listRef}>
+    <div className="message-scroll conversation-replies" ref={listRef} onScroll={()=>{const node=listRef.current;followBottom.current=node.scrollHeight-node.scrollTop-node.clientHeight<80;}}>
       <Message acknowledgments={thread.acknowledgments} message={history.first} isRoot title={thread.title} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
       <div className="reply-divider"><span>{Math.max(0, thread.message_count - 1)}件の返信</span><span /></div>
       {history.loading ? <p role="status">発言を読み込み中…</p> : null}
       {history.error ? <p role="alert">{history.error}<button className="text-button" onClick={history.reload}>再読み込み</button></p> : null}
       {history.next !== null ? <button className="text-button" disabled={history.loading} onClick={loadEarlier}>以前の返信を50件読み込む</button> : null}
-      <div className="replies">{history.items.map(message => <Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />)}</div>
+      <div className="replies">{thinkingAfter(history.first?.id)}{history.items.map(message=><Fragment key={message.id}>{!attachedReplies.has(message.id)?messageNode(message):null}{thinkingAfter(message.id)}</Fragment>)}{thinkingAfter(null)}</div>
       {thread.message_count === 1 && !tasks.some(task => !['done', 'canceled'].includes(task.status)) ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
     </div>
     <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。返信するには「保管から戻す」を選んでください。</p> : null}
@@ -140,7 +150,7 @@ function Presence({ members, paused, onPause, onAppearance, onMember, isPrivate,
     <div className="presence-members">{members.map(member => <div key={member.id} className={`presence-member ${member.status === 'sleeping' ? 'sleeping' : ''}`}>
       <button className="avatar-button presence-avatar" aria-label={`${member.name}のアイコンを変更`} title="アイコンを変更" onClick={() => onAppearance(member.id)}><Avatar member={member} size={57} /><span className="avatar-edit-hint"><PaletteIcon size={12} /></span></button>
       <button className="presence-member-info" onClick={() => onMember(member.id)}><strong>{member.name}</strong><StatusLabel member={member} paused={paused} /></button>{member.jobs?.length ? <button className="presence-job-count" aria-label={`${member.name}の担当する仕事（${member.jobs.length}件）`} aria-expanded={!!openJobs[member.id]} aria-controls={`jobs-${member.id}`} onClick={()=>setOpenJobs(current=>({...current,[member.id]:!current[member.id]}))}>{member.jobs.length}件<span className="progress-chevron" aria-hidden="true" /></button> : null}
-      {openJobs[member.id]&&member.jobs?.length ? <div className="presence-job-list" id={`jobs-${member.id}`}>{member.jobs.map(job=><div key={job.id}><span>{job.progress?.label || job.step}</span><p>{job.title}</p>{job.progress?.waiting_for?.length?<small>待ち先：{job.progress.waiting_for.join('、')}</small>:null}</div>)}</div>:null}{member.status === 'sleeping' ? <MoonIcon size={19} className="sleep-icon" /> : null}
+      {openJobs[member.id]&&member.jobs?.length ? <div className="presence-job-list" id={`jobs-${member.id}`}>{member.jobs.map(job=><div key={job.id}><span>{job.progress?.label || job.step}</span><p>{job.title}</p>{job.progress?.retry_at?<small>再確認予定：{new Date(job.progress.retry_at).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}</small>:null}{job.progress?.waiting_for?.length?<small>待ち先：{job.progress.waiting_for.join('、')}</small>:null}</div>)}</div>:null}{member.status === 'sleeping' ? <MoonIcon size={19} className="sleep-icon" /> : null}
     </div>)}</div>
   </div>;
 }

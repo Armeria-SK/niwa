@@ -51,8 +51,8 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     const config = readInstallation(root);
     const auth = new WebAuth(config.origin, adminKey(paths));
     runtime = new Runtime(paths.state);
-    const admin = runtime.administrator(); runtime.bootstrap(admin); runtime.tasks.recover(admin);
-    subscription = new Subscription(new FileCredentialStore(join(paths.secrets, 'codex.json')), () => runtime!.invalidateProvider(admin, 'openai_subscription'));
+    const admin = runtime.administrator(); runtime.bootstrap(admin); runtime.tasks.recover(admin); runtime.tasks.recoverProviderWaits(admin,true);
+    subscription = new Subscription(new FileCredentialStore(join(paths.secrets, 'codex.json')), () => runtime!.invalidateProvider(admin, 'openai_subscription'), {}, config.reasoningSummary===true);
     const models = new ModelGateway(runtime, fetch, subscription);
     backups = new Backups(runtime, paths, config);
     const searchKey = readSearchKey(paths.secrets);

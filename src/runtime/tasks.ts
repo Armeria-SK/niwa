@@ -255,6 +255,12 @@ export class Tasks {
     const task=this.get(actor,taskId);
     check(this.#db.prepare('SELECT 1 FROM messages WHERE id=? AND room_id=?').get(messageId,task.room_id),'forbidden','Message is outside task conversation');
     this.#db.prepare('INSERT OR IGNORE INTO task_message_links VALUES (?,?,?)').run(messageId,taskId,kind);
+    if(['response','progress'].includes(kind)) {
+      const span=this.#db.prepare('SELECT id FROM response_progress WHERE task_id=? AND finished_at IS NULL').get(taskId);
+      if(span){const summary=this.progress(actor,taskId).summary;if(summary)this.#responseSummaries.set(String(span.id),summary);
+        if(this.#responseSummaries.size>100)this.#responseSummaries.delete(this.#responseSummaries.keys().next().value!);
+        this.#db.prepare('UPDATE response_progress SET reply_id=?,finished_at=? WHERE id=?').run(messageId,Date.now(),String(span.id));}
+    }
   }
   completeInquiry(actor:Actor,id:string,result:string) {
     this.#admin(actor);const task=this.get(actor,id);
@@ -424,11 +430,42 @@ export class Tasks {
     const rows = db.prepare('SELECT step,memory_revision,rules_revision,discarded,events FROM task_steps WHERE task_id=? ORDER BY step').all(id) as { step: number; memory_revision: number; rules_revision: number; discarded: number; events: string }[];
     return rows.map(row => ({ ...row, events: JSON.parse(row.events) as ModelEvent[] }));
   }
+  #responseSummaries = new Map<string,string>();
+  responseProgress(actor:Actor,room:string) {
+    this.#access.room(actor,room);
+    const rows=this.#db.prepare(`SELECT p.* FROM response_progress p JOIN tasks t ON t.id=p.task_id WHERE t.room_id=? ORDER BY p.started_at DESC,p.rowid DESC LIMIT 100`).all(room);
+    return rows.flatMap(row=>{
+      const task=this.get(actor,String(row.task_id));
+      if(this.#db.prepare('SELECT 1 FROM deleted_agents WHERE id=?').get(task.agent_id))return [];
+      const revision=this.#access.memory(actor,task.agent_id).prepare('SELECT revision FROM memory_state WHERE id=1').get()!.revision;
+      const rules=this.#db.prepare('SELECT revision FROM common_rules WHERE id=1').get()!.revision;
+      if(row.memory_revision!==revision||row.rules_revision!==rules)return [];
+      const progress=this.progress(actor,task.id);
+      return [{...progress,id:String(row.id),anchor_id:row.anchor_id,reply_id:row.reply_id,started_at:row.started_at,finished_at:row.finished_at,
+        label:row.finished_at?'返答済み':progress.label,
+        summary:task.paused||this.#paused()?null:row.finished_at?this.#responseSummaries.get(String(row.id))??null:progress.summary}];
+    });
+  }
+  providerFailure(actor:Actor,lease:TaskLease,error:Extract<ModelEvent,{type:'failed'}>['error']) {
+    this.#owned(actor,lease);
+    const retry=error.code==='QUOTA_EXCEEDED'||(error.retryable&&['PROVIDER_UNAVAILABLE','NETWORK_ERROR','TIMED_OUT','RATE_LIMITED'].includes(error.code));
+    this.#db.prepare(`INSERT INTO provider_failures VALUES (?,?,?,1,?,?) ON CONFLICT(task_id) DO UPDATE SET code=excluded.code,retryable=excluded.retryable,attempts=attempts+1,reset_at=excluded.reset_at,created_at=excluded.created_at`).run(lease.task.id,error.code,Number(retry),error.reset_at??null,Date.now());
+    const attempts=Number(this.#db.prepare('SELECT attempts FROM provider_failures WHERE task_id=?').get(lease.task.id)!.attempts);
+    this.wait(actor,lease,'waiting_provider',`モデル応答を完了できませんでした (${error.code})。${retry?'再確認予定まで待機します。':'接続設定の確認後、同じ仕事を再開してください。'}`,retry);
+    this.waitKind(actor,lease,error.code==='QUOTA_EXCEEDED'?'provider_quota':['AUTH_UNAVAILABLE','AUTHENTICATION_FAILED','PERMISSION_DENIED'].includes(error.code)?'authentication':retry?'network':'unknown');
+    if(retry){const delay=lease.task.internal_autonomous?Math.min(60,15*2**Math.min(attempts-1,2))*60000:Math.min(900000,60000*2**Math.min(attempts-1,4));
+      this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(Math.max(Date.now()+delay,(error.reset_at??0)*1000),lease.task.id);}
+  }
   #summaries = new Map<string,{call:string;revision:number;text:string}>();
   activity(actor:Actor,lease:TaskLease,call:string,phase:string,status='running',revision?:number) {
     this.#owned(actor,lease);
     const memory=revision??Number(this.#access.memory(actor,lease.task.agent_id).prepare('SELECT revision FROM memory_state WHERE id=1').get()!.revision);
     const rules=Number(this.#db.prepare('SELECT revision FROM common_rules WHERE id=1').get()!.revision),now=Date.now();
+    this.#db.prepare('DELETE FROM response_progress WHERE task_id=? AND (memory_revision<>? OR rules_revision<>?)').run(lease.task.id,memory,rules);
+    if(!this.#db.prepare('SELECT 1 FROM response_progress WHERE task_id=? AND finished_at IS NULL').get(lease.task.id)) {
+      const anchor=this.#db.prepare('SELECT m.id FROM messages m JOIN task_message_links l ON l.message_id=m.id WHERE l.task_id=? ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1').get(lease.task.id)?.id??null;
+      this.#db.prepare('INSERT INTO response_progress VALUES (?,?,?,?,?,?,?,NULL)').run(randomUUID(),lease.task.id,anchor,null,memory,rules,now);
+    }
     this.#db.prepare(`INSERT INTO task_activity VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET
       call_id=excluded.call_id,lease=excluded.lease,memory_revision=excluded.memory_revision,rules_revision=excluded.rules_revision,
       phase=excluded.phase,status=excluded.status,started_at=CASE WHEN call_id=excluded.call_id THEN started_at ELSE excluded.started_at END,updated_at=excluded.updated_at`)
@@ -451,7 +488,7 @@ export class Tasks {
   }
   clearActivity(actor:Actor,id:string) {
     this.#admin(actor);this.get(actor,id);this.#summaries.delete(id);
-    for(const table of ['task_activity','task_observations','task_waits','task_memory_skips'])this.#db.prepare('DELETE FROM '+table+' WHERE task_id=?').run(id);
+    for(const table of ['response_progress','task_activity','task_observations','task_waits','task_memory_skips'])this.#db.prepare('DELETE FROM '+table+' WHERE task_id=?').run(id);
   }
   progress(actor:Actor,id:string,factsOnly=false) {
     const task=this.get(actor,id),row=this.#db.prepare('SELECT * FROM task_activity WHERE task_id=?').get(id);
@@ -462,7 +499,7 @@ export class Tasks {
     const active=task.state==='running'&&!task.paused&&!this.#paused()&&current&&row?.lease===this.#read(id).lease_token;
     const waiting=this.#db.prepare('SELECT kind FROM task_waits WHERE task_id=?').get(id)?.kind??'unknown';
     const kind=task.paused||this.#paused()?'paused':['waiting_provider','waiting_user'].includes(task.state)&&waiting!=='unknown'?String(waiting):task.state;
-    const labels:Record<string,string>={running:'作業中',paused:'停止中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_provider:'理由未確認の待機',waiting_user:'対応待ち（理由未確認）',user_input:'管理者の入力待ち',approval:'承認の判断待ち',invalid_output:'応答形式の確認待ち',budget:'自発活動の利用枠待ち',schedule_budget:'予定の利用枠待ち',network:'接続を再試行中',authentication:'認証の確認待ち',provider_quota:'接続先の利用枠待ち',unknown:'理由未確認の待機',stalled:'進展がないため再確認待ち',completed:'完了',failed:'失敗',cancelled:'中止'};
+    const labels:Record<string,string>={running:'作業中',paused:'停止中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_provider:'理由未確認の待機',waiting_user:'対応待ち（理由未確認）',user_input:'管理者の入力待ち',approval:'承認の判断待ち',invalid_output:'応答形式の確認待ち',budget:'自発活動の利用枠待ち',schedule_budget:'予定の利用枠待ち',network:task.provider_retry_at?'接続の再試行待ち':'接続の確認待ち',authentication:'認証の確認待ち',provider_quota:'接続先の利用枠待ち',unknown:'理由未確認の待機',stalled:'進展がないため再確認待ち',completed:'完了',failed:'失敗',cancelled:'中止'};
     const phases:Record<string,string>={resolve:'接続を準備中',model:'返答を考え中',memory_review:'記憶を整理中',task_summary_save:'結果を整理中',read:'資料を確認中',execute:'コードを実行中',tool:'操作中'};
     const summary=this.#summaries.get(id);
     return {task_id:id,agent_id:task.agent_id,state:task.state,kind,label:active?(phases[String(row.phase)]??'作業中'):(labels[kind]??'状態を確認中'),
@@ -597,6 +634,27 @@ export class Tasks {
       this.#owned(actor, lease); this.#change(lease.task.id, state, null, reason);this.waitKind(actor,lease,'unknown');
       if (retryProvider) this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(Date.now() + (lease.task.internal_autonomous ? Math.min(60,15*2**Math.min(lease.task.attempt-1,2))*60_000 : 60_000), lease.task.id);
     });
+  }
+  /** Narrow repair for the old generated 5xx wait, backed by a failed call record. */
+  recoverProviderWaits(actor:Actor,apply=false) {
+    this.#admin(actor);
+    const rows=this.#db.prepare(`SELECT t.id FROM tasks t JOIN agents a ON a.id=t.agent_id
+      WHERE t.state='waiting_provider' AND t.paused=0 AND t.provider_retry_at IS NULL AND t.deadline_at>?
+      AND a.provider='openai_subscription' AND a.status='active'
+      AND t.wait_reason=?
+      AND (SELECT status FROM prompt_runs WHERE task_id=t.id ORDER BY id DESC LIMIT 1)='failed'
+      AND NOT EXISTS(SELECT 1 FROM provider_failures WHERE task_id=t.id)
+      AND NOT EXISTS(SELECT 1 FROM approval_requests WHERE task_id=t.id AND status='pending')
+      AND NOT EXISTS(SELECT 1 FROM external_operations WHERE task_id=t.id AND output IS NULL)
+      AND NOT EXISTS(SELECT 1 FROM room_preferences WHERE room_id=t.room_id AND archived=1)`).all(Date.now(),'モデル応答を完了できませんでした (PROVIDER_UNAVAILABLE)。');
+    const ids=rows.filter(row=>{const task=this.get(actor,String(row.id));return this.#access.participant(task.agent_id,task.room_id);}).map(row=>String(row.id));
+    if(apply&&!this.#paused())transaction(this.#db,()=>{for(const id of ids){
+      this.#db.prepare('INSERT INTO provider_failures VALUES (?,?,1,1,NULL,?)').run(id,'PROVIDER_UNAVAILABLE',Date.now());
+      this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(Date.now()+60000,id);
+      this.#db.prepare("INSERT INTO task_waits VALUES (?,'network') ON CONFLICT(task_id) DO UPDATE SET kind='network'").run(id);
+      this.#event(id,'provider_retry_scheduled');
+    }});
+    return ids;
   }
   retryProviders(actor: Actor, now = Date.now()): void {
     this.#admin(actor);

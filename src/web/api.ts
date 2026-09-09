@@ -157,6 +157,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/rooms$/, schema: object({ title: Type.String({ minLength: 1, maxLength: 200 }), participants: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
       run: (_m, b) => runtime.createRoom(admin, b.title as string, b.participants as string[] | undefined) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, run: m => runtime.messages(admin, m[1]!) },
+    { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/response-progress$/, run: m => runtime.tasks.responseProgress(admin,m[1]!) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/work-notes$/, run: m => ({notes:runtime.workNotes(admin,m[1]!),progress:runtime.tasks.list(admin).filter(t=>t.room_id===m[1]).slice(-50).map(t=>runtime.tasks.progress(admin,t.id))}) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/coordination$/, run: m => ({tasks:runtime.coordination(admin,m[1]!).map(task=>({...task,progress:runtime.tasks.progress(admin,String(task.id))})),digest:runtime.coordinationDigest(admin,m[1]!)}) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages\/page$/, run: (m, _b, url) => runtime.messagePage(admin, m[1]!, Number(url.searchParams.get('before') ?? Number.MAX_SAFE_INTEGER)) },

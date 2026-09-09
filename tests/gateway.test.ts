@@ -124,7 +124,7 @@ test('ordinary 429 does not select fallback and quota without a selected fallbac
     runtime.tasks.create(admin, leader.id, room.id, '通信制限');
     await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
     assert.match(runtime.tasks.list(admin)[0]!.wait_reason!, /RATE_LIMITED/); assert.equal(localCalls, 0);
-    assert.equal(runtime.tasks.list(admin)[0]!.provider_retry_at, null);
+    assert.ok(runtime.tasks.list(admin)[0]!.provider_retry_at! > Date.now());
     quota = true; runtime.configureFallback(admin, 'http://127.0.0.1:11434', null);
     runtime.tasks.create(admin, leader.id, room.id, '上限到達');
     await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);

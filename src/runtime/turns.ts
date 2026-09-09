@@ -164,9 +164,7 @@ export class TurnRunner {
               if (fallback.adapter_id === 'ollama') { adapter = fallback; continue; }
             } catch { /* Leave a visible provider wait when the configured fallback is unavailable. */ }
           }
-          const retry = failure.error.code === 'QUOTA_EXCEEDED' || !!lease.task.internal_autonomous;
-          runtime.tasks.wait(actor, lease, 'waiting_provider', `モデル応答を完了できませんでした (${failure.error.code})。${retry ? (lease.task.internal_autonomous ? '待機後に接続先を再確認します。' : '1分後に接続先を再確認します。') : ''}`, retry);
-          runtime.tasks.waitKind(actor,lease,failure.error.code==='QUOTA_EXCEEDED'?'provider_quota':['AUTH_UNAVAILABLE','AUTHENTICATION_FAILED'].includes(failure.error.code)?'authentication':['NETWORK_ERROR','TIMED_OUT'].includes(failure.error.code)?'network':'unknown');
+          runtime.tasks.providerFailure(actor,lease,failure.error);
           return;
         }
         if (phaseTool) {

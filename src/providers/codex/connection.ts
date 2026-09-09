@@ -7,6 +7,7 @@ import type { ModelAdapter } from '../shared/adapter.ts';
 /** One instance per account in the host; never share a task adapter across bots or rooms. */
 export class CodexConnection {
   #config: Omit<OpenAISubscriptionAdapterConfig, 'model_profile'>;
+  #unsupportedSummaries = new Set<string>();
   readonly catalog: OpenAISubscriptionModelCatalogAdapter;
   constructor(config: Omit<OpenAISubscriptionAdapterConfig, 'model_profile'>) {
     this.#config = { ...config };
@@ -20,7 +21,8 @@ export class CodexConnection {
     });
   }
   create(profile: ModelProfile): ModelAdapter {
-    const adapter = new OpenAISubscriptionAdapter({ ...this.#config, model_profile: profile });
+    const config={...this.#config};if(this.#unsupportedSummaries.has(profile.provider_model_id))delete config.reasoning_summary;
+    const adapter = new OpenAISubscriptionAdapter({ ...config, model_profile: profile, on_summary_unsupported:()=>{this.#unsupportedSummaries.add(profile.provider_model_id);} });
     // Each task gets independent continuation state; only OAuth refresh remains account-coordinated.
     return { adapter_id: adapter.adapter_id, capabilities: { ...adapter.capabilities, supports_parallel_sessions: true },
       supported_efforts: adapter.supported_efforts, ...(adapter.context_window === undefined ? {} : { context_window: adapter.context_window }),

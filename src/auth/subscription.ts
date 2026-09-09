@@ -35,10 +35,10 @@ export class Subscription {
   #disconnecting: Promise<void> | undefined;
   #revision = 0;
   get revision(): number { return this.#revision; }
-  constructor(store: CredentialStore, changed: () => void, config: OAuthClientConfig = {}) {
+  constructor(store: CredentialStore, changed: () => void, config: OAuthClientConfig = {}, reasoningSummary = false) {
     this.#config = { ...config, experimental_opt_in: true }; this.#changed = changed;
     this.account = new OAuthAccount(store, credential => refreshOAuthCredential(this.#config, credential.refresh_token, credential.account_id));
-    this.connection = new CodexConnection({ experimental_opt_in: true, credential_store: this.account, refresh: this.account.refresh,
+    this.connection = new CodexConnection({ ...(reasoningSummary?{reasoning_summary:'auto' as const}:{}), experimental_opt_in: true, credential_store: this.account, refresh: this.account.refresh,
       ...(config.fetch ? { fetch: config.fetch } : {}) });
   }
   async status() {
