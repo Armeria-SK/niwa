@@ -69,7 +69,7 @@ export function StatusLabel({ member, paused = false, showDescription = true }) 
   const separator = activity.indexOf(' · ');
   const status = separator < 0 ? activity : activity.slice(0, separator);
   const description = !showDescription || separator < 0 ? '' : activity.slice(separator + 3).trim();
-  return <span className={`status-label ${sleeping || paused ? 'muted-status' : ''}`}><span className="status-dot" /><span className="status-copy"><span className="status-name">{status}{description ? '：' : ''}</span>{description ? <span className="status-description">{description}</span> : null}</span></span>;
+  return <span title={activity} className={`status-label ${sleeping || paused ? 'muted-status' : ''}`}><span className="status-dot" /><span className="status-copy"><span className="status-name">{status}{description ? '：' : ''}</span>{description ? <span className="status-description">{description}</span> : null}</span></span>;
 }
 
 export function MotionPicker({ value, onChange }) {

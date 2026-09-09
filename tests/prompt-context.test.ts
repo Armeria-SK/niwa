@@ -23,7 +23,7 @@ test('structured instructions separate saved policy and phases; retain administr
   assert.match(req.system_instructions,/structured-v5/);assert.match(req.system_instructions,/人工方針をそのまま保持/);assert.match(req.system_instructions,/静かな観察者/);assert.doesNotMatch(req.system_instructions,/発言の先頭に「@/);
   assert.match(JSON.stringify(req.messages),/古いが重要/);assert.doesNotMatch(JSON.stringify(req.messages),/古い会話0"/);assert.equal(state.task.prompt,undefined);assert.equal(JSON.stringify(req.messages).split('今回の依頼は人数の根拠照合').length-1,1);
   phases++;if(req.tools.length===1){assert.match(req.system_instructions,/記憶整理/);assert.doesNotMatch(req.system_instructions,/会話はconversation_sendを単独/);return call('memory_review',{memories:[]});}
-  assert.match(req.system_instructions,/本文に宛先の@を重ねません/);assert.ok(req.tools.some(t=>t.name==='history_read'));assert.ok(!req.tools.some(t=>t.name==='quality_plan'));return done('人数は未確認です。');
+  assert.match(req.system_instructions,/本文に宛先の@を重ねません/);assert.match(req.system_instructions,/新情報のないメモ・「次にまとめる」だけの定型投稿は不要/);assert.match(req.system_instructions,/質問への回答、失敗・停止、承認の連絡/);assert.ok(req.tools.some(t=>t.name==='history_read'));assert.ok(!req.tools.some(t=>t.name==='quality_plan'));return done('人数は未確認です。');
  }),{},{promptVersion:'structured-v5'});
  const task=r.tasks.create(admin,a.id,room.id,'今回の依頼は人数の根拠照合');await runner.run(r.tasks.claim(admin)!);assert.equal(phases,2);const runs=r.tasks.promptRuns(admin,task.id);assert.equal(runs.length,2);assert.ok(runs.every(x=>x.version==='structured-v5'&&Number(x.input_bytes)>0));assert.ok(!JSON.stringify(runs).includes('静かな'));assert.equal(r.commonRules(admin).body,'人工方針をそのまま保持');
 });

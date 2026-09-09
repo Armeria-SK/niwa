@@ -1,0 +1,19 @@
+.markdown-body { white-space:normal; overflow-wrap:anywhere; line-height:1.85; min-width:0; }
+.markdown-body > :first-child { margin-top:0; }
+.markdown-body > :last-child { margin-bottom:0; }
+.markdown-body p { margin:0 0 .9em; }
+.markdown-body :is(h1,h2,h3,h4,h5,h6) { font-size:1em; font-weight:600; line-height:1.65; margin:1.3em 0 .6em; }
+.markdown-body :is(ul,ol) { padding-left:1.6em; margin:.6em 0; }
+.markdown-body li > p { margin:.3em 0; }
+.markdown-body blockquote { margin:.8em 0; padding-left:1em; border-left:2px solid var(--border); color:var(--muted); }
+.markdown-body pre { white-space:pre; overflow:auto; max-width:100%; padding:12px; background:var(--surface); border:1px solid var(--border); border-radius:6px; }
+.markdown-body code { font-size:.95em; }
+.markdown-body a { color:inherit; text-decoration:underline; text-underline-offset:3px; }
+.markdown-table { max-width:100%; overflow-x:auto; margin:1em 0; }
+.markdown-table table { border-collapse:collapse; font-size:inherit; width:100%; }
+.markdown-table :is(th,td) { border:1px solid var(--border); padding:6px 10px; text-align:left; min-width:90px; }
+.markdown-body :is(a,pre,.markdown-table):focus-visible,summary:focus-visible { outline:2px solid var(--muted); outline-offset:3px; }
+.artifact-document-view { margin:22px auto 0; max-width:72ch; font-size:14px; }
+.artifact-document-view > .read-toggle { font-size:12px; }
+.artifact-version-badges { display:flex; flex-wrap:wrap; gap:8px; font-size:12px; color:var(--muted); }
+.artifact-version-badges span { border:1px solid var(--border); border-radius:5px; padding:2px 6px; }

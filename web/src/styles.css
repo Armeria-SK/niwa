@@ -800,3 +800,15 @@
 }
 .workspace-entry { width: 100%; text-align: left; color: var(--text); }
 .workspace-entry:hover { border-color: var(--green); }
+
+/* Compact operational facts preserve the accepted typography. */
+.presence-member-info { min-width:100px; flex:1; }
+.presence-member-info .status-label,.member-list-row .status-label { overflow-wrap:normal; word-break:normal; }
+.presence-job-list details { font-size:11px; margin-top:6px; }
+.presence-job-list details p { white-space:pre-wrap; overflow-wrap:anywhere; }
+.work-facts { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.work-facts p { margin:5px 0; }
+.artifact-card details { font-size:12px; margin:10px 0; }
+
+.member-list-row .status-copy { flex:1; min-width:0; }
+.member-list-row .status-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

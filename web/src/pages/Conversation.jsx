@@ -1,8 +1,10 @@
+import {memberWork,presenceCounts,shortWork,workLabel} from '../work-display.js';
+import {WorkFacts} from '../WorkFacts.jsx';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
 import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon } from '../icons.jsx';
 import { uid } from '../data.js';
-import { MentionText } from '../MentionText.jsx';
+import { Markdown } from '../Markdown.jsx';
 import { useConversationMessages } from '../useConversationMessages.js';
 import './Conversation.css';
 import {CoordinationBoard} from '../CoordinationBoard.jsx';
@@ -12,10 +14,8 @@ export function Conversation({ thread, tasks, onNewSession, members, memberMap, 
   const [showWork, setShowWork] = useState(false);
   const visibleMembers = thread.scope === 'private' ? members.filter(item => thread.members.includes(item.id)) : members;
   const scopedMembers = visibleMembers.map(member => {
-    const jobs = tasks.filter(task => task.member === member.id && task.thread === thread.id && !['done','canceled','failed'].includes(task.status)).sort((a,b)=>(a.state==='running'?-1:0)-(b.state==='running'?-1:0));
-    const current = jobs[0];
-    const activity = paused || current?.paused ? '停止中' : current ? current.progress?.label || ({running:'作業中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_user:'対応待ち',waiting_provider:'接続待ち'})[current.state] || '待機中' : member.runtimeMotion === 'sway' ? '別の会話で対応中' : '返答待機';
-    return {...member,activity:activity+(jobs.length>1?`・ほか${jobs.length-1}件`:""),jobs};
+    const work=memberWork(tasks.filter(task=>task.member===member.id&&task.thread===thread.id),paused,member.status==='sleeping');
+    return {...member,...work,workKind:work.kind};
   });
   const presenceProps = { members: scopedMembers, paused, onPause, onAppearance, onMember, isPrivate: thread.scope === 'private' };
   return <>
@@ -115,14 +115,14 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
 function Message({ acknowledgments = [], message, isRoot = false, title, memberMap, onMember, onReply, onArtifact }) {
   if (!message) return <h1>{title}</h1>;
   const member = memberMap[message.author];
-  return <article className={`message ${isRoot ? 'root-message' : ''}`}>
+  return <article data-message-id={message.id} className={`message ${isRoot ? 'root-message' : ''}`}>
     {member ? <button className="avatar-button" aria-label={`${member.name}のプロフィール`} onClick={() => onMember(member.id)}><Avatar member={member} size={60} /></button> : <Avatar size={60} />}
-    <div className="message-content"><div className="message-meta"><strong>{member?.name || 'あなた'}</strong><time>{message.time}</time><IconButton label={`${member?.name || 'あなた'}のメッセージに返信`} className="message-reply" onClick={() => onReply(message)}><ReplyIcon size={18} /></IconButton></div>
+    <div className="message-content"><div className="message-meta"><strong>{member?.name || 'あなた'}</strong><time dateTime={message.created_at}>{message.time}</time><IconButton label={`${member?.name || 'あなた'}のメッセージに返信`} className="message-reply" onClick={() => onReply(message)}><ReplyIcon size={18} /></IconButton></div>
       {isRoot ? <h1>{title}</h1> : null}
       {(message.text || message.replyTo || message.artifact || message.attachments?.length) ? <div className="message-bubble">
       {message.reply_to ? <span className="message-reply-label"><ReplyIcon size={13} />返信</span> : null}
       {message.replyTo ? <blockquote><span>{memberMap[message.replyTo.author]?.name || 'あなた'}</span>{message.replyTo.text}</blockquote> : null}
-      {message.text ? <p><MentionText text={message.text} members={memberMap} /></p> : null}
+      {message.text ? <Markdown text={message.text} members={memberMap} /> : null}
       {message.artifact ? <button className="file-link" onClick={onArtifact}><FileIcon size={19} />雨音の調査メモ.md</button> : null}
       {message.attachments?.map((file, index) => <span className="file-link local-attachment" key={`${file.name}-${index}`}><FileIcon size={18} />{file.name}<small>{Math.max(1, Math.round(file.size / 1024))} KB · 添付の表示例</small></span>)}
       </div> : null}
@@ -133,15 +133,15 @@ function Message({ acknowledgments = [], message, isRoot = false, title, memberM
 
 function Presence({ members, paused, onPause, onAppearance, onMember, isPrivate, noHeading = false }) {
   const [openJobs,setOpenJobs]=useState({});
-  const active = members.filter(item => item.status !== 'sleeping');
+
   return <div className="presence-content">
     {!noHeading ? <h2>メンバーの様子</h2> : null}
-    <div className="presence-summary"><span>{paused ? '活動を一時停止中' : `${active.length}人が活動中`}</span><IconButton label={paused ? '全体の活動を再開' : '全体の活動を一時停止'} className={paused ? 'resume-button' : ''} onClick={onPause}>{paused ? <PlayIcon size={19} weight="fill" /> : <PauseIcon size={19} weight="fill" />}</IconButton></div>
+    <div className="presence-summary"><span>{paused ? '活動を一時停止中' : presenceCounts(members)}</span><IconButton label={paused ? '全体の活動を再開' : '全体の活動を一時停止'} className={paused ? 'resume-button' : ''} onClick={onPause}>{paused ? <PlayIcon size={19} weight="fill" /> : <PauseIcon size={19} weight="fill" />}</IconButton></div>
     {isPrivate ? <p className="presence-scope"><LockIcon size={14} />あなたとの個別の会話</p> : null}
     <div className="presence-members">{members.map(member => <div key={member.id} className={`presence-member ${member.status === 'sleeping' ? 'sleeping' : ''}`}>
       <button className="avatar-button presence-avatar" aria-label={`${member.name}のアイコンを変更`} title="アイコンを変更" onClick={() => onAppearance(member.id)}><Avatar member={member} size={57} /><span className="avatar-edit-hint"><PaletteIcon size={12} /></span></button>
       <button className="presence-member-info" onClick={() => onMember(member.id)}><strong>{member.name}</strong><StatusLabel member={member} paused={paused} /></button>{member.jobs?.length ? <button className="presence-job-count" aria-label={`${member.name}の担当する仕事（${member.jobs.length}件）`} aria-expanded={!!openJobs[member.id]} aria-controls={`jobs-${member.id}`} onClick={()=>setOpenJobs(current=>({...current,[member.id]:!current[member.id]}))}>{member.jobs.length}件<span className="progress-chevron" aria-hidden="true" /></button> : null}
-      {openJobs[member.id]&&member.jobs?.length ? <div className="presence-job-list" id={`jobs-${member.id}`}>{member.jobs.map(job=><div key={job.id}><span>{job.progress?.label || job.step}</span><p>{job.title}</p>{job.progress?.retry_at?<small>再確認予定：{new Date(job.progress.retry_at).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}</small>:null}{job.progress?.waiting_for?.length?<small>待ち先：{job.progress.waiting_for.join('、')}</small>:null}</div>)}</div>:null}{member.status === 'sleeping' ? <MoonIcon size={19} className="sleep-icon" /> : null}
+      {openJobs[member.id]&&member.jobs?.length ? <div className="presence-job-list" id={`jobs-${member.id}`}>{member.jobs.map(job=><div key={job.id}><span>{workLabel(job,paused)}</span><p>{shortWork(job.title)}</p><WorkFacts task={job} compact/><details><summary>依頼全文</summary><p>{job.prompt||job.title}</p></details></div>)}</div>:null}{member.status === 'sleeping' ? <MoonIcon size={19} className="sleep-icon" /> : null}
     </div>)}</div>
   </div>;
 }

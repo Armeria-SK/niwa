@@ -514,13 +514,15 @@ export class Tasks {
     const kind=task.paused||this.#paused()?'paused':['waiting_provider','waiting_user'].includes(task.state)&&waiting!=='unknown'?String(waiting):task.state;
     const labels:Record<string,string>={running:'作業中',paused:'停止中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_provider:'理由未確認の待機',waiting_user:'対応待ち（理由未確認）',user_input:'管理者の入力待ち',approval:'承認の判断待ち',invalid_output:'応答形式の確認待ち',budget:'自発活動の利用枠待ち',schedule_budget:'予定の利用枠待ち',network:task.provider_retry_at?'接続の再試行待ち':'接続の確認待ち',authentication:'認証の確認待ち',provider_quota:'接続先の利用枠待ち',unknown:'理由未確認の待機',stalled:'進展がないため再確認待ち',completed:'完了',failed:'失敗',cancelled:'中止'};
     const phases:Record<string,string>={resolve:'接続を準備中',model:'返答を考え中',memory_review:'記憶を整理中',task_summary_save:'結果を整理中',read:'資料を確認中',execute:'コードを実行中',tool:'操作中'};
+    const waitingTasks=task.state==='waiting_child'?this.#db.prepare(`SELECT t.id,t.agent_id,a.name,t.prompt,t.state FROM tasks t JOIN agents a ON a.id=t.agent_id
+      LEFT JOIN task_child_dependencies d ON d.task_id=t.id WHERE t.parent_id=? AND t.room_id=? AND t.state NOT IN ('completed','failed','cancelled') AND coalesce(d.required,1)=1`).all(id,task.room_id):[];
     const summary=this.#summaries.get(id);
     return {task_id:id,agent_id:task.agent_id,state:task.state,kind,label:active?(phases[String(row.phase)]??'作業中'):(labels[kind]??'状態を確認中'),
-      phase:current?row?.phase:null,status:active?row.status:task.state,started_at:current?row?.started_at:null,last_activity_at:current?row?.updated_at:null,
+      phase:current?row?.phase:null,status:active?row.status:task.state,started_at:current?row?.started_at:null,last_activity_at:Math.max(task.updated_at, current?Number(row?.updated_at??0):0),
       retry_at:task.state==='waiting_provider'?task.provider_retry_at:null,
       summary:!factsOnly&&active&&summary&&summary.call===row.call_id&&summary.revision===revision?summary.text:null,
       recent:!factsOnly&&current?this.#db.prepare('SELECT name,failure,created_at FROM task_observations WHERE task_id=? AND memory_revision=? AND rules_revision=? ORDER BY rowid DESC LIMIT 6').all(id,revision!,rules!):[],
-      waiting_for:task.state==='waiting_child'?this.#db.prepare("SELECT DISTINCT a.name FROM tasks t JOIN agents a ON a.id=t.agent_id WHERE t.parent_id=? AND t.state NOT IN ('completed','failed','cancelled')").all(id).map(r=>r.name):[]};
+      waiting_for:[...new Set(waitingTasks.map(r=>r.name))],waiting_tasks:waitingTasks.map(r=>({id:String(r.id),agent_id:String(r.agent_id),name:String(r.name),state:String(r.state),prompt:redactSecrets(String(r.prompt)).slice(0,240)}))};
   }
   observe(actor:Actor,lease:TaskLease,operation:string,name:string,args:JsonObject,result:JsonObject) {
     this.#owned(actor,lease);const memory=this.#access.memory(actor,lease.task.agent_id).prepare('SELECT revision FROM memory_state WHERE id=1').get()!.revision;

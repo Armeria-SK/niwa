@@ -504,9 +504,9 @@ export class Runtime {
   artifacts(actor: Actor, query = ''): Record<string, unknown>[] {
     check(typeof query === 'string' && query.length <= 200, 'invalid', 'Invalid artifact query');
     const rooms = new Set(this.rooms(actor).map(room => room.id));
-    return this.#db.prepare(`SELECT id,room_id,author_id,name,kind,description,created_at FROM artifacts
+    return this.#db.prepare(`SELECT id,room_id,author_id,name,kind,description,created_at,coalesce(v.series_id,id) AS series_id,coalesce(v.version,1) AS version FROM artifacts LEFT JOIN artifact_versions v ON v.artifact_id=artifacts.id
       WHERE instr(lower(name || ' ' || description || ' ' || content), lower(?)) > 0 ORDER BY created_at DESC`)
-      .all(query.trim()).filter(row => rooms.has(row.room_id as string)&&this.workareas.visible(actor,String(row.id))&&this.quality.readable(actor,String(row.id)));
+      .all(query.trim()).filter(row => rooms.has(row.room_id as string)&&this.workareas.visible(actor,String(row.id))&&this.quality.readable(actor,String(row.id))).map(row=>({...row,quality_status:this.artifactVersions.status(actor,String(row.id))}));
   }
   artifact(actor: Actor, id: string): Record<string, unknown> {
     const row = this.#db.prepare('SELECT * FROM artifacts WHERE id=?').get(text(id, 100));
@@ -782,9 +782,16 @@ export class Runtime {
     this.#room(actor, roomId);
     check(Number.isSafeInteger(before) && before > 0, 'invalid', 'Invalid message cursor');
     const first = this.#db.prepare('SELECT *,rowid AS sequence FROM messages WHERE room_id=? ORDER BY rowid LIMIT 1').get(roomId) as (Message & { sequence: number }) | undefined;
-    const rows = this.#db.prepare('SELECT *,rowid AS sequence FROM messages WHERE room_id=? AND rowid>? AND rowid<? ORDER BY rowid DESC LIMIT 51')
-      .all(roomId, first?.sequence ?? 0, before) as unknown as (Message & { sequence: number })[];
-    return { first: first ?? null, items: rows.slice(0, 50).reverse(), next: rows.length > 50 ? rows[49]!.sequence : null };
+    // Keep the first request pinned; page all later messages by server time and rowid.
+    const cursor=before===Number.MAX_SAFE_INTEGER?null:this.#db.prepare('SELECT created_at,rowid AS sequence FROM messages WHERE room_id=? AND rowid=?').get(roomId,before);
+    check(before===Number.MAX_SAFE_INTEGER||cursor,'invalid','Message cursor is no longer available');
+    const rows = this.#db.prepare(`SELECT *,rowid AS sequence FROM messages WHERE room_id=? AND rowid>?
+      AND (? IS NULL OR created_at<? OR (created_at=? AND rowid<?)) ORDER BY created_at DESC,rowid DESC LIMIT 51`)
+      .all(roomId, first?.sequence ?? 0,cursor?.created_at??null,cursor?.created_at??null,cursor?.created_at??null,before) as unknown as (Message & { sequence: number })[];
+    return { first: first ?? null, items: rows.slice(0, 50).reverse().map(message=>{
+      const target=message.reply_to?this.#db.prepare('SELECT id,author_id,body FROM messages WHERE id=? AND room_id=?').get(message.reply_to,roomId):null;
+      return {...message,replyTo:target?{id:target.id,author:target.author_id==='administrator'?'you':target.author_id,text:String(target.body).slice(0,240)}:null};
+    }), next: rows.length > 50 ? rows[49]!.sequence : null };
   }
   searchRoomMessages(actor: Actor, query: string): string[] {
     check(typeof query === 'string' && query.length <= 200, 'invalid', 'Invalid conversation query');

@@ -1,3 +1,4 @@
+import {memberWork} from './work-display.js';
 import { useEffect, useRef, useState } from 'react';
 import { initialSettings, THEMES } from './data.js';
 import { api } from './api.js';
@@ -90,7 +91,7 @@ export function App() {
       setDeletedMembers((state.deletedAgents || []).map(agent => ({ id: agent.id, name: '削除したBot', deleted: true, shape: 'pebble', color: '#9a9a91', status: 'sleeping', motion: 'none' })));
       setMembers(state.agents.map(agent => ({ ...agent, authority: agent.role, role: agent.profile.role || (agent.role === 'leader' ? 'リーダー' : '仲間'),
         shape: 'pebble', color: '#61B8A5', persona: '', interests: [], ...agent.profile, effort: agent.reasoning,
-        runtimeMotion: state.tasks.some(task => task.agent_id === agent.id && task.state === 'running') ? 'sway' : 'none', status: agent.status === 'dormant' ? 'sleeping' : 'active', activity: state.tasks.some(task => task.agent_id === agent.id && task.state === 'running') ? '仕事を進めています' : '待機しています' })));
+        runtimeMotion: memberWork(state.tasks.filter(task=>task.agent_id===agent.id),state.settings.paused,agent.status==='dormant').kind==='running'?'sway':'none', status: agent.status === 'dormant' ? 'sleeping' : 'active', activity:memberWork(state.tasks.filter(task=>task.agent_id===agent.id),state.settings.paused,agent.status==='dormant').activity })));
       setThreads(state.rooms.map(room => ({ ...room, scope: room.visibility, members: room.participants, unread: 0,
         lastActivity: Date.parse(room.last_at) || 0, time: room.last_at ? time(room.last_at) : '',
         day: room.first_at ? new Date(room.first_at).toLocaleDateString('ja-JP') : '' })));

@@ -11,17 +11,25 @@ interface Version {series_id:string;version:number;parent_id:string|null;frozen:
 /** Every revision is a separate immutable artifact; an existing reference never silently changes. */
 export class ArtifactVersions {
  constructor(private db:DatabaseSync,private runtime:Runtime,private principal:(actor:Actor)=>{kind:string;id:string}) {}
+ /** Status describes this exact version, never an earlier approved revision. */
+ status(actor:Actor,id:string) {
+  const reviews=this.db.prepare('SELECT verdict,evidence_revision FROM artifact_reviews WHERE artifact_id=?').all(id);
+  const quality=this.runtime.quality.inspect(actor,id);
+  if(reviews.some(r=>r.verdict==='changes_requested'))return 'changes_requested';
+  if(quality){try{this.runtime.quality.verified(actor,id);return 'verified';}catch{return reviews.length||quality.evidence.length?'checking':'unchecked';}}
+  return reviews.some(r=>r.verdict==='approved')?'reviewed':'unchecked';
+ }
  inspect(actor:Actor,id:string) {
   const item=this.runtime.artifact(actor,id) as unknown as Artifact;
   const file=this.db.prepare('SELECT sha256,size,available FROM artifact_files WHERE artifact_id=?').get(id);
   const sha256=file ? String(file.sha256) : createHash('sha256').update(String(item.content)).digest('hex');
   const saved=this.db.prepare('SELECT series_id,version,parent_id,frozen FROM artifact_versions WHERE artifact_id=?').get(id) as unknown as Version | undefined;
   const meta=saved ?? {series_id:id,version:1,parent_id:null,frozen:0};
-  const versions=this.db.prepare(`SELECT a.id,a.name,a.author_id,a.created_at,v.version,v.frozen FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.series_id=? AND a.room_id=? ORDER BY v.version DESC`).all(meta.series_id!,item.room_id!).filter(row=>this.runtime.workareas.visible(actor,String(row.id))&&this.runtime.quality.readable(actor,String(row.id)));
+  const versions=this.db.prepare(`SELECT a.id,a.name,a.author_id,a.created_at,v.version,v.frozen FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.series_id=? AND a.room_id=? ORDER BY v.version DESC`).all(meta.series_id!,item.room_id!).filter(row=>this.runtime.workareas.visible(actor,String(row.id))&&this.runtime.quality.readable(actor,String(row.id))).map(row=>({...row,id:String(row.id),quality_status:this.status(actor,String(row.id))}));
   const reviews=this.db.prepare('SELECT reviewer_id,sha256,verdict,note,created_at,checks,evidence_revision,review_model FROM artifact_reviews WHERE artifact_id=? ORDER BY created_at').all(id);
   const referenced_by=this.db.prepare('SELECT r.task_id,t.agent_id,r.sha256 FROM artifact_references r JOIN tasks t ON t.id=r.task_id WHERE r.artifact_id=? AND t.room_id=?').all(id,item.room_id);
   const quality=this.runtime.quality.inspect(actor,id);let verified=false;try{if(quality){this.runtime.quality.verified(actor,id);verified=true;}}catch{}
-  return {...item,...meta,sha256,quality:quality?{...quality,verified}:null,file:file??null,versions:versions.length?versions:[{id,name:item.name,author_id:item.author_id,created_at:item.created_at,version:1,frozen:0}],reviews,referenced_by};
+  return {...item,...meta,quality_status:this.status(actor,id),sha256,quality:quality?{...quality,verified}:null,file:file??null,versions:versions.length?versions:[{id,name:item.name,author_id:item.author_id,created_at:item.created_at,version:1,frozen:0}],reviews,referenced_by};
  }
  link(actor:Actor,parent:string,next:string){
   const current=this.inspect(actor,parent),item=this.runtime.artifact(actor,next);
