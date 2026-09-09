@@ -18,3 +18,11 @@
   .autonomy-member > summary { gap: 8px; }
   .autonomy-member-detail { padding-left: 38px; }
 }
+
+.initiative-section { border-top:1px solid var(--border); padding:12px 0; font-size:12px; line-height:1.8; }
+.initiative-section summary { cursor:pointer; overflow-wrap:anywhere; }
+.initiative-section summary span { margin-left:8px; color:var(--muted); font-size:11px; }
+.initiative-section label { display:flex; gap:8px; align-items:center; margin-top:10px; }
+.initiative-item { padding:8px 0; border-top:1px solid var(--border); }
+.initiative-detail { color:var(--muted); overflow-wrap:anywhere; padding:8px 0; }
+.initiative-detail button { color:var(--ink); border:1px solid var(--border); background:var(--paper); border-radius:6px; padding:6px 10px; margin-top:8px; cursor:pointer; }

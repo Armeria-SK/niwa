@@ -8,6 +8,8 @@ import { transaction } from '../storage/database.ts';
 import type { JsonObject, ModelEvent } from '../contracts/model.ts';
 
 interface Access {
+  checkpoint(actor:Actor,lease:TaskLease,input:{tried:string;result:string;next_action:string;resume_condition:string;rest_minutes:number}):void;
+  initiative(actor: Actor, task: string): unknown;
   principal(actor: Actor): { kind: 'admin' | 'agent'; id: string };
   room(actor: Actor, roomId: string): unknown;
   participant(agentId: string, roomId: string): boolean;
@@ -137,6 +139,7 @@ export class Tasks {
     try { this.#owned(actor, lease); return true; } catch { return false; }
   }
   #autonomyAllowed(taskId: string): boolean {
+    if(this.#db.prepare(`SELECT 1 FROM initiative_tasks l JOIN initiatives i ON i.id=l.initiative_id JOIN tasks t ON t.id=l.task_id WHERE l.task_id=? AND (NOT EXISTS(SELECT 1 FROM json_each(i.body,'$.participants') WHERE value=t.agent_id) OR i.state='paused' OR (t.internal_autonomous=1 AND (SELECT enabled FROM initiative_settings)=0))`).get(taskId))return false;
     if (this.#db.prepare('SELECT autonomous FROM settings WHERE id=1').get()!.autonomous === 1 &&
       !this.#db.prepare('SELECT 1 FROM tasks t JOIN room_preferences p ON p.room_id=t.room_id WHERE t.id=? AND p.archived=1').get(taskId)) return true;
     return !this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id,conversation_reply,internal_autonomous) AS (
@@ -228,6 +231,7 @@ export class Tasks {
     check(input.rest_minutes===0 || (Number.isInteger(input.rest_minutes)&&input.rest_minutes>=15&&input.rest_minutes<=1440),'invalid','Rest between 15 and 1440 minutes');
     const remaining=[`目的：${input.purpose}`,`試した方法：${input.tried}`,`結果：${input.result}`,`未着手の候補：${input.alternatives}`,`次の行動：${input.next_action}`,`再開条件：${input.resume_condition}`];
     this.updatePlan(actor,lease,operationId,state.remaining_plan.revision,remaining);
+    this.#access.checkpoint(actor,lease,input);
     if(input.rest_minutes) {
       this.#db.prepare('UPDATE autonomous_wakes SET next_at=max(next_at,?) WHERE task_id=?').run(Date.now()+input.rest_minutes*60000,lease.task.id);
       this.rest(actor,lease);
@@ -241,6 +245,8 @@ export class Tasks {
     const memory = this.#access.memory(actor, task.agent_id);
     const plan = memory.prepare('SELECT revision,remaining FROM task_plans WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)').get(task.id);
     return {
+      observations: this.#db.prepare("SELECT operation_id,json_extract(output,'$.url') AS url FROM tool_receipts WHERE task_id=? AND json_extract(output,'$.fetched_at') IS NOT NULL").all(task.id),
+      initiative: this.#access.initiative(actor,task.id),
       workarea: this.#db.prepare('SELECT w.id,w.kind,w.name,w.room_id FROM task_workareas t JOIN workareas w ON w.id=t.area_id WHERE t.task_id=?').get(task.id) ?? null,
       independent_activity: this.independentActivity(actor,lease),
       recent_autonomous_work: this.#autonomous(task.id) ? this.#db.prepare(`SELECT t.id,t.room_id,substr(t.prompt,1,300) AS prompt,t.state,substr(t.result,1,1000) AS result,t.wait_reason
@@ -410,6 +416,7 @@ export class Tasks {
       check(parent.agent_id !== agentId, 'invalid', 'Use the current task instead of delegating to yourself');
       const child = this.create(actor, agentId, parent.room_id, prompt, parent.deadline_at);
       this.#db.prepare('UPDATE tasks SET parent_id=? WHERE id=?').run(parent.id, child.id);
+      this.#db.prepare(`INSERT OR IGNORE INTO initiative_tasks SELECT ?,l.initiative_id FROM initiative_tasks l JOIN initiatives i ON i.id=l.initiative_id WHERE l.task_id=? AND EXISTS(SELECT 1 FROM json_each(i.body,'$.participants') WHERE value=?)`).run(child.id,parent.id,agentId);
       const messageId = this.#access.announceDelegation(actor, parent.room_id, agentId, prompt);
       this.#db.prepare('UPDATE tasks SET source_message_id=? WHERE id=?').run(messageId, child.id);
       this.#change(parent.id, 'waiting_child');
@@ -609,7 +616,7 @@ export class Tasks {
   protectRestoredWork(actor: Actor): void {
     this.#admin(actor);
     transaction(this.#db, () => {
-      this.#db.exec('INSERT OR IGNORE INTO restored_tasks SELECT id FROM tasks; UPDATE settings SET autonomous=0 WHERE id=1; UPDATE workarea_settings SET enabled=0; UPDATE workareas SET available=0; UPDATE artifact_files SET available=0; DELETE FROM task_workareas;');
+      this.#db.exec('INSERT OR IGNORE INTO restored_tasks SELECT id FROM tasks; UPDATE settings SET autonomous=0 WHERE id=1; UPDATE initiative_settings SET enabled=0; UPDATE workarea_settings SET enabled=0; UPDATE workareas SET available=0; UPDATE artifact_files SET available=0; DELETE FROM task_workareas;');
       this.#db.prepare("UPDATE execution_bindings SET state='cancelled',waiting=0,result=NULL").run();
       this.#db.prepare('UPDATE workarea_settings SET epoch=?').run(randomUUID());
       this.#db.prepare("UPDATE schedules SET enabled=0,wait_reason=? WHERE deleted=0")

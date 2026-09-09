@@ -1,3 +1,5 @@
+import {initiativeSchema} from '../storage/initiative-schema.ts';
+import {Initiatives} from './initiatives.ts';
 import {executionSchema} from '../storage/execution-schema.ts';
 import {Workareas} from './workareas.ts';
 import {workareasSchema} from '../storage/workareas-schema.ts';
@@ -67,6 +69,7 @@ type Principal = { kind: 'admin'; id: 'administrator' } | { kind: 'agent'; id: s
 
 /** Trusted application service. Do not expose this object to generated code or models. */
 export class Runtime {
+  readonly initiatives: Initiatives;
   readonly workareas: Workareas;
   readonly tasks: Tasks;
   readonly autonomousWakes: AutonomousWakes;
@@ -81,12 +84,14 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
     this.tasks = new Tasks(this.#db, {
       principal: actor => this.#principal(actor),
+      initiative: (actor,task) => this.initiatives.current(actor,task),
+      checkpoint: (actor,lease,input) => this.initiatives.checkpoint(actor,lease,input),
       room: (actor, id) => this.#room(actor, id),
       memory: (actor, id) => this.#memory(actor, id),
       announceDelegation: (actor, roomId, agentId, prompt) => {
@@ -100,7 +105,8 @@ export class Runtime {
       },
     });
     this.workareas = new Workareas(this.#db,this,actor=>this.#principal(actor));
-    this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id);
+    this.initiatives = new Initiatives(this.#db,this,actor=>this.#principal(actor));
+    this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id,this.initiatives);
     this.artifactVersions = new ArtifactVersions(this.#db,this,actor=>this.#principal(actor));
     this.schedules = new Schedules(this.#db, this.tasks, actor => this.#admin(actor), (actor, agentId, roomId) => {
       this.#room(actor, roomId);
@@ -229,6 +235,8 @@ export class Runtime {
     check(/^[0-9a-f-]{36}$/.test(agentId), 'invalid', 'Invalid Bot deletion');
     this.#db.prepare("UPDATE workareas SET deleted=1 WHERE kind='personal' AND owner_id=?").run(agentId);
     this.#db.prepare('DELETE FROM workarea_members WHERE agent_id=?').run(agentId);
+    this.#db.prepare("DELETE FROM initiatives WHERE owner_id=? AND room_id IN (SELECT id FROM rooms WHERE visibility<>'shared')").run(agentId);
+    this.#db.prepare("UPDATE initiatives SET state='paused' WHERE owner_id=?").run(agentId);
     this.#memories.get(agentId)?.close(); this.#memories.delete(agentId);
     const directory = join(this.#root, 'agents', agentId);
     assertDirectoryPath(directory);

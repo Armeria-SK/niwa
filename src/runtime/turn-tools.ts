@@ -1,3 +1,4 @@
+import {initiativeBodySchema} from './initiatives.ts';
 import {environmentDefinitionSchema} from '../tools/environments/registry.ts';
 import type {WorkareaTransport} from './workareas.ts';
 import { interactionSchema, type BrowserInteraction } from '../tools/browser/interaction.ts';
@@ -47,6 +48,10 @@ const definitions = {
   workspace_areas: {description:'現在のBot・仕事・会話で扱える作業場所を読む。案件参加者の変更は管理者が行う。',schema:object({})},
   workspace_download: {description:'選択中の作業場所からバイナリをbase64で取得する。最大8MiB。',schema:object({path:Type.String({minLength:1,maxLength:512}),revision:Type.Optional(Type.String({pattern:'^[a-f0-9]{64}$'}))})},
   workspace_share: {description:'選択した作業場所のファイルを現在の会話へ固定版として共有する。target_projectは同じ会話の参加案件ID、nullは会話全体。parent_artifactは同じ公開範囲の自分の旧版ID、新規はnull。元のファイルの変更は共有済み版に影響しない。外部公開や送信ではない。',schema:object({path:Type.String({minLength:1,maxLength:512}),expected_revision:Type.String({pattern:'^[a-f0-9]{64}$'}),target_project:Type.Union([Type.Null(),short()]),parent_artifact:Type.Union([Type.Null(),short()])})},
+  initiative_list:{description:'閲覧権限のある継続する取り組みを確認する。新規作成前に既存を確認する。私的な内容は別会話へ移さない。',schema:object({})},
+  initiative_select:{description:'この仕事を既存の取り組みへ結び付ける。認可された同じ会話の取り組みだけ。権限や承認は増えない。',schema:object({id:short()})},
+  initiative_save:{description:'一回の仕事とは別に目的・理由・完成条件・次の行動・試した方法と結果・待ち条件を保存する。既存版を更新し、収益仕事への登録は不要。参加者は会話の既存参加者のみ。review_atは次の見直しのUnixミリ秒。approval/user_input/child/model待ちは実在する待機タスクを指定。探索不成功はsearch_failed。休息はresting、終了はcompleted。停止中の取り組みを自分で再開しない。',schema:object({id:Type.Union([Type.Null(),short()]),expected_revision:Type.Integer({minimum:0}),body:initiativeBodySchema,state:Type.Union([Type.Literal('active'),Type.Literal('resting'),Type.Literal('completed')]),review_at:Type.Integer({minimum:0})})},
+  initiative_evidence:{description:'目的に関連する観測・検証結果と結論を記録する。referenceはwork_state.observationsまたはexternal_operationsのoperation_id/実行ID。新規ファイルや言い換えだけは根拠にならない。findingは取得済み公開ページ、validation/rejected_hypothesisは保存された実行結果。自己申告は品質保証ではない。',schema:object({kind:Type.Union([Type.Literal('finding'),Type.Literal('validation'),Type.Literal('rejected_hypothesis')]),reference:short(),conclusion:Type.String({minLength:1,maxLength:2000})})},
   activity_checkpoint: {description:'自発活動の目的・試行・結果・未着手の候補・次の行動・再開条件を既存の計画へ保存する。探索不成功は管理者対応待ちではなく、方法を変えるか条件を残して休息する。rest_minutes=0なら続行、15〜1440なら保存して休息。単独で使う。',schema:object({purpose:short(),tried:Type.String({minLength:1,maxLength:900}),result:Type.String({minLength:1,maxLength:900}),alternatives:Type.String({minLength:1,maxLength:900}),next_action:Type.String({minLength:1,maxLength:900}),resume_condition:Type.String({minLength:1,maxLength:900}),rest_minutes:Type.Union([Type.Literal(0),Type.Integer({minimum:15,maximum:1440})])})},
   work_note: { description: 'この会話のユーザー向け作業メモを1〜2文で残す。確認できた事実・進捗・方針変更だけを簡潔に書く。内部思考・秘密・内部IDは書かない。新しい気付きがあるときだけ使い、実作業を続ける。本文投稿、返信要求、他Bot起動、完了は発生しない。', schema: object({ body: Type.String({minLength:1,maxLength:300}) }) },
   task_review_ready: {description:'自分の仕事で作成した最新成果物をreview_ready（受け渡し準備完了）にする。固定IDとSHA256が必要。これだけでは他Botを起動しない。',schema:object({artifact_id:short(),sha256:Type.String({pattern:'^[a-f0-9]{64}$'})})},
@@ -138,6 +143,10 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
   try {
     return runtime.tasks.once(actor, lease, operationId, { name: call.name, arguments: call.arguments }, () => {
       switch (call.name) {
+        case 'initiative_list': return {enabled:runtime.initiatives.enabled(),items:JSON.parse(JSON.stringify(runtime.initiatives.list(actor).filter(i=>i.room_id===lease.task.room_id)))};
+        case 'initiative_select': return JSON.parse(JSON.stringify(runtime.initiatives.select(actor,lease,args.id!)));
+        case 'initiative_save': return JSON.parse(JSON.stringify(runtime.initiatives.save(actor,lease,call.arguments as unknown as Parameters<typeof runtime.initiatives.save>[2])));
+        case 'initiative_evidence': return runtime.initiatives.evidence(actor,lease,args.kind as 'finding'|'validation'|'rejected_hypothesis',args.reference!,args.conclusion!);
         case 'artifact_inspect': case 'artifact_revise': case 'artifact_review': case 'artifact_freeze': {
           const item=runtime.artifact(actor,args.id!);
           if(item.room_id!==lease.task.room_id) throw new DomainError('forbidden','Artifact belongs to another conversation');
