@@ -78,7 +78,6 @@ export const modelResponseContractSchema = Type.Union([
     { additionalProperties: false },
   ),
 ]);
-export type ModelResponseContract = Static<typeof modelResponseContractSchema>;
 
 export const modelOptionsSchema = Type.Object(
   {
@@ -87,7 +86,6 @@ export const modelOptionsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-export type ModelOptions = Static<typeof modelOptionsSchema>;
 
 export const modelBudgetSchema = Type.Object(
   {
@@ -98,7 +96,6 @@ export const modelBudgetSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-export type ModelBudget = Static<typeof modelBudgetSchema>;
 
 export const modelRequestSchema = Type.Object(
   {

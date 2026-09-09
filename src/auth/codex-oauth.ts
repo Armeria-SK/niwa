@@ -143,7 +143,7 @@ export async function exchangeAuthorizationCode(
     redirect_uri: input.redirect_uri,
     code_verifier: input.verifier,
   }, 'token_exchange', signal);
-  return parseCredentialResponse(response, 'TOKEN_EXCHANGE_FAILED');
+  return parseCredentialResponse(response);
 }
 
 export async function refreshOAuthCredential(
@@ -160,7 +160,7 @@ export async function refreshOAuthCredential(
       client_id: config.client_id ?? DEFAULT_CLIENT_ID,
       refresh_token: refreshToken,
     }, 'refresh', signal);
-    return parseCredentialResponse(response, 'REFRESH_FAILED', refreshToken, priorAccountId);
+    return parseCredentialResponse(response, refreshToken, priorAccountId);
   } catch (error) {
     if (error instanceof OAuthError && ['ABORTED', 'REFRESH_TIMEOUT', 'TOKEN_RESPONSE_INVALID', 'REFRESH_FAILED'].includes(error.code)) throw error;
     throw new OAuthError('REFRESH_FAILED', 'The OAuth credential could not be refreshed.');
@@ -302,7 +302,7 @@ async function tokenRequest(
   }
 }
 
-function parseCredentialResponse(value: unknown, failureCode: 'TOKEN_EXCHANGE_FAILED' | 'REFRESH_FAILED', priorRefreshToken?: string, priorAccountId?: string): OAuthCredential {
+function parseCredentialResponse(value: unknown, priorRefreshToken?: string, priorAccountId?: string): OAuthCredential {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new OAuthError('TOKEN_RESPONSE_INVALID', 'The OAuth token response was malformed.');
   }

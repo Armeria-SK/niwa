@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Avatar, EmptyState, Modal, Segmented } from '../components.jsx';
-import { ActivityIcon, ArrowUpRightIcon, CheckCircleIcon, FileIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
+import { ActivityIcon, ArrowUpRightIcon, CheckCircleIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 import { Recap, ArtifactLibrary } from './Productivity.jsx';
 import { taskStatus } from '../productivity.js';
 import { Schedules } from './Schedules.jsx';

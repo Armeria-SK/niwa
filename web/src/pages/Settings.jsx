@@ -8,9 +8,9 @@ import { FallbackConnection } from '../FallbackConnection.jsx';
 import { ModelRoutes } from '../ModelRoutes.jsx';
 import { ModelDefaults } from '../ModelDefaults.jsx';
 import { XConnection } from '../XConnection.jsx';
-import { CheckIcon, ClockIcon, InfoIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
+import { CheckIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 
-export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, members, onUpdateMembers, notify }) {
+export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, members }) {
   const [tab, setTab] = useState('theme');
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);

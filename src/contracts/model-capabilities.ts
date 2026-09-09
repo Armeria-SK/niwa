@@ -7,8 +7,6 @@ export const executionModeSchema = Type.Union([
   Type.Literal('agent_runtime'),
 ]);
 
-export type ExecutionMode = Static<typeof executionModeSchema>;
-
 export const authModeSchema = Type.Union([
   Type.Literal('api_key'),
   Type.Literal('subscription_oauth'),
@@ -16,16 +14,12 @@ export const authModeSchema = Type.Union([
   Type.Literal('none'),
 ]);
 
-export type AuthMode = Static<typeof authModeSchema>;
-
 export const billingModeSchema = Type.Union([
   Type.Literal('api_usage'),
   Type.Literal('subscription'),
   Type.Literal('external_provider'),
   Type.Literal('none'),
 ]);
-
-export type BillingMode = Static<typeof billingModeSchema>;
 
 export const modelAdapterCapabilitiesSchema = Type.Object(
   {

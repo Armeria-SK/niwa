@@ -187,9 +187,6 @@ export function createBufferedModelEventStream(
   };
 }
 
-/** @deprecated Use createBufferedModelEventStream. */
-export const createModelEventStream = createBufferedModelEventStream;
-
 export interface ModelAdapter {
   readonly adapter_id: string;
   readonly capabilities: ModelAdapterCapabilities;

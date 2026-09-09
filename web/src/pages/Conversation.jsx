@@ -8,7 +8,7 @@ import './Conversation.css';
 import { WorkNotes } from '../WorkNotes.jsx';
 import {CoordinationBoard} from '../CoordinationBoard.jsx';
 
-export function Conversation({ thread, tasks, onWork, onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
+export function Conversation({ thread, tasks, onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
   const [showPresence, setShowPresence] = useState(false);
   const [showWork, setShowWork] = useState(false);
   const visibleMembers = thread.scope === 'private' ? members.filter(item => thread.members.includes(item.id)) : members;
@@ -21,7 +21,7 @@ export function Conversation({ thread, tasks, onWork, onNewSession, members, mem
   return <>
     <main className="conversation" id="main-content" tabIndex={-1} aria-label={thread.title}>
       <div className="conversation-mobile-tools"><button className="text-button" onClick={onBack}><BackIcon size={20} />スレッド</button><IconButton label="メンバーの様子" onClick={() => setShowPresence(true)}><UsersIcon size={22} /></IconButton></div>
-      <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} onWork={onWork} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
+      <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
     </main>
     {showWork ? <CoordinationBoard roomId={thread.id} members={memberMap} onClose={() => setShowWork(false)} onArtifact={onArtifact}/> : null}
     <aside className="presence-rail" aria-label="メンバーの様子"><Presence {...presenceProps} />{!showPresence ? <WorkNotes key={thread.id} roomId={thread.id} members={memberMap} /> : null}</aside>
@@ -29,7 +29,7 @@ export function Conversation({ thread, tasks, onWork, onNewSession, members, mem
   </>;
 }
 
-function ThreadBody({ onShowWork, thread, tasks, onWork, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
+function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
   const history = useConversationMessages(thread);
   const deletedConversation = thread.scope === 'private' && thread.members.length > 0 && thread.members.every(id => memberMap[id]?.deleted);
   const readOnly = thread.archived || deletedConversation;
