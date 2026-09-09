@@ -31,6 +31,7 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  activity_checkpoint: {description:'自発活動の目的・試行・結果・未着手の候補・次の行動・再開条件を既存の計画へ保存する。探索不成功は管理者対応待ちではなく、方法を変えるか条件を残して休息する。rest_minutes=0なら続行、15〜1440なら保存して休息。単独で使う。',schema:object({purpose:short(),tried:Type.String({minLength:1,maxLength:900}),result:Type.String({minLength:1,maxLength:900}),alternatives:Type.String({minLength:1,maxLength:900}),next_action:Type.String({minLength:1,maxLength:900}),resume_condition:Type.String({minLength:1,maxLength:900}),rest_minutes:Type.Union([Type.Literal(0),Type.Integer({minimum:15,maximum:1440})])})},
   work_note: { description: 'この会話のユーザー向け作業メモを1〜2文で残す。確認できた事実・進捗・方針変更だけを簡潔に書く。内部思考・秘密・内部IDは書かない。新しい気付きがあるときだけ使い、実作業を続ける。本文投稿、返信要求、他Bot起動、完了は発生しない。', schema: object({ body: Type.String({minLength:1,maxLength:300}) }) },
   task_review_ready: {description:'自分の仕事で作成した最新成果物をreview_ready（受け渡し準備完了）にする。固定IDとSHA256が必要。これだけでは他Botを起動しない。',schema:object({artifact_id:short(),sha256:Type.String({pattern:'^[a-f0-9]{64}$'})})},
   task_handoff: {description:'準備済みの固定成果物を、予定した次担当に明示的に渡して結果を待つ。task_review_readyの登録と具体的な依頼内容が必要。1タスクからの受け渡しは1回だけ。単独で呼ぶ。',schema:object({prompt:Type.String({minLength:1,maxLength:17000})})},
@@ -123,6 +124,7 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
         case 'artifact_inspect': case 'artifact_revise': case 'artifact_review': case 'artifact_freeze': {
           const item=runtime.artifact(actor,args.id!);
           if(item.room_id!==lease.task.room_id) throw new DomainError('forbidden','Artifact belongs to another conversation');
+          if(call.name!=='artifact_inspect' && runtime.tasks.independentActivity(actor,lease) && !runtime.tasks.workState(actor,lease).artifacts.some(a=>a.id===args.id)) return {error:'保留中の成果物は変更せず、この独立活動で新規作成した成果物だけを扱ってください。'};
           if(call.name==='artifact_revise') return runtime.artifactVersions.revise(actor,args.id!,args.expected_sha256!,args.content!,lease.task.id);
           if(call.name==='artifact_review') return runtime.artifactVersions.review(actor,args.id!,args.expected_sha256!,args.verdict as 'approved'|'changes_requested',args.note!);
           if(call.name==='artifact_freeze') return runtime.artifactVersions.freeze(actor,args.id!,args.expected_sha256!);
@@ -138,10 +140,17 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
         case 'work_note': return runtime.addWorkNote(actor,lease,args.body!);
         case 'conversation_ack': runtime.tasks.acknowledge(actor,lease); return {acknowledged:true};
         case 'conversation_send': runtime.respond(actor, lease, args.body!, call.arguments.recipient_ids as string[]); return { sent: true };
+        case 'activity_checkpoint': return runtime.tasks.checkpoint(actor,lease,operationId,call.arguments as Parameters<typeof runtime.tasks.checkpoint>[3]);
         case 'task_rest': runtime.tasks.rest(actor, lease); return { rested: true };
         case 'task_summary_save': return runtime.saveSummary(actor, lease, operationId, call.arguments as WorkSummary);
         case 'task_plan_update': return runtime.tasks.updatePlan(actor, lease, operationId, call.arguments.expected_revision as number, call.arguments.remaining as string[]);
-        case 'artifact_create': return { id: runtime.createArtifact(actor, lease.task.room_id, args.name!, args.kind!, args.description!, args.content!, lease.task.id) };
+        case 'artifact_create': {
+          if(runtime.tasks.independentActivity(actor,lease)) {
+            const prior=runtime.artifacts(actor).find(item=>item.room_id===lease.task.room_id && item.author_id===lease.task.agent_id && String(runtime.artifact(actor,String(item.id)).content).replace(/\s+/g,' ').trim()===args.content!.replace(/\s+/g,' ').trim());
+            if(prior) return {id:prior.id as string,reused:true,message:'同じ内容の成果物を再作成せず、次の異なる検証へ進んでください。'};
+          }
+          return {id:runtime.createArtifact(actor,lease.task.room_id,args.name!,args.kind!,args.description!,args.content!,lease.task.id)};
+        }
         case 'decision_report': runtime.reportUpdate(actor, lease.task.room_id, 'decision', args.title!, args.detail!, lease.task.id); return { saved: true };
         case 'profile_update':
           runtime.updateOwnProfile(actor, args.name!, args.persona!); return { saved: true };
@@ -177,6 +186,7 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
 
 export async function executeAsyncTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease, call: ModelToolCall, operationId: string,
   signal?: AbortSignal, external: ExternalTools = {}): Promise<JsonObject> {
+  if (runtime.tasks.active(actor,lease) && ['browser_request_submit','browser_form_submit','x_post','program_run','web_download','workspace_write','packages_install'].includes(call.name) && runtime.tasks.independentActivity(actor,lease)) return {error:'independent_activity_scope',message:'保留操作とは別の活動です。公開情報の読取と新規テキスト成果物で進め、実行・書込・送信は元の仕事で確認してください。'};
   if (call.name === 'browser_request_submit') {
     if (!external.forms || !external.browser || !Value.Check(requestApprovalSchema, call.arguments)) return {error:'Invalid script request'};
     if (!runtime.tasks.active(actor, lease) || signal?.aborted) return {error:'Task is no longer active'};

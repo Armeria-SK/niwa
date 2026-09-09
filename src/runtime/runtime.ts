@@ -11,6 +11,7 @@ import { openDatabase, transaction } from '../storage/database.ts';
 import { controlSchema, memoryMigrations } from '../storage/schema.ts';
 import { taskSchema } from '../storage/task-schema.ts';
 import { Tasks } from './tasks.ts';
+import { autonomousContinuitySchema } from '../storage/autonomous-continuity-schema.ts';
 import { AutonomousWakes } from './autonomous-wakes.ts';
 import { autonomousWakeSchema } from '../storage/autonomous-wake-schema.ts';
 import { workNoteSchema } from '../storage/work-note-schema.ts';
@@ -76,7 +77,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -583,7 +584,7 @@ export class Runtime {
           this.#db.prepare("UPDATE rooms SET title='' WHERE id=?").run(record.id);
           this.#db.prepare('DELETE FROM task_coordination WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
           this.#db.prepare("UPDATE tasks SET prompt='',result=NULL,wait_reason=NULL,source_message_id=NULL WHERE room_id=?").run(record.id);
-          for (const table of ['work_notes', 'task_replies', 'tool_receipts', 'business_tasks', 'approval_requests']) this.#db.prepare('DELETE FROM ' + table + ' WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
+          for (const table of ['autonomous_boundaries', 'work_notes', 'task_replies', 'tool_receipts', 'business_tasks', 'approval_requests']) this.#db.prepare('DELETE FROM ' + table + ' WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
         } else {
           this.#db.prepare('DELETE FROM updates WHERE artifact_id=?').run(record.id);
           this.#db.prepare('DELETE FROM artifacts WHERE id=?').run(record.id);

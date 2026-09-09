@@ -202,6 +202,24 @@ export class Tasks {
       return false;
     });
   }
+  independentActivity(actor: Actor, lease: TaskLease): boolean {
+    this.#owned(actor,lease);
+    return !!this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id) AS (
+      SELECT id,parent_id FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
+      SELECT 1 FROM ancestors a JOIN autonomous_boundaries b ON b.task_id=a.id LIMIT 1`).get(lease.task.id);
+  }
+  checkpoint(actor: Actor, lease: TaskLease, operationId: string, input: {purpose:string; tried:string; result:string; alternatives:string; next_action:string; resume_condition:string; rest_minutes:number}) {
+    const state=this.workState(actor,lease);
+    check(state.autonomous,'forbidden','Checkpoint is for autonomous work');
+    check(input.rest_minutes===0 || (Number.isInteger(input.rest_minutes)&&input.rest_minutes>=15&&input.rest_minutes<=1440),'invalid','Rest between 15 and 1440 minutes');
+    const remaining=[`目的：${input.purpose}`,`試した方法：${input.tried}`,`結果：${input.result}`,`未着手の候補：${input.alternatives}`,`次の行動：${input.next_action}`,`再開条件：${input.resume_condition}`];
+    this.updatePlan(actor,lease,operationId,state.remaining_plan.revision,remaining);
+    if(input.rest_minutes) {
+      this.#db.prepare('UPDATE autonomous_wakes SET next_at=max(next_at,?) WHERE task_id=?').run(Date.now()+input.rest_minutes*60000,lease.task.id);
+      this.rest(actor,lease);
+    }
+    return {saved:true,rested:!!input.rest_minutes};
+  }
   /** Fresh task-local facts for model input; never a replacement for lease/approval checks. */
   workState(actor: Actor, lease: TaskLease) {
     const task = this.#owned(actor, lease);
@@ -209,9 +227,10 @@ export class Tasks {
     const memory = this.#access.memory(actor, task.agent_id);
     const plan = memory.prepare('SELECT revision,remaining FROM task_plans WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)').get(task.id);
     return {
+      independent_activity: this.independentActivity(actor,lease),
       recent_autonomous_work: this.#autonomous(task.id) ? this.#db.prepare(`SELECT t.id,t.room_id,substr(t.prompt,1,300) AS prompt,t.state,substr(t.result,1,1000) AS result,t.wait_reason
         FROM tasks t JOIN rooms r ON r.id=t.room_id WHERE t.agent_id=? AND t.id<>? AND r.visibility='shared'
-        AND r.id NOT IN (SELECT id FROM deleted_content WHERE kind='room') ORDER BY t.updated_at DESC LIMIT 8`).all(task.agent_id,task.id) : [],
+        AND r.id NOT IN (SELECT id FROM deleted_content WHERE kind='room') ORDER BY t.updated_at DESC LIMIT 8`).all(task.agent_id,task.id).map(row=>({...row,remaining_plan:JSON.parse(String(memory.prepare('SELECT remaining FROM task_plans WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)').get(row.id!)?.remaining ?? '[]'))})) : [],
       coordination: this.#db.prepare('SELECT * FROM task_coordination WHERE task_id=?').get(task.id) ?? {revision:0},
       task: publicTask(task), runtime_paused: this.#paused(), autonomous: this.#autonomous(task.id),
       remaining_plan: { revision: plan ? Number(plan.revision) : 0, remaining: plan ? JSON.parse(String(plan.remaining)) as string[] : [] },
@@ -260,6 +279,7 @@ export class Tasks {
       const prior = this.#db.prepare('SELECT input_hash,execution_id,output FROM external_operations WHERE task_id=? AND operation_id=?')
         .get(lease.task.id, operationId) as { input_hash: string; execution_id: string; output: string | null } | undefined;
       if (prior) { check(prior.input_hash === inputHash, 'conflict', 'External operation input changed'); return { ...prior, firstAttempt: false }; }
+      if (this.independentActivity(actor,lease)) return {input_hash:inputHash,execution_id:'',output:JSON.stringify({error:'independent_activity_scope',message:'保留中の操作を再実行しないため、この独立活動では公開情報の読取と新規テキスト成果物だけを扱います。元の操作は元の仕事で確認してください。'}),firstAttempt:false};
       const restored = this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id) AS (
         SELECT id,parent_id FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
         SELECT 1 FROM ancestors a JOIN restored_tasks r ON r.task_id=a.id LIMIT 1`).get(lease.task.id);
@@ -366,6 +386,11 @@ export class Tasks {
   delegate(actor: Actor, lease: TaskLease, agentId: string, prompt: string): Task {
     return transaction(this.#db, () => {
       const parent = this.#owned(actor, lease);
+      if (this.independentActivity(actor,lease)) {
+        check(!parent.parent_id,'forbidden','Independent work cannot create delegation chains');
+        check(!this.#db.prepare("SELECT 1 FROM tasks WHERE agent_id=? AND room_id=? AND prompt=? AND state NOT IN ('completed','failed','cancelled')").get(agentId,parent.room_id,prompt),'conflict','This work is already pending');
+        check(!this.#db.prepare('SELECT 1 FROM tasks WHERE parent_id=? AND agent_id=?').get(parent.id,agentId),'conflict','This recipient already has this independent assignment');
+      }
       text(prompt, 19_000); // Leave room for the recipient in the visible chat message.
       check(parent.agent_id !== agentId, 'invalid', 'Use the current task instead of delegating to yourself');
       const child = this.create(actor, agentId, parent.room_id, prompt, parent.deadline_at);
@@ -383,6 +408,7 @@ export class Tasks {
         VALUES (?,?,'question',?,?,?,?)`).run(task.room_id, task.agent_id, '会話の宛先を確認してください', '宛先のBotがこの会話に参加できないため、配送できませんでした。', task.id, Date.now());
       return;
     }
+    if(this.independentActivity(actor,lease)) return; // Deliberate delegation only; status messages never start reply chains.
     const next = this.create(actor, agentId, task.room_id, prompt, task.deadline_at);
     this.#db.prepare('UPDATE tasks SET parent_id=?,conversation_reply=1,source_message_id=? WHERE id=?').run(task.id, sourceMessageId ?? null, next.id);
   }

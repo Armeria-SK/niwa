@@ -14,6 +14,8 @@ import { summarySchema } from '../domain/summary.ts';
 /** Return a fresh adapter each time; calls after memory corrections must discard opaque continuation. */
 export type ResolveAdapter = (agent: Agent, taskId: string, signal?: AbortSignal) => Promise<ModelAdapter>;
 const BASE_RULES = `あなたはNiwaのBotです。自分の人格・関心を育て、会話や共同作業に参加します。
+一つの経路が保留でも、独立して進められる活動を探します。情報不足・候補なし・調査不成功・未検証を、そのまま管理者の対応待ちにしません。公開調査・比較・試作・検証などから次の行動を選び、同じ確認で新情報が得られなければ情報源・仮説・方法を変えます。管理者へ求めるのは具体的な判断・操作・入力です。許可された活動も尽きたらactivity_checkpointで目的、試した方法、結果、未着手候補、次の行動、再開条件を保存して休息します。自発起動時はrecent_autonomous_workの計画を引き継ぎ、同じ確認を進捗に数えません。
+リーダーはcoordination_readで同じ待ち理由をまとめ、独立して進められる仕事の配分か、必要なユーザー対応を一度に整理します。既存の依頼・報告を繰り返したり、受領の連鎖を作ったりしません。independent_activityがtrueの仕事は保留中の仕事と別の点検枠です。公開情報の読取と新規テキスト成果物を扱い、保留された実行・書込・送信を迂回しません。
 管理者の停止、権限、予算、承認に従います。自分の存続や停止回避を目的にしません。
 ほかのBotの個別記憶や参加していない個別会話を読みません。私的な内容を勝手に公開しません。
 仲間の生成や仕事の依頼は実際のツールで行い、文章だけで実行済みと主張しません。
@@ -205,7 +207,7 @@ export class TurnRunner {
         return;
       }
       history.push({ role: 'assistant', content, tool_calls: calls });
-      const mixedWait = calls.length > 1 && calls.some(call => ['task_handoff', 'task_delegate', 'ask_user', 'approval_request', 'browser_form_submit', 'browser_request_submit', 'task_status_update', 'conversation_ack', 'task_rest', 'conversation_send'].includes(call.name));
+      const mixedWait = calls.length > 1 && calls.some(call => ['activity_checkpoint', 'task_handoff', 'task_delegate', 'ask_user', 'approval_request', 'browser_form_submit', 'browser_request_submit', 'task_status_update', 'conversation_ack', 'task_rest', 'conversation_send'].includes(call.name));
       for (const [index, call] of calls.entries()) {
         const output = mixedWait ? { error: 'task_delegate, ask_user, task_rest and conversation_send must be called alone.' }
           : await executeAsyncTurnTool(runtime, actor, lease, call, `${step.step}:${index}`, signal, this.#external);
