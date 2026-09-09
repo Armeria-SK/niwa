@@ -88,12 +88,15 @@ test('text-only models can return a private JSON review, while malformed or unre
   assert.equal(f.runtime.memories(f.admin, f.leader.id).length, 1);
   for (const output of [text('JSONではない整理'), call('agents_create', { name: '作ってはいけないBot' })]) {
     const next = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '整理の形式');
-    await new TurnRunner(f.runtime, async () => model(() => output)).run(f.runtime.tasks.claim(f.admin)!);
-    assert.equal(f.runtime.tasks.get(f.admin, next.id).state, 'waiting_provider');
-    assert.ok(f.runtime.tasks.get(f.admin, next.id).provider_retry_at);
+    let attempts=0;
+    await new TurnRunner(f.runtime, async () => model(() => ++attempts===1?output:text('整理は保存せず回答を続けます。'))).run(f.runtime.tasks.claim(f.admin)!);
+    assert.equal(f.runtime.tasks.get(f.admin, next.id).state, 'completed');
+    assert.equal(attempts,2);
+    assert.equal(f.runtime.memories(f.admin,f.leader.id).length,1);
   }
   assert.equal(f.runtime.agents(f.admin).length, 1);
-  assert.equal(f.runtime.messages(f.admin, f.room.id).length, 2);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).length, 4);
+  assert.ok(!f.runtime.messages(f.admin,f.room.id).some(m=>m.body.includes('JSONではない整理')));
 });
 
 test('a memory correction during review invalidates that response and re-reviews before saving', async t => {

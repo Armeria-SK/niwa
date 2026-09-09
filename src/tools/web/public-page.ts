@@ -1,3 +1,4 @@
+export class RetrievalFailure extends Error { constructor(readonly code:'not_found'|'refused'|'http_failure'|'invalid_response'|'policy_blocked'|'invalid_request'|'aborted',message='Page could not be read'){super(message);} }
 import { lookup } from 'node:dns/promises';
 import { isIPv4 } from 'node:net';
 import { get as httpGet } from 'node:http';
@@ -27,12 +28,12 @@ export function publicIPv4(address: string): boolean {
 }
 
 export function pageUrl(input: string): URL {
-  if (input.length > 4096) throw new Error('URL is too long');
+  if (input.length > 4096) throw new RetrievalFailure('invalid_request','URL is too long');
   const url = new URL(input);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port ||
     url.hostname.includes(':') || !url.hostname.includes('.') ||
     /\.(localhost|local|internal|home|lan|test|invalid|example|onion)\.?$/i.test(url.hostname)) {
-    throw new Error('Only public HTTP/HTTPS pages on standard ports are supported');
+    throw new RetrievalFailure('policy_blocked','Only public HTTP/HTTPS pages on standard ports are supported');
   }
   url.hash = '';
   return url;
@@ -56,12 +57,12 @@ const networkFor = (accept: string, types: RegExp, maxBytes = MAX_BYTES): PageNe
       if (status !== 200 || !types.test(contentType) ||
         (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') ||
         Number(response.headers['content-length']) > maxBytes) {
-        response.destroy(); reject(new Error('Page status, type, encoding or size is unsupported')); return;
+        response.destroy(); reject(new RetrievalFailure(status===404?'not_found':[401,403,429].includes(status)?'refused':status!==200?'http_failure':'invalid_response','Page status, type, encoding or size is unsupported')); return;
       }
       const chunks: Buffer[] = []; let size = 0;
       response.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (size > maxBytes) { response.destroy(new Error('Page exceeds size limit')); return; }
+        if (size > maxBytes) { response.destroy(new RetrievalFailure('invalid_response','Page exceeds size limit')); return; }
         chunks.push(chunk);
       });
       response.on('error', reject);
@@ -76,12 +77,12 @@ const resourceNetwork = networkFor('*/*', RESOURCE_TYPES);
 export async function publicAddress(host: string, signal: AbortSignal, resolveHost: PageNetwork['resolve'] = network.resolve): Promise<string> {
   signal.throwIfAborted();
   const addresses = await new Promise<string[]>((resolve, reject) => {
-    const abort = () => reject(new Error('Page request cancelled'));
+    const abort = () => reject(new RetrievalFailure('aborted','Page request cancelled'));
     signal.addEventListener('abort', abort, { once: true });
     resolveHost(host).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
   });
   signal.throwIfAborted();
-  if (!addresses.length || !addresses.every(publicIPv4)) throw new Error('Page host is not a public IPv4 destination');
+  if (!addresses.length || !addresses.every(publicIPv4)) throw new RetrievalFailure('policy_blocked','Page host is not a public IPv4 destination');
   return addresses[0]!;
 }
 
@@ -95,16 +96,17 @@ async function fetchPublic(input: string, types: RegExp, signal: AbortSignal | u
     const response = await transport.get(url, address, cancellation);
     cancellation.throwIfAborted();
     if ([301, 302, 303, 307, 308].includes(response.status) && response.location) {
-      if (redirects === 5) throw new Error('Too many page redirects');
+      if (redirects === 5) throw new RetrievalFailure('invalid_response','Too many page redirects');
       const next = pageUrl(new URL(response.location, url).href);
       if (url.protocol === 'https:' && next.protocol === 'http:') throw new Error('HTTPS downgrade is not supported');
       url = next; continue;
     }
-    if (response.status !== 200 || !types.test(response.contentType) || /[\r\n]/.test(response.contentType) ||
-      Buffer.byteLength(response.body) > maxBytes) throw new Error('Page could not be read');
+    if(response.status!==200)throw new RetrievalFailure(response.status===404?'not_found':[401,403,429].includes(response.status)?'refused':'http_failure');
+    if (!types.test(response.contentType) || /[\r\n]/.test(response.contentType) ||
+      Buffer.byteLength(response.body) > maxBytes) throw new RetrievalFailure('invalid_response');
     return { url: url.href, content_type: response.contentType, body: Buffer.from(response.body), fetched_at: new Date().toISOString(), untrusted: true };
   }
-  throw new Error('Page could not be read');
+  throw new RetrievalFailure('invalid_response');
 }
 
 export async function readPublicPage(input: string, signal?: AbortSignal, transport: PageNetwork = network) {

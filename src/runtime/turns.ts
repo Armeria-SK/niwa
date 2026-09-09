@@ -32,6 +32,7 @@ export class TurnRunner {
     if (!runtime.tasks.active(actor, lease)) return;
     let agent = runtime.agents(actor).find(item => item.id === lease.task.agent_id)!;
     const history: ModelMessage[] = [];
+    runtime.tasks.activity(actor,lease,`resolve:${lease.task.attempt}`,'resolve');
     let adapter: ModelAdapter;
     try { adapter = await this.#resolve(agent, lease.task.id, signal); }
     catch {
@@ -84,11 +85,13 @@ export class TurnRunner {
           role: 'user', content: JSON.stringify({ message_id: message.id, author_id: message.author_id, text: message.body, ...(message.reply_to ? { reply_to: message.reply_to } : {}) }),
         }));
         const workState = runtime.tasks.workState(actor, lease);
-        const reviewingMemory = base.length > 0 && !runtime.memoryReviewed(actor, lease);
+        const reviewingMemory = base.length > 0 && !runtime.memoryReviewed(actor, lease) && !runtime.memoryReviewSkipped(actor,lease);
         const phaseTool = reviewingMemory ? 'memory_review' : pendingCompletion ? 'task_summary_save' : undefined;
         const phaseSchema = phaseTool === 'memory_review' ? memoryReviewSchema : summarySchema;
         // Full external results remain in receipts and task_history_read, not duplicated in every request.
-        const inputState = { ...workState, external_operations: workState.external_operations.map(({ result: _result, ...operation }) => operation),
+        const observations=runtime.tasks.observations(actor,lease);
+        if(observations.repeated_reads>=8){runtime.tasks.wait(actor,lease,'waiting_provider','同じ資料・失敗の巡回が回復案の提示後も続いたため休息します。新しい資料・取得方法を確認してから再開します。',true);runtime.tasks.waitKind(actor,lease,'stalled');return;}
+        const inputState = { ...workState, read_observations:observations, external_operations: workState.external_operations.map(({ result: _result, ...operation }) => operation),
           ...(phaseTool === 'task_summary_save' ? { summary_sources: runtime.completionSummarySources(actor, lease), proposed_completion: pendingCompletion!.events } : {}) };
         if (workState.autonomous && !adapter.capabilities.supports_tool_calls) {
           runtime.tasks.wait(actor, lease, 'waiting_provider', '自発活動には休息を選べるツール対応モデルが必要です。'); return;
@@ -96,10 +99,10 @@ export class TurnRunner {
         const members = runtime.agents(actor).map(member => ({ id: member.id, name: member.name, role: member.role, status: member.status }));
         const recentCalls = history.filter(message => message.role === 'assistant').slice(-3)
           .map(message => JSON.stringify(message.tool_calls?.map(call => ({ name: call.name, arguments: call.arguments }))));
-        const repeating = recentCalls.length === 3 && recentCalls.every(calls => calls === recentCalls[0]);
+        const repeating = observations.repeated_reads>=3 || recentCalls.length === 3 && recentCalls.every(calls => calls === recentCalls[0]);
         const RULES = `${BASE_RULES}\n管理者が設定した共通の指示（権限と停止・予算の制約は引き続き守る）: ${rules.body}${repeating ? '\n同じ引数のツール操作が3回続いています。直近の結果を確認し、進展がなければ別の方法へ変更してください。' : ''}`;
         const sharedRoom = runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared';
-        let configuredTools = turnTools(agent.role === 'leader', this.#external, sharedRoom, workState.autonomous, !!this.#runtime.workareas.settings(actor).enabled);
+        let configuredTools = turnTools(agent.role === 'leader', this.#external, sharedRoom, workState.autonomous, !!this.#runtime.workareas.settings(actor).enabled).filter(tool=>tool.name!=='task_child_disposition'||workState.child_results.length>0);
         if(promptVersion==='structured-v5')configuredTools=scopedPromptTools(configuredTools,workState, runtime.initiatives.enabled());
         const settings = runtime.settings(actor);
         const environment = { conversation: sharedRoom ? 'shared' : 'private', model_supports_tools: adapter.capabilities.supports_tool_calls,
@@ -142,12 +145,15 @@ export class TurnRunner {
           return;
         }
         if (!runtime.tasks.reserveModelCall(actor, lease)) {
-          if (runtime.tasks.active(actor,lease)) runtime.tasks.wait(actor, lease, 'waiting_user', '定期実行のモデル呼び出し上限に達しました。'); return;
+          if (runtime.tasks.active(actor,lease)) {runtime.tasks.wait(actor, lease, 'waiting_user', '定期実行のモデル呼び出し上限に達しました。');runtime.tasks.waitKind(actor,lease,'schedule_budget');} return;
         }
         const promptRun=runtime.tasks.recordPrompt(actor,lease,{version:promptVersion,phase:phaseTool??'work',rules_revision:rules.revision,memory_revision:context.revision,input_bytes:fitted.input_bytes,estimated_input_tokens:fitted.estimated_input_tokens,removed_messages:fitted.removed_messages+history.length-recentHistory.length+roomMessages.length-selectedMessages.length});
+        runtime.tasks.activity(actor,lease,String(promptRun),phaseTool??'model','running',context.revision);
         let events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 600_000, ...(signal ? { signal } : {}) }),
-          { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024 });
+          { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024,on_summary:summary=>runtime.tasks.summary(actor,lease,String(promptRun),context.revision,summary),on_event:event=>{if(event.type!=='reasoning_summary'&&runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),phaseTool??'model','running',context.revision);} });
         runtime.tasks.finishPrompt(actor,lease,promptRun,events);
+        if(runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),phaseTool??'model',events.some(e=>e.type==='failed')?'failed':'completed',context.revision);
+        events=events.filter(event=>event.type!=='reasoning_summary');
         if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
         if (!runtime.isContextCurrent(actor, context.revision)) continue;
         const failure = events.find(event => event.type === 'failed');
@@ -160,6 +166,7 @@ export class TurnRunner {
           }
           const retry = failure.error.code === 'QUOTA_EXCEEDED' || !!lease.task.internal_autonomous;
           runtime.tasks.wait(actor, lease, 'waiting_provider', `モデル応答を完了できませんでした (${failure.error.code})。${retry ? (lease.task.internal_autonomous ? '待機後に接続先を再確認します。' : '1分後に接続先を再確認します。') : ''}`, retry);
+          runtime.tasks.waitKind(actor,lease,failure.error.code==='QUOTA_EXCEEDED'?'provider_quota':['AUTH_UNAVAILABLE','AUTHENTICATION_FAILED'].includes(failure.error.code)?'authentication':['NETWORK_ERROR','TIMED_OUT'].includes(failure.error.code)?'network':'unknown');
           return;
         }
         if (phaseTool) {
@@ -174,7 +181,8 @@ export class TurnRunner {
             } catch { /* Invalid review output must never become a public reply or another tool operation. */ }
           }
           if (review.length !== 1 || review[0]!.name !== phaseTool || !Value.Check(phaseSchema, review[0]!.arguments)) {
-            runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデルが記憶・引継ぎ整理の形式を返せませんでした。1分後に再確認します。', true); return;
+            if(phaseTool==='memory_review'){runtime.skipInvalidMemoryReview(actor,lease);continue;}
+            runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデルが引継ぎ整理の形式を返せませんでした。1分後に再確認します。', true);runtime.tasks.waitKind(actor,lease,'invalid_output'); return;
           }
         }
         const index = runtime.tasks.saveStep(actor, lease, context.revision, events);
@@ -194,6 +202,10 @@ export class TurnRunner {
           runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデルの応答が最後まで完了していません。');
           return;
         }
+        try {runtime.tasks.assertCompletion(actor,lease);} catch {
+          history.push({role:'user',content:'必要な子タスクが未完了です。途中報告はtask_report、依存の明示的な変更はtask_child_dispositionを使い、完了したと報告しないでください。'});
+          continue;
+        }
         runtime.tasks.once(actor, lease, `final:${step.step}`, { content }, () => {
           runtime.respond(actor, lease, content);
           return { completed: true };
@@ -201,10 +213,13 @@ export class TurnRunner {
         return;
       }
       history.push({ role: 'assistant', content, tool_calls: calls });
-      const mixedWait = calls.length > 1 && calls.some(call => ['execution_wait', 'activity_checkpoint', 'task_handoff', 'task_delegate', 'ask_user', 'approval_request', 'browser_form_submit', 'browser_request_submit', 'task_status_update', 'conversation_ack', 'task_rest', 'conversation_send'].includes(call.name));
+      const mixedWait = calls.length > 1 && calls.some(call => ['task_report', 'execution_wait', 'activity_checkpoint', 'task_handoff', 'task_delegate', 'ask_user', 'approval_request', 'browser_form_submit', 'browser_request_submit', 'task_status_update', 'conversation_ack', 'task_rest', 'conversation_send'].includes(call.name));
       for (const [index, call] of calls.entries()) {
+        const phase=/^(program_|environment_|execution_)/.test(call.name)?'execute':/(read|navigate|snapshot|search|list)$/.test(call.name)?'read':'tool';
+        runtime.tasks.activity(actor,lease,`${step.step}:${index}`,phase);
         const output = mixedWait ? { error: 'task_delegate, ask_user, task_rest and conversation_send must be called alone.' }
           : await executeAsyncTurnTool(runtime, actor, lease, call, `${step.step}:${index}`, signal, this.#external);
+        if(runtime.tasks.active(actor,lease)&&runtime.isContextCurrent(actor,context.revision)){if(freshStep)runtime.tasks.observe(actor,lease,`${step.step}:${index}`,call.name,call.arguments,output);runtime.tasks.activity(actor,lease,`${step.step}:${index}`,phase,output.error?'failed':'completed');}
         history.push({ role: 'tool', name: call.name, tool_call_id: call.tool_call_id, content: JSON.stringify(output) });
         if (!runtime.tasks.active(actor, lease)) return;
         if (!runtime.isContextCurrent(actor, context.revision)) break;

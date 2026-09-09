@@ -8,3 +8,13 @@
 .message-mention, .mention-recipients > span { background: color-mix(in srgb, var(--green) 18%, var(--paper)); color: var(--text); border-radius: 4px; padding: 1px 4px; font-weight: 700; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 
 .message-reply-label { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; color: var(--muted); font-size: 11px; }
+
+.presence-member { flex-wrap: wrap; }
+.presence-jobs { width: 100%; padding-left: 67px; font-size: 12px; overflow-wrap: anywhere; }
+.presence-jobs summary { cursor: pointer; }
+.presence-jobs p { margin: 6px 0; }
+
+.composer-context { font-size: 12px; margin-bottom: 5px; }
+.composer-context summary { cursor: pointer; }
+.composer-context label { display: block; margin: 5px 0; }
+.composer-context select { max-width: 100%; font: inherit; }

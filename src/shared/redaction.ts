@@ -126,3 +126,18 @@ export function redactSecrets(input: string, exactSecrets: readonly string[] = [
   );
   return redacted;
 }
+
+/** Incomplete quoted credentials must not expose their later whitespace-separated fragments. */
+export function redactDisplaySnapshot(input: string): string {
+  const assignment=/(?:["']?)([A-Za-z_][A-Za-z0-9_-]*)(?:["']?)\s*[:=]\s*(["'])/g;
+  for(const match of input.matchAll(assignment)) {
+    if(!isSensitiveName(match[1]!))continue;
+    let closed=false;
+    for(let i=match.index!+match[0].length;i<input.length;i++) {
+      if(input[i]==='\\'){i++;continue;}
+      if(input[i]===match[2]){closed=true;break;}
+    }
+    if(!closed)return redactSecrets(input.slice(0,match.index))+'[REDACTED]';
+  }
+  return redactSecrets(input);
+}

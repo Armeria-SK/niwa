@@ -106,7 +106,7 @@ test('browser session and worker exchange bounded observations and resources thr
   try {
     let first = await session.navigate('https://fixture.invalid/');
     // The page's asynchronous fetch can be intercepted after the load snapshot.
-    for(let attempt=0;attempt<20&&!first.blocked.includes('approval_required');attempt++)first=await session.snapshot();
+    for(let until=Date.now()+3000;Date.now()<until&&!first.blocked.includes('approval_required');){await delay(20);first=await session.snapshot();}
     assert.equal(first.title, 'Worker'); assert.ok(first.blocked.includes('approval_required'));
     await assert.rejects(async () => session.follow('forged', 0), /stale/);
     const prepared = await session.prepareForm(first.revision, first.elements.find(el => el.name === 'Send')!.ref,

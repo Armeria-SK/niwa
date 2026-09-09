@@ -1,3 +1,4 @@
+import {RetrievalFailure} from '../tools/web/public-page.ts';
 import {qualityPlanSchema,qualityReviewSchema,type QualityReview} from './artifact-quality.ts';
 import {initiativeBodySchema} from './initiatives.ts';
 import {environmentDefinitionSchema} from '../tools/environments/registry.ts';
@@ -35,6 +36,8 @@ const short = () => Type.String({ minLength: 1, maxLength: 100 });
 const body = () => Type.String({ minLength: 1, maxLength: 20_000 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 const definitions = {
+  task_report:{description:'途中報告とnext_actionを同じ仕事に保存して再開する。expected_revisionはremaining_plan.revision。単独で呼ぶ。完了はconversation_send、入力/承認待ちはask_user/approval_request。仕事名や将来形の発言だけでは続行しない。',schema:object({body:body(),next_action:Type.String({minLength:1,maxLength:1000}),expected_revision:Type.Integer({minimum:0})})},
+  task_child_disposition:{description:'直接の子を明示的に取り消すか、完了の必須依存から独立させる。独立化でも親との関係・予算の祖先は保持。conversation_scopeのcontrol_revisionを指定する。',schema:object({task_id:short(),action:Type.Union([Type.Literal('cancel'),Type.Literal('independent')]),expected_revision:Type.Integer({minimum:0})})},
   execution_start:{description:'選択中の固定環境で長時間処理または一時Webサーバーを開始し、実行IDを返す。資源待ちは自動処理。preview=trueのサーバーはコンテナ内127.0.0.1:8080だけで待受ける。外部公開ではない。結果待ちはexecution_waitを使い、同じ処理を新IDで再開しない。',schema:object({seconds:Type.Integer({minimum:1,maximum:86400}),preview:Type.Boolean()})},
   execution_status:{description:'この仕事の実行状態・限定ログ・保存結果を確認する。結果不明は再実行せず照合する。',schema:object({execution_id:short()})},
   execution_stop:{description:'この仕事の指定実行と資源待ちを停止する。案件ファイルや環境は消さない。',schema:object({execution_id:short()})},
@@ -172,6 +175,8 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
         case 'task_status_update': return runtime.updateCoordination(actor,lease,call.arguments as CoordinationUpdate);
         case 'work_note': return runtime.addWorkNote(actor,lease,args.body!);
         case 'conversation_ack': runtime.tasks.acknowledge(actor,lease); return {acknowledged:true};
+        case 'task_report': return runtime.reportAndContinue(actor,lease,args.body!,args.next_action!,call.arguments.expected_revision as number,operationId);
+        case 'task_child_disposition': return runtime.tasks.childDisposition(actor,lease,args.task_id!,args.action!,call.arguments.expected_revision as number);
         case 'conversation_send': runtime.respond(actor, lease, args.body!, call.arguments.recipient_ids as string[]); return { sent: true };
         case 'activity_checkpoint': return runtime.tasks.checkpoint(actor,lease,operationId,call.arguments as Parameters<typeof runtime.tasks.checkpoint>[3]);
         case 'task_rest': runtime.tasks.rest(actor, lease); return { rested: true };
@@ -200,7 +205,7 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
         case 'ask_user':
           runtime.post(actor, lease.task.room_id, args.question!);
           runtime.reportUpdate(actor, lease.task.room_id, 'question', args.question!.slice(0, 200), args.question!, lease.task.id);
-          runtime.tasks.wait(actor, lease, 'waiting_user', args.question!.slice(0, 1000)); return { waiting: true };
+          runtime.tasks.wait(actor, lease, 'waiting_user', args.question!.slice(0, 1000));runtime.tasks.waitKind(actor,lease,'user_input'); return { waiting: true };
         case 'memory_remember': {
           // Tool scope is fixed to the current conversation, even if this bot can read others.
           if (!runtime.messages(actor, lease.task.room_id).some(message => message.id === args.source_message_id)) return { error: 'Source is outside this conversation' };
@@ -433,7 +438,7 @@ async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease
         : call.name === 'web_search' ? await external.search!(call.arguments.query as string, signal)
         : await (external.readPage ?? readPublicPage)(call.arguments.url as string, signal); }
       // Do not expose DNS/socket details, host environment, or arbitrary remote errors to model output.
-      catch { output = { error: 'The read request could not be completed. Check the source or service connection.' }; }
+      catch(error) { const code=error instanceof RetrievalFailure?error.code:error instanceof TypeError?'invalid_request':error instanceof Error&&['ECONNREFUSED','ENOTFOUND','ETIMEDOUT','ECONNRESET'].includes(String((error as NodeJS.ErrnoException).code))?'network':error instanceof Error&&error.name==='AbortError'?'aborted':error instanceof Error&&error.name==='TimeoutError'?'network':'unknown';output = { error: 'The read request could not be completed. Check the source or service connection.',failure_kind:code }; }
       if (signal?.aborted || !runtime.isContextCurrent(actor, revision)) throw new DomainError('conflict', 'Read context changed');
       return output;
     });

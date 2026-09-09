@@ -13,9 +13,10 @@ export function Conversation({ thread, tasks, onNewSession, members, memberMap, 
   const [showWork, setShowWork] = useState(false);
   const visibleMembers = thread.scope === 'private' ? members.filter(item => thread.members.includes(item.id)) : members;
   const scopedMembers = visibleMembers.map(member => {
-    const current = tasks.find(task => task.member === member.id && !['done','canceled','failed'].includes(task.status));
-    const activity = paused || current?.paused ? '停止中' : current ? ({running:'作業中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_user:'対応待ち',waiting_provider:'接続待ち'})[current.state] || '待機中' : member.runtimeMotion === 'sway' ? '別の会話で対応中' : '返答待機';
-    return {...member,activity};
+    const jobs = tasks.filter(task => task.member === member.id && task.thread === thread.id && !['done','canceled','failed'].includes(task.status)).sort((a,b)=>(a.state==='running'?-1:0)-(b.state==='running'?-1:0));
+    const current = jobs[0];
+    const activity = paused || current?.paused ? '停止中' : current ? current.progress?.label || ({running:'作業中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_user:'対応待ち',waiting_provider:'接続待ち'})[current.state] || '待機中' : member.runtimeMotion === 'sway' ? '別の会話で対応中' : '返答待機';
+    return {...member,activity:activity+(jobs.length>1?`・ほか${jobs.length-1}件`:""),jobs};
   });
   const presenceProps = { members: scopedMembers, paused, onPause, onAppearance, onMember, isPrivate: thread.scope === 'private' };
   return <>
@@ -34,6 +35,10 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
   const deletedConversation = thread.scope === 'private' && thread.members.length > 0 && thread.members.every(id => memberMap[id]?.deleted);
   const readOnly = thread.archived || deletedConversation;
   const [draft, setDraft] = useState('');
+  const [requestKind,setRequestKind]=useState('auto');
+  const [targetId,setTargetId]=useState('');
+  const target=tasks.find(task=>task.id===targetId);
+  const changingWork=requestKind==='amend'||requestKind==='cancel';
   const [replyTo, setReplyTo] = useState(null);
   const [attachments, setAttachments] = useState([]);
   const [sending, setSending] = useState(false);
@@ -63,9 +68,11 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
   }
   async function submit(e) {
     e?.preventDefault(); if (readOnly || sending || (!draft.trim() && !attachments.length)) return;
+    if(changingWork&&!target)return;
     setSending(true);
-    try { if (await onSend(draft.trim(), attachments.map(({ name, size }) => ({ name, size })), replyTo ? { id: replyTo.id, author: replyTo.author } : null, recipients.map(item => item.id))) {
-      setDraft(''); setAttachments([]); setReplyTo(null); setRecipients([]); setCaret(0); inputRef.current?.focus();
+    const requestContext=requestKind==='auto'?undefined:{kind:requestKind,...(changingWork?{task_id:target.id,expected_revision:target.control_revision}:{})};
+    try { if (await onSend(draft.trim(), attachments.map(({ name, size }) => ({ name, size })), replyTo ? { id: replyTo.id, author: replyTo.author } : null, changingWork?[target.member]:recipients.map(item => item.id),requestContext)) {
+      setDraft(''); setRequestKind('auto');setTargetId(''); setAttachments([]); setReplyTo(null); setRecipients([]); setCaret(0); inputRef.current?.focus();
     } } finally { setSending(false); }
   }
   return <>
@@ -88,7 +95,8 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
       {attachments.length ? <div className="attachment-previews">{attachments.map(file => <span key={file.id}><PaperclipIcon size={15} />{file.name}<IconButton label={`${file.name}を外す`} onClick={() => setAttachments(current => current.filter(item => item.id !== file.id))}><CloseIcon size={13} /></IconButton></span>)}</div> : null}
       {recipients.length ? <div className="reply-preview mention-recipients">{recipients.map(recipient => <span key={recipient.id}>依頼先：{recipient.name}<IconButton label={`${recipient.name}の指定を解除`} onClick={() => setRecipients(current => current.filter(item => item.id !== recipient.id))}><CloseIcon size={14} /></IconButton></span>)}</div> : null}
       {candidates.length ? <div className="mention-picker" role="listbox" aria-label="依頼するBot">{candidates.map((member, index) => <button type="button" role="option" aria-selected={index === mentionIndex} key={member.id} onClick={() => chooseRecipient(member)}>{member.name}<span className="muted">{member.role}</span></button>)}</div> : null}
-      <form className="composer" onSubmit={submit}><textarea disabled={readOnly} ref={inputRef} aria-label="このスレッドに返信" placeholder="このスレッドに返信…（@でBotを指定）" value={draft} rows={1} onChange={e => { setDraft(e.target.value); setCaret(e.target.selectionStart); setMentionIndex(0); setRecipients(current => current.filter(item => e.target.value.includes(`@${item.name}`))); }} onKeyDown={e => {
+      <details className="composer-context"><summary>送信の扱い</summary><label>種類 <select disabled={readOnly || sending} aria-label="送信の扱い" value={requestKind} onChange={e=>setRequestKind(e.target.value)}><option value="auto">通常の返信</option><option value="status">担当・進捗の確認だけ</option><option value="new">独立した新しい依頼</option><option value="amend">既存の仕事に追加条件</option><option value="cancel">既存の仕事を取り消す</option></select></label>{changingWork?<label>対象 <select disabled={readOnly || sending} aria-label="対象の仕事" value={targetId} onChange={e=>setTargetId(e.target.value)}><option value="">仕事を選択してください</option>{tasks.filter(t=>!['done','canceled','failed'].includes(t.status)).map(t=><option key={t.id} value={t.id}>{memberMap[t.member]?.name}：{t.title}</option>)}</select></label>:null}</details>
+      <form className="composer" onSubmit={submit}><textarea disabled={readOnly || sending} ref={inputRef} aria-label="このスレッドに返信" placeholder="このスレッドに返信…（@でBotを指定）" value={draft} rows={1} onChange={e => { setDraft(e.target.value); setCaret(e.target.selectionStart); setMentionIndex(0); setRecipients(current => current.filter(item => e.target.value.includes(`@${item.name}`))); }} onKeyDown={e => {
         if (e.nativeEvent.isComposing) return;
         if (candidates.length && ['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(e.key) && !e.ctrlKey && !e.metaKey) {
           e.preventDefault(); if (e.key === 'Escape') setCaret(0); else if (e.key === 'Enter') chooseRecipient(candidates[mentionIndex % candidates.length]);
@@ -131,7 +139,7 @@ function Presence({ members, paused, onPause, onAppearance, onMember, isPrivate,
     {isPrivate ? <p className="presence-scope"><LockIcon size={14} />あなたとの個別の会話</p> : null}
     <div className="presence-members">{members.map(member => <div key={member.id} className={`presence-member ${member.status === 'sleeping' ? 'sleeping' : ''}`}>
       <button className="avatar-button presence-avatar" aria-label={`${member.name}のアイコンを変更`} title="アイコンを変更" onClick={() => onAppearance(member.id)}><Avatar member={member} size={57} /><span className="avatar-edit-hint"><PaletteIcon size={12} /></span></button>
-      <button className="presence-member-info" onClick={() => onMember(member.id)}><strong>{member.name}</strong><StatusLabel member={member} paused={paused} /></button>{member.status === 'sleeping' ? <MoonIcon size={19} className="sleep-icon" /> : null}
+      <button className="presence-member-info" onClick={() => onMember(member.id)}><strong>{member.name}</strong><StatusLabel member={member} paused={paused} /></button>{member.jobs?.length ? <details className="presence-jobs"><summary>担当する仕事（{member.jobs.length}件）</summary>{member.jobs.map(job=><p key={job.id}>{job.progress?.label || job.step} — {job.title}{job.progress?.waiting_for?.length?`／待ち先：${job.progress.waiting_for.join('、')}`:''}</p>)}</details> : null}{member.status === 'sleeping' ? <MoonIcon size={19} className="sleep-icon" /> : null}
     </div>)}</div>
   </div>;
 }

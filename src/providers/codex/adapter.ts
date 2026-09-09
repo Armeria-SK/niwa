@@ -16,7 +16,7 @@ import type { CredentialStore, OAuthCredential } from '../../auth/credential-sto
 import { subscriptionUsageLimit } from './usage-limit.ts';
 import { Value } from '@sinclair/typebox/value';
 
-import { createBufferedModelEventStream, type ModelAdapter, type ModelEventStream, type ModelRunOptions } from '../shared/adapter.ts';
+import { createProgressModelEventStream, type ModelAdapter, type ModelEventStream, type ModelRunOptions } from '../shared/adapter.ts';
 import { createEffectiveModelCapabilities, type ModelProfile } from '../shared/profile.ts';
 import {
   DEFAULT_SUBSCRIPTION_BASE_URL,
@@ -60,7 +60,7 @@ export const openAISubscriptionAdapterCapabilities: ModelAdapterCapabilities = {
   supports_niwa_tool_loop: true,
   supports_tool_calls: true,
   supports_structured_output: true,
-  supports_streaming: false,
+  supports_streaming: true,
   supports_session_resume: false,
   supports_parallel_sessions: false,
   supports_usage_reporting: true,
@@ -71,6 +71,8 @@ export interface OpenAISubscriptionAdapterConfig {
   /** Host-owned role; conversation transport attempts do not certify coding. */
   readonly purpose?: 'coding' | 'conversation';
   readonly experimental_opt_in: boolean;
+  /** Host-only opt-in after endpoint compatibility acceptance; never enabled from model input. */
+  readonly reasoning_summary?: 'auto';
   readonly credential_store: CredentialStore;
   readonly base_url?: string;
   readonly fetch?: typeof globalThis.fetch;
@@ -133,6 +135,7 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
   readonly context_window?: number;
 
   readonly #profile: ModelProfile;
+  readonly #summary: 'auto'|undefined;
   readonly #store: CredentialStore;
   readonly #baseUrl: string;
   readonly #fetch: typeof globalThis.fetch;
@@ -147,6 +150,7 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
 
   constructor(config: OpenAISubscriptionAdapterConfig) {
     if (config.experimental_opt_in !== true) throw new Error('GPT subscription runtime requires explicit experimental opt-in.');
+    this.#summary=config.reasoning_summary;
     this.#profile = Object.freeze({ ...config.model_profile });
     if (this.#profile.runtime !== 'gpt' || this.#profile.provider_id !== 'openai_subscription') throw new Error('GPT subscription requires a gpt/openai_subscription model profile.');
     this.capabilities = Object.freeze(
@@ -175,15 +179,15 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
 
   run(request: ModelRequest, options: ModelRunOptions): ModelEventStream {
     const cancellation = new AbortController();
-    return createBufferedModelEventStream(
-      this.runDetailed(request, options, cancellation.signal).then((result) => result.events),
+    return createProgressModelEventStream(
+      emit => this.runDetailed(request, options, cancellation.signal, emit).then((result) => result.events),
       () => cancellation.abort(),
     );
   }
 
   /** Execute one request while retaining only safe protocol observations for
    * diagnostics. The regular ModelAdapter surface still exposes events only. */
-  async runDetailed(request: ModelRequest, options: ModelRunOptions, cancellationSignal = new AbortController().signal): Promise<OpenAISubscriptionRunResult> {
+  async runDetailed(request: ModelRequest, options: ModelRunOptions, cancellationSignal = new AbortController().signal, onDisplay?: (event:ModelEvent)=>void): Promise<OpenAISubscriptionRunResult> {
     const observation = createDiagnostics();
     let requestScope: BoundedRequestScope | undefined;
     let providerRequestSent = false;
@@ -217,7 +221,7 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
         const body = await readBoundedBody(response, this.#maxErrorBodyBytes, requestScope);
         throw httpFailure(response.status, body, [...exactCredentials]);
       }
-      const parsed = await readCodexResponse(response, this.#maxResponseBodyBytes, requestScope, [...exactCredentials]);
+      const parsed = await readCodexResponse(response, this.#maxResponseBodyBytes, requestScope, [...exactCredentials], summary=>onDisplay?.({type:'reasoning_summary',summary}));
       requestScope.throwIfAborted();
       observation.merge(parsed.diagnostics);
       if (parsed.diagnostics.response_completed) {
@@ -358,7 +362,7 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
         throw failure('INVALID_REQUEST', 'The outbound subscription request contained configured credential material.', false, undefined, 'local');
       }
       const modelSafeRequest = sanitizeModelRequestTextFields(request).request;
-      const requestBody = toSubscriptionRequest(modelSafeRequest, this.#profile.provider_model_id, this.#reasoningContinuation);
+      const requestBody = toSubscriptionRequest(modelSafeRequest, this.#profile.provider_model_id, this.#reasoningContinuation, this.#summary);
       const body = JSON.stringify(requestBody);
       if (containsExactCredentialMaterial(requestBody, exactCredentials)) {
         throw failure('INVALID_REQUEST', 'The outbound subscription request contained configured credential material.', false, undefined, 'local');
@@ -409,6 +413,7 @@ export function toSubscriptionRequest(
   request: ModelRequest,
   model: string,
   reasoningContinuation?: readonly CodexReasoningContinuationItem[],
+  summary?: 'auto',
 ): JsonObject {
   const mappedMessages = request.messages.flatMap(toInputMessages);
   const continuation = (reasoningContinuation ?? []).map(toReasoningInputItem);
@@ -430,7 +435,7 @@ export function toSubscriptionRequest(
     store: false,
     stream: true,
     include: ['reasoning.encrypted_content'],
-    ...(request.reasoning_effort === undefined ? {} : { reasoning: { effort: request.reasoning_effort } }),
+    ...(request.reasoning_effort === undefined ? {} : { reasoning: { effort: request.reasoning_effort, ...(summary?{summary}:{}) } }),
     ...(request.response_contract.type === 'json_schema'
       ? {
           text: {
@@ -923,6 +928,7 @@ async function readCodexResponse(
   maxBytes: number,
   scope: BoundedRequestScope,
   exactCredentials: readonly string[],
+  onSummary?: (summary:string)=>void,
 ): Promise<CodexResponsesParseResult> {
   if (scope.signal.aborted) {
     cancelResponseBody(response);
@@ -939,7 +945,7 @@ async function readCodexResponse(
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
   let mode: 'unknown' | 'sse' | 'json' = contentType.includes('text/event-stream') ? 'sse' : 'unknown';
-  let sse = mode === 'sse' ? createCodexResponsesStreamParser(exactCredentials) : undefined;
+  let sse = mode === 'sse' ? createCodexResponsesStreamParser(exactCredentials,onSummary) : undefined;
   let prefix = '';
   let body = '';
   let total = 0;
@@ -948,7 +954,7 @@ async function readCodexResponse(
     const trimmed = prefix.trimStart();
     if (trimmed.startsWith('data:') || trimmed.startsWith('event:') || trimmed.startsWith(':')) {
       mode = 'sse';
-      sse = createCodexResponsesStreamParser(exactCredentials);
+      sse = createCodexResponsesStreamParser(exactCredentials,onSummary);
       sse.push(prefix);
       prefix = '';
       return;

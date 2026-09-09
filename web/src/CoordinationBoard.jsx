@@ -34,7 +34,7 @@ export function CoordinationBoard({roomId,members,onClose,onArtifact}) {
   {visible.map(task=>{
    const children=tasks.filter(child=>child.parent_id===task.id && !['completed','cancelled','failed'].includes(child.state));
    return <article className="coordination-task" key={task.id}>
-    <div className="coordination-meta"><strong>{name(task.agent_id)}</strong><span>{task.paused?'停止中':task.approval_pending?'承認待ち':states[task.state]}</span></div>
+    <div className="coordination-meta"><strong>{name(task.agent_id)}</strong><span>{task.paused?'停止中':task.approval_pending?'承認待ち':task.progress?.label||states[task.state]}</span></div>
     <p>{task.prompt}</p>
     <dl><dt>依頼元</dt><dd>{name(task.requester_id)}{task.parent_id ? ` · 親の依頼：${byId.get(task.parent_id)?.prompt || '以前の依頼'}` : ''}</dd>
      <dt>対応待ち</dt><dd>{task.waiting_for ? name(task.waiting_for) : children.length ? [...new Set(children.map(child=>name(child.agent_id)))].join('・') : task.wait_reason || 'なし'}</dd>

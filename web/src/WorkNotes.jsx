@@ -4,21 +4,26 @@ import './WorkNotes.css';
 
 export function WorkNotes({ roomId, members }) {
   const [notes, setNotes] = useState([]);
+  const [progress,setProgress]=useState([]);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('');
   const [expanded, setExpanded] = useState({});
   useEffect(() => {
     let active = true, timer;
+    setNotes([]);setProgress([]);setError('');setExpanded({});
     async function load() {
       try {
         const result = await api(`/rooms/${roomId}/work-notes`);
-        if (active) { setNotes(result.notes); setError(''); }
+        if (active) { setNotes(result.notes);setProgress(result.progress??[]); setError(''); }
       } catch (e) { if (active) setError(e.message); }
       finally { if (active) timer = setTimeout(load, 2000); }
     }
     void load();
     return () => { active = false; clearTimeout(timer); };
   }, [roomId]);
+  const latestProgress = new Map();
+  const priority = p => p.state==='running'?2:['queued','waiting_child','waiting_provider','waiting_user'].includes(p.state)?1:0;
+  for(const item of progress) {const old=latestProgress.get(item.agent_id);if(!old||priority(item)>=priority(old))latestProgress.set(item.agent_id,item);}
   const groups = new Map();
   for (const note of notes) {
     if (filter && note.agent_id !== filter) continue;
@@ -29,13 +34,24 @@ export function WorkNotes({ roomId, members }) {
     <div className="work-notes-heading"><h2>作業メモ</h2>
       <select aria-label="作業メモのメンバー" value={filter} onChange={e => setFilter(e.target.value)}>
         <option value="">全員</option>
-        {Object.values(members).filter(m => notes.some(n => n.agent_id === m.id)).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+        {Object.values(members).filter(m => notes.some(n => n.agent_id === m.id)||progress.some(p=>p.agent_id===m.id)).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
       </select>
     </div>
     <p className="work-notes-hint">作業中の気付き・進捗。返信は不要です。</p>
     {error ? <p role="status">更新できません：{error}</p> : null}
-    {!notes.length && !error ? <p className="work-notes-hint">新しい気付きがあると、ここに届きます。</p> : null}
+    {!notes.length && !progress.length && !error ? <p className="work-notes-hint">新しい気付きがあると、ここに届きます。</p> : null}
     <div className="work-notes-scroll">
+      {[...latestProgress.values()].filter(p=>!filter||p.agent_id===filter).map(p=><article className="work-note-group" key={'progress:'+p.task_id}>
+        <p>{members[p.agent_id]?.name||'Bot'} · {p.label}{p.status==='failed'?'（直前の操作は失敗）':p.status==='completed'&&p.state==='running'?'（直前の操作は完了）':''}</p>
+        {p.retry_at?<p>再確認予定：{new Date(p.retry_at).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}</p>:null}
+        {!!p.waiting_for?.length?<p>待っている相手：{p.waiting_for.join('・')}</p>:null}
+        <details><summary>進捗の詳細</summary>
+          <p>{p.last_activity_at?`最終活動 ${new Date(p.last_activity_at).toLocaleTimeString('ja-JP')}`:'活動時刻は未記録'}</p>
+          {p.started_at?<p>この段階の経過：{Math.max(0,Math.floor(((p.state==='running'&&p.status==='running'?Date.now():p.last_activity_at??p.started_at)-p.started_at)/1000))}秒</p>:null}
+          {p.recent?.map((event,index)=><p key={index}>{new Date(event.created_at).toLocaleTimeString('ja-JP')} · {event.failure?({network:'通信できませんでした',policy_blocked:'通信の許可範囲外です',refused:'取得先に拒否されました',not_found:'資料が見つかりません',invalid_request:'指定内容を確認してください',invalid_response:'取得内容に対応できません',aborted:'中断しました'})[event.failure]||'取得を完了できませんでした':'操作の結果を受け取りました'}</p>)}
+          {p.summary?<><p>思考の要約（提供元の公開用要約・未確定）</p><p>{p.summary}</p></>:<p>思考の要約は提供されていません。</p>}
+        </details>
+      </article>)}
       {[...groups].reverse().map(([id, items]) => {
         const last = items.at(-1), replied = !!last.reply_id;
         const open = expanded[id] ?? !replied;

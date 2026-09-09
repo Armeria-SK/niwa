@@ -295,7 +295,7 @@ function parseOutput(output: readonly unknown[], context: ParseContext): void {
   }
 }
 
-export function createCodexResponsesStreamParser(exactSecrets?: string | readonly string[]): CodexResponsesStreamParser {
+export function createCodexResponsesStreamParser(exactSecrets?: string | readonly string[], onSummary?: (summary:string)=>void): CodexResponsesStreamParser {
   const context = createContext(exactSecrets);
   let lineBuffer = '';
   let frameEvent: string | undefined;
@@ -325,7 +325,9 @@ export function createCodexResponsesStreamParser(exactSecrets?: string | readonl
     const eventType = typeof record['type'] === 'string' ? record['type'] : event;
     if (eventType !== undefined) recordEventType(eventType, context);
     try {
+      const prior=context.events.length;
       processRecord(record, context, eventType);
+      for(const item of context.events.slice(prior))if(item.type==='reasoning_summary')onSummary?.(item.summary);
     } catch (error) {
       if (error instanceof FunctionCallStateError) throw protocol(context, error.code, error.message);
       throw error;

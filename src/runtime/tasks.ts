@@ -1,3 +1,4 @@
+import {redactSecrets} from '../shared/redaction.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { check, text } from '../domain/types.ts';
@@ -197,7 +198,7 @@ export class Tasks {
         const now = Date.now(), reset = Number(wake.budget_reset_at), calls = reset <= now ? 0 : Number(wake.model_calls);
         if (calls >= 24) {
           this.wait(actor,lease,'waiting_provider','自発活動の時間枠の利用量に達したため休息中です。時間枠が戻ると自動で続けます。',true);
-          this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(reset,task.id);
+          this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(reset,task.id);this.waitKind(actor,lease,'budget');
           return false;
         }
         this.#db.prepare('UPDATE autonomous_wakes SET model_calls=?,budget_reset_at=? WHERE agent_id=?')
@@ -239,12 +240,55 @@ export class Tasks {
     return {saved:true,rested:!!input.rest_minutes};
   }
   /** Fresh task-local facts for model input; never a replacement for lease/approval checks. */
+  /** Same room only; child_results remains explicitly local to its parent task. */
+  controlRevision(actor:Actor,id:string):number {this.get(actor,id);return Number(this.#db.prepare('SELECT coalesce(max(sequence),0) AS revision FROM task_events WHERE task_id=?').get(id)!.revision);}
+  conversationState(actor:Actor,roomId:string,exclude?:string) {
+    this.#access.room(actor,roomId);
+    const rows=this.#db.prepare(`SELECT t.id,t.parent_id,t.agent_id,a.name,t.prompt,t.state,t.paused,t.internal_autonomous,t.updated_at,t.attempt
+      FROM tasks t JOIN agents a ON a.id=t.agent_id WHERE t.room_id=? AND t.id<>?
+      AND NOT EXISTS(SELECT 1 FROM task_context c WHERE c.task_id=t.id AND c.kind='status')
+      ORDER BY CASE WHEN t.state IN ('completed','cancelled','failed') THEN 1 ELSE 0 END,t.updated_at DESC LIMIT 41`).all(roomId,exclude??'') as unknown as {id:string;parent_id:string|null;agent_id:string;name:string;prompt:string;state:string;paused:number;internal_autonomous:number;updated_at:number;attempt:number}[];
+    return {scope:'current_conversation',checked_at:Date.now(),truncated:rows.length>40,tasks:rows.slice(0,40).map(t=>({...t,control_revision:this.controlRevision(actor,t.id),
+      prompt:redactSecrets(String(t.prompt)).slice(0,240),progress:(({label,state,kind,waiting_for,retry_at,last_activity_at})=>({label,state,kind,waiting_for,retry_at,last_activity_at}))(this.progress(actor,String(t.id),true))}))};
+  }
+  linkMessage(actor:Actor,messageId:string,taskId:string,kind:string) {
+    const task=this.get(actor,taskId);
+    check(this.#db.prepare('SELECT 1 FROM messages WHERE id=? AND room_id=?').get(messageId,task.room_id),'forbidden','Message is outside task conversation');
+    this.#db.prepare('INSERT OR IGNORE INTO task_message_links VALUES (?,?,?)').run(messageId,taskId,kind);
+  }
+  completeInquiry(actor:Actor,id:string,result:string) {
+    this.#admin(actor);const task=this.get(actor,id);
+    check(task.state==='queued' && this.#db.prepare("SELECT 1 FROM task_context WHERE task_id=? AND kind='status'").get(id),'conflict','Not a pending status inquiry');
+    this.#change(id,'completed',text(result),null,false);
+  }
+  continueWork(actor:Actor,lease:TaskLease,operationId:string,nextAction:string,expectedRevision:number) {
+    this.#owned(actor,lease);
+    this.updatePlan(actor,lease,operationId,expectedRevision,[text(nextAction,1000)]);
+    // Preserve steps and receipts: reclaim replays the saved report receipt, never its publication.
+    this.#change(lease.task.id,'queued');
+    this.#db.prepare('UPDATE tasks SET lease_token=NULL WHERE id=?').run(lease.task.id);
+  }
+  childDisposition(actor:Actor,lease:TaskLease,id:string,action:string,revision:number):JsonObject {
+    this.#owned(actor,lease);const child=this.get(actor,id);
+    check(child.parent_id===lease.task.id,'forbidden','Not a direct child');
+    check(this.controlRevision(actor,id)===revision,'conflict','Child changed; refresh');
+    check(action==='cancel'||action==='independent','invalid','Unknown disposition');
+    if(action==='cancel')this.cancel(actor,id);
+    else {this.#db.prepare('INSERT OR REPLACE INTO task_child_dependencies VALUES (?,0)').run(id);this.#event(id,'independent');}
+    return {recorded:true};
+  }
+  assertCompletion(actor:Actor,lease:TaskLease) {
+    this.#owned(actor,lease);
+    check(!this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id=? AND state NOT IN ('completed','failed','cancelled') AND id NOT IN(SELECT task_id FROM task_child_dependencies WHERE required=0)").get(lease.task.id),'conflict','Required children remain; wait for them or explicitly cancel/detach them before completion');
+  }
   workState(actor: Actor, lease: TaskLease) {
     const task = this.#owned(actor, lease);
     this.#access.room(actor, task.room_id);
     const memory = this.#access.memory(actor, task.agent_id);
     const plan = memory.prepare('SELECT revision,remaining FROM task_plans WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)').get(task.id);
     return {
+      conversation_scope: this.conversationState(actor,task.room_id,task.id),
+      request_context: this.#db.prepare('SELECT kind,related_task_id FROM task_context WHERE task_id=?').get(task.id)??null,
       observations: this.#db.prepare("SELECT operation_id,json_extract(output,'$.url') AS url,json_extract(output,'$.source_id') AS source_id FROM tool_receipts WHERE task_id=? AND (json_extract(output,'$.fetched_at') IS NOT NULL OR json_extract(output,'$.revision') IS NOT NULL)").all(task.id),
       initiative: this.#access.initiative(actor,task.id),
       quality_enabled: this.#db.prepare('SELECT enabled FROM quality_settings WHERE id=1').get()?.enabled===1,
@@ -259,7 +303,7 @@ export class Tasks {
       remaining_plan: { revision: plan ? Number(plan.revision) : 0, remaining: plan ? JSON.parse(String(plan.remaining)) as string[] : [] },
       applied_procedures: memory.prepare('SELECT procedure_id,revision,applicability FROM procedure_uses WHERE task_id=? ORDER BY created_at,operation_id').all(task.id),
       administrator_replies: this.#db.prepare('SELECT sequence,body,created_at FROM task_replies WHERE task_id=? ORDER BY sequence').all(task.id),
-      child_results: this.#db.prepare('SELECT id AS task_id,agent_id,prompt,state,result,wait_reason FROM tasks WHERE parent_id=? AND room_id=? ORDER BY created_at,rowid').all(task.id, task.room_id),
+      child_results: this.#db.prepare('SELECT id AS task_id,agent_id,prompt,state,result,wait_reason,attempt,updated_at,coalesce((SELECT required FROM task_child_dependencies WHERE task_id=tasks.id),1) AS required FROM tasks WHERE parent_id=? AND room_id=? ORDER BY created_at,rowid').all(task.id, task.room_id),
       updates: this.#db.prepare('SELECT id,kind,title,detail,artifact_id FROM updates WHERE task_id=? AND room_id=? ORDER BY id').all(task.id, task.room_id),
       artifacts: this.#db.prepare(`SELECT DISTINCT a.id,a.name,a.kind,a.description FROM artifacts a
         JOIN updates u ON u.artifact_id=a.id WHERE u.task_id=? AND u.room_id=? AND a.room_id=? ORDER BY a.id`).all(task.id, task.room_id, task.room_id),
@@ -380,6 +424,76 @@ export class Tasks {
     const rows = db.prepare('SELECT step,memory_revision,rules_revision,discarded,events FROM task_steps WHERE task_id=? ORDER BY step').all(id) as { step: number; memory_revision: number; rules_revision: number; discarded: number; events: string }[];
     return rows.map(row => ({ ...row, events: JSON.parse(row.events) as ModelEvent[] }));
   }
+  #summaries = new Map<string,{call:string;revision:number;text:string}>();
+  activity(actor:Actor,lease:TaskLease,call:string,phase:string,status='running',revision?:number) {
+    this.#owned(actor,lease);
+    const memory=revision??Number(this.#access.memory(actor,lease.task.agent_id).prepare('SELECT revision FROM memory_state WHERE id=1').get()!.revision);
+    const rules=Number(this.#db.prepare('SELECT revision FROM common_rules WHERE id=1').get()!.revision),now=Date.now();
+    this.#db.prepare(`INSERT INTO task_activity VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET
+      call_id=excluded.call_id,lease=excluded.lease,memory_revision=excluded.memory_revision,rules_revision=excluded.rules_revision,
+      phase=excluded.phase,status=excluded.status,started_at=CASE WHEN call_id=excluded.call_id THEN started_at ELSE excluded.started_at END,updated_at=excluded.updated_at`)
+      .run(lease.task.id,call,lease.token,memory,rules,phase,status,now,now);
+    if(this.#summaries.get(lease.task.id)?.call!==call)this.#summaries.delete(lease.task.id);
+  }
+  summary(actor:Actor,lease:TaskLease,call:string,revision:number,body:string) {
+    if(!this.active(actor,lease))return;
+    const row=this.#db.prepare('SELECT * FROM task_activity WHERE task_id=?').get(lease.task.id);
+    const current=this.#access.memory(actor,lease.task.agent_id).prepare('SELECT revision FROM memory_state WHERE id=1').get()!.revision;
+    if(!row||row.call_id!==call||row.lease!==lease.token||current!==revision)return;
+    // Replacement snapshots, never a fragment log. Only active calls retain display text.
+    this.#summaries.set(lease.task.id,{call,revision,text:redactSecrets(body).slice(0,4000)});
+    if(this.#summaries.size>100)this.#summaries.delete(this.#summaries.keys().next().value!);
+    this.#db.prepare('UPDATE task_activity SET updated_at=? WHERE task_id=?').run(Date.now(),lease.task.id);
+  }
+  waitKind(actor:Actor,lease:TaskLease,kind:string) {
+    this.#owned(actor,lease,false);
+    this.#db.prepare('INSERT INTO task_waits VALUES (?,?) ON CONFLICT(task_id) DO UPDATE SET kind=excluded.kind').run(lease.task.id,kind);
+  }
+  clearActivity(actor:Actor,id:string) {
+    this.#admin(actor);this.get(actor,id);this.#summaries.delete(id);
+    for(const table of ['task_activity','task_observations','task_waits','task_memory_skips'])this.#db.prepare('DELETE FROM '+table+' WHERE task_id=?').run(id);
+  }
+  progress(actor:Actor,id:string,factsOnly=false) {
+    const task=this.get(actor,id),row=this.#db.prepare('SELECT * FROM task_activity WHERE task_id=?').get(id);
+    const deleted=!!this.#db.prepare('SELECT 1 FROM deleted_agents WHERE id=?').get(task.agent_id);
+    const revision=deleted?null:factsOnly?row?.memory_revision:this.#access.memory(actor,task.agent_id).prepare('SELECT revision FROM memory_state WHERE id=1').get()!.revision;
+    const rules=this.#db.prepare('SELECT revision FROM common_rules WHERE id=1').get()!.revision;
+    const current=!deleted&&row?.memory_revision===revision&&row?.rules_revision===rules;
+    const active=task.state==='running'&&!task.paused&&!this.#paused()&&current&&row?.lease===this.#read(id).lease_token;
+    const waiting=this.#db.prepare('SELECT kind FROM task_waits WHERE task_id=?').get(id)?.kind??'unknown';
+    const kind=task.paused||this.#paused()?'paused':['waiting_provider','waiting_user'].includes(task.state)&&waiting!=='unknown'?String(waiting):task.state;
+    const labels:Record<string,string>={running:'作業中',paused:'停止中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_provider:'理由未確認の待機',waiting_user:'対応待ち（理由未確認）',user_input:'管理者の入力待ち',approval:'承認の判断待ち',invalid_output:'応答形式の確認待ち',budget:'自発活動の利用枠待ち',schedule_budget:'予定の利用枠待ち',network:'接続を再試行中',authentication:'認証の確認待ち',provider_quota:'接続先の利用枠待ち',unknown:'理由未確認の待機',stalled:'進展がないため再確認待ち',completed:'完了',failed:'失敗',cancelled:'中止'};
+    const phases:Record<string,string>={resolve:'接続を準備中',model:'返答を考え中',memory_review:'記憶を整理中',task_summary_save:'結果を整理中',read:'資料を確認中',execute:'コードを実行中',tool:'操作中'};
+    const summary=this.#summaries.get(id);
+    return {task_id:id,agent_id:task.agent_id,state:task.state,kind,label:active?(phases[String(row.phase)]??'作業中'):(labels[kind]??'状態を確認中'),
+      phase:current?row?.phase:null,status:active?row.status:task.state,started_at:current?row?.started_at:null,last_activity_at:current?row?.updated_at:null,
+      retry_at:task.state==='waiting_provider'?task.provider_retry_at:null,
+      summary:!factsOnly&&active&&summary&&summary.call===row.call_id&&summary.revision===revision?summary.text:null,
+      recent:!factsOnly&&current?this.#db.prepare('SELECT name,failure,created_at FROM task_observations WHERE task_id=? AND memory_revision=? AND rules_revision=? ORDER BY rowid DESC LIMIT 6').all(id,revision!,rules!):[],
+      waiting_for:task.state==='waiting_child'?this.#db.prepare("SELECT DISTINCT a.name FROM tasks t JOIN agents a ON a.id=t.agent_id WHERE t.parent_id=? AND t.state NOT IN ('completed','failed','cancelled')").all(id).map(r=>r.name):[]};
+  }
+  observe(actor:Actor,lease:TaskLease,operation:string,name:string,args:JsonObject,result:JsonObject) {
+    this.#owned(actor,lease);const memory=this.#access.memory(actor,lease.task.agent_id).prepare('SELECT revision FROM memory_state WHERE id=1').get()!.revision;
+    const rules=this.#db.prepare('SELECT revision FROM common_rules WHERE id=1').get()!.revision;
+    const read=/^(task_history_read|history_read|web_read|browser_navigate|browser_snapshot|workspace_read|workspace_list)$/.test(name);
+    const raw=JSON.stringify(result),failure=result.error?String(result.failure_kind??'unknown'):null;
+    // History pages reference their source; never recursively embed another history read.
+    const value=name==='history_read'?{source_reference:args,retained:false}:name==='task_history_read'?{step:args.step,offset:args.offset,revision:result.revision??null,next_offset:result.next_offset??null,history_reference:true}:
+      raw.length<=20000?result:{retained:false,reason:'Read the original source in pages',bytes:Buffer.byteLength(raw)};
+    const stable=JSON.stringify(result,(key,value)=>['fetched_at','checked_at','observed_at'].includes(key)?undefined:value);
+    const fingerprint=createHash('sha256').update(JSON.stringify(result.history_indirection===true?[name,'history-indirection']:[name,args,stable])).digest('hex');
+    this.#db.prepare('INSERT OR IGNORE INTO task_observations VALUES (?,?,?,?,?,?,?,?,?)').run(lease.task.id,operation,Number(memory),Number(rules),name,(read?'read:':'work:')+fingerprint,redactSecrets(JSON.stringify(value)),failure,Date.now());
+    this.#db.prepare('DELETE FROM task_observations WHERE task_id=? AND rowid NOT IN (SELECT rowid FROM task_observations WHERE task_id=? ORDER BY rowid DESC LIMIT 32)').run(lease.task.id,lease.task.id);
+  }
+  observations(actor:Actor,lease:TaskLease) {
+    this.#owned(actor,lease);const revision=this.#access.memory(actor,lease.task.agent_id).prepare('SELECT revision FROM memory_state WHERE id=1').get()!.revision;
+    const rules=this.#db.prepare('SELECT revision FROM common_rules WHERE id=1').get()!.revision;
+    const rows=this.#db.prepare('SELECT * FROM task_observations WHERE task_id=? AND memory_revision=? AND rules_revision=? AND created_at>? ORDER BY rowid').all(lease.task.id,Number(revision),Number(rules),Date.now()-30*60_000);
+    let repeats=0;const seen=new Set();
+    for(const row of rows){if(!String(row.fingerprint).startsWith('read:')){if(!['work_note','task_plan_update','coordination_read'].includes(String(row.name))){repeats=0;seen.clear();}continue;}if(seen.has(row.fingerprint))repeats++;else {seen.add(row.fingerprint);repeats=0;}}
+    return {repeated_reads:repeats,recovery:repeats>=3?'同じ資料/版/ページや取得失敗への巡回です。以下の観測を使い、別の方法か分かった範囲の回答へ進んでください。観測は原資料・実行証拠の代わりではありません。':null,
+      recent:rows.slice(-8).map(row=>({operation_id:row.operation_id,name:row.name,observed_at:row.created_at,failure:row.failure,result_preview:String(row.result).slice(0,1500)}))};
+  }
   /** Read the current task's private transcript, never another task or a superseded memory revision. */
   readStep(actor: Actor, lease: TaskLease, step: number, offset = 0, revision: string | null = null): JsonObject {
     const task = this.#owned(actor, lease); this.#access.room(actor, task.room_id);
@@ -387,24 +501,26 @@ export class Tasks {
     check(revision === null || /^[a-f0-9]{64}$/.test(revision), 'invalid', 'Invalid history revision');
     check(offset === 0 || revision !== null, 'invalid', 'A revision is required for continuation');
     const db = this.#access.memory(actor, task.agent_id);
-    const row = db.prepare(`SELECT events,memory_revision FROM task_steps WHERE task_id=? AND step=? AND discarded=0
-      AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)`).get(task.id, step);
+    const row = db.prepare(`SELECT events,memory_revision FROM task_steps WHERE task_id=? AND step=? AND discarded=0 AND rules_revision=?
+      AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)`).get(task.id, step,this.#db.prepare('SELECT revision FROM common_rules WHERE id=1').get()!.revision!);
     check(row, 'not_found', 'Task history is unavailable');
     const events = JSON.parse(String(row.events)) as ModelEvent[];
     const calls = events.filter((event): event is Extract<ModelEvent, { type: 'tool_call' }> => event.type === 'tool_call');
     const results = calls.map((call, index) => {
+      if(call.name==='task_history_read')return {tool_call_id:call.tool_call_id,name:call.name,result:{history_reference:call.arguments}};
+
       const inputHash = createHash('sha256').update(JSON.stringify({ name: call.name, arguments: call.arguments })).digest('hex');
       const receipt = this.#db.prepare('SELECT input AS input_hash,output FROM tool_receipts WHERE task_id=? AND operation_id=?').get(task.id, `${step}:${index}`)
         ?? this.#db.prepare('SELECT input_hash,output FROM external_operations WHERE task_id=? AND operation_id=?').get(task.id, `${step}:${index}`);
       return { tool_call_id: call.tool_call_id, name: call.name,
-        result: receipt?.input_hash === inputHash && receipt.output !== null ? JSON.parse(String(receipt.output)) as JsonObject : null };
+        result: receipt?.input_hash === inputHash && receipt.output !== null ? JSON.parse(String(receipt.output)) as JsonObject : (()=>{const observation=this.#db.prepare('SELECT result FROM task_observations WHERE task_id=? AND operation_id=? AND memory_revision=?').get(task.id,`${step}:${index}`,row.memory_revision!);return observation?JSON.parse(String(observation.result)):{retained:false,reason:'No retained result; this does not establish failure'};})() };
     });
     const content = JSON.stringify({ events, tool_results: results });
     const current = createHash('sha256').update(JSON.stringify([task.agent_id, task.room_id, task.id, step, row.memory_revision, content])).digest('hex');
     check(revision === null || revision === current, 'conflict', 'Task history changed; read from the beginning');
     check(offset <= content.length, 'invalid', 'History offset is outside the source');
     const end = Math.min(offset + 20_000, content.length);
-    return { task_id: task.id, step, revision: current, offset, text: content.slice(offset, end),
+    return { task_id: task.id, step, revision: current, offset, text: content.slice(offset, end),history_indirection:calls.length>0&&calls.every(call=>call.name==='task_history_read'),
       next_offset: end < content.length ? end : null, untrusted: true };
   }
   saveStep(actor: Actor, lease: TaskLease, memoryRevision: number, events: readonly ModelEvent[]): number {
@@ -469,7 +585,7 @@ export class Tasks {
   }
   #resumeParent(parentId: string | null): void {
     if (!parentId || this.#read(parentId).state !== 'waiting_child') return;
-    if (this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id=? AND state NOT IN ('completed','failed','cancelled')").get(parentId)) return;
+    if (this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id=? AND state NOT IN ('completed','failed','cancelled') AND id NOT IN(SELECT task_id FROM task_child_dependencies WHERE required=0)").get(parentId)) return;
     this.#change(parentId, 'queued');
     this.#db.prepare('UPDATE tasks SET lease_token=NULL WHERE id=?').run(parentId);
   }
@@ -478,7 +594,7 @@ export class Tasks {
     check(!retryProvider || state === 'waiting_provider', 'invalid', 'Only provider waits can retry automatically');
     text(reason, 1000);
     transaction(this.#db, () => {
-      this.#owned(actor, lease); this.#change(lease.task.id, state, null, reason);
+      this.#owned(actor, lease); this.#change(lease.task.id, state, null, reason);this.waitKind(actor,lease,'unknown');
       if (retryProvider) this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(Date.now() + (lease.task.internal_autonomous ? Math.min(60,15*2**Math.min(lease.task.attempt-1,2))*60_000 : 60_000), lease.task.id);
     });
   }

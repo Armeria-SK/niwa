@@ -1,3 +1,5 @@
+import {isStatusInquiry,type SubmissionContext} from './conversation-work.ts';
+import {activitySchema} from '../storage/activity-schema.ts';
 import {promptSchema} from '../storage/prompt-schema.ts';
 import {artifactQualitySchema} from '../storage/artifact-quality-schema.ts';
 import {ArtifactQuality} from './artifact-quality.ts';
@@ -88,7 +90,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -228,6 +230,7 @@ export class Runtime {
       transaction(this.#db, () => {
         for (const task of this.tasks.list(actor)) if (task.agent_id === record.id && !['completed', 'failed', 'cancelled'].includes(task.state)) this.tasks.cancel(actor, task.id);
         this.#db.prepare("UPDATE schedules SET deleted=1,enabled=0,prompt='',source_revision='',wait_reason=NULL WHERE agent_id=?").run(record.id);
+        for(const task of this.tasks.list(actor))if(task.agent_id===record.id)this.tasks.clearActivity(actor,task.id);
         this.#db.prepare('DELETE FROM agent_profiles WHERE agent_id=?').run(record.id);
         this.#db.prepare('DELETE FROM tool_receipts WHERE task_id IN (SELECT id FROM tasks WHERE agent_id=?)').run(record.id);
         this.#db.prepare("UPDATE agents SET name='削除したBot',status='dormant' WHERE id=?").run(record.id);
@@ -536,7 +539,7 @@ export class Runtime {
     check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active'); text(title, 200); text(detail, 2000);
     transaction(this.#db, () => {
       this.#db.prepare("INSERT INTO approval_requests(task_id,title,detail,version,status) VALUES (?,?,?,?,'pending') ON CONFLICT(task_id) DO UPDATE SET title=excluded.title,detail=excluded.detail,version=excluded.version,status='pending',action_hash=NULL,operation_id=NULL").run(lease.task.id, title, detail, randomUUID());
-      this.tasks.wait(actor, lease, 'waiting_user', title);
+      this.tasks.wait(actor, lease, 'waiting_user', title);this.tasks.waitKind(actor,lease,'approval');
     });
   }
   /** Caller supplies the complete normalized operation. The display and binding use identical bytes. */
@@ -606,6 +609,7 @@ export class Runtime {
           this.#db.prepare("UPDATE rooms SET title='' WHERE id=?").run(record.id);
           this.#db.prepare('DELETE FROM task_coordination WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
           this.#db.prepare("UPDATE tasks SET prompt='',result=NULL,wait_reason=NULL,source_message_id=NULL WHERE room_id=?").run(record.id);
+          for(const task of this.tasks.list(actor))if(task.room_id===record.id)this.tasks.clearActivity(actor,task.id);
           for (const table of ['autonomous_boundaries', 'work_notes', 'task_replies', 'tool_receipts', 'business_tasks', 'approval_requests']) this.#db.prepare('DELETE FROM ' + table + ' WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
         } else {
           this.#db.prepare('DELETE FROM updates WHERE artifact_id=?').run(record.id);
@@ -790,6 +794,7 @@ export class Runtime {
   respond(actor: Actor, lease: TaskLease, content: string, recipientIds?: string[]): void {
     transaction(this.#db, () => {
       check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
+      this.tasks.assertCompletion(actor,lease);
       const agents = this.agents(actor);
       let body = content.trim();
       let recipients: Agent[] = [];
@@ -826,13 +831,24 @@ export class Runtime {
         catch (error) { if (!(error instanceof DomainError)) throw error; }
       }
       const message = body ? this.post(actor, lease.task.room_id, body) : undefined;
-      if (message) this.#db.prepare('UPDATE work_notes SET reply_id=? WHERE task_id=?').run(message.id, lease.task.id);
+      if (message) {this.#db.prepare('UPDATE work_notes SET reply_id=? WHERE task_id=?').run(message.id, lease.task.id);this.tasks.linkMessage(actor,message.id,lease.task.id,'response');}
       for (const id of new Set(recipients.map(item => item.id))) {
         if (id === lease.task.agent_id) continue;
         if (lease.task.parent_id && id === lease.task.requester_id && this.tasks.get(actor, lease.task.parent_id).state === 'waiting_child') continue;
         this.tasks.address(actor, lease, id, body, message?.id);
       }
       this.tasks.finish(actor, lease, body || '完了');
+    });
+  }
+
+  reportAndContinue(actor:Actor,lease:TaskLease,body:string,nextAction:string,expectedRevision:number,operationId:string) {
+    return transaction(this.#db,()=>{
+    check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
+    text(body);text(nextAction,1000);
+    const message=this.post(actor,lease.task.room_id,body);
+    this.tasks.linkMessage(actor,message.id,lease.task.id,'progress');
+    this.tasks.continueWork(actor,lease,operationId,nextAction,expectedRevision);
+    return {posted:true,continued:true};
     });
   }
 
@@ -853,13 +869,13 @@ export class Runtime {
     });
   }
   /** A browser retry must not post twice or start two jobs. Both records commit together. */
-  submit(actor: Actor, id: string, roomId: string, body: string, agentId?: string | string[], replyTo?: string): { message: Message; task: Task | null } {
+  submit(actor: Actor, id: string, roomId: string, body: string, agentId?: string | string[], replyTo?: string, requestContext?: SubmissionContext): { message: Message; task: Task | null } {
     this.#admin(actor);
     check(typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id), 'invalid', 'Invalid submission id');
     text(body);
     const recipients = Array.isArray(agentId) ? [...new Set(agentId)].sort() : agentId ? [agentId] : [];
     check(!Array.isArray(agentId) || (agentId.length > 0 && agentId.length <= 100 && agentId.every(value => typeof value === 'string')), 'invalid', 'Invalid recipients');
-    const hash = createHash('sha256').update(JSON.stringify([roomId, body, Array.isArray(agentId) ? recipients : agentId ?? null, ...(replyTo === undefined ? [] : [replyTo])])).digest('hex');
+    const hash = createHash('sha256').update(JSON.stringify([roomId, body, Array.isArray(agentId) ? recipients : agentId ?? null, ...(replyTo === undefined ? [] : [replyTo]), ...(requestContext ? [requestContext] : [])])).digest('hex');
     return transaction(this.#db, () => {
       const previous = this.#db.prepare('SELECT * FROM submissions WHERE id=?').get(id) as
         { input_hash: string; message_id: string; task_id: string | null } | undefined;
@@ -879,11 +895,32 @@ export class Runtime {
       for (const recipient of recipients) {
         this.#room(this.agentSession(recipient), roomId);
         check(this.#agent(recipient).status === 'active', 'forbidden', 'Recipient is dormant');
+        const kind=requestContext?.kind ?? (isStatusInquiry(body)?'status':undefined);
+        const linked=replyTo ? this.#db.prepare('SELECT task_id FROM task_message_links WHERE message_id=?').all(replyTo).map(row=>this.tasks.get(actor,String(row.task_id))).filter(t=>t.agent_id===recipient&&t.room_id===roomId) : [];
+        const related=requestContext?.task_id ? this.tasks.get(actor,requestContext.task_id) : linked.length===1?linked[0]:undefined;
+        if(related)check(related.room_id===roomId&&related.agent_id===recipient,'forbidden','Target does not belong to this recipient and conversation');
+        if(kind==='amend'||kind==='cancel') {
+          check(related,'invalid','Select the work to change');
+          check(this.tasks.controlRevision(actor,related.id)===requestContext?.expected_revision,'conflict','Work changed; refresh before applying');
+          if(kind==='amend')this.tasks.instruct(actor,related.id,body);else this.tasks.cancel(actor,related.id);
+          this.tasks.linkMessage(actor,message.id,related.id,kind);task??=this.tasks.get(actor,related.id);continue;
+        }
+        if(kind==='status') {
+          const inquiry=this.tasks.create(actor,recipient,roomId,body);
+          this.#db.prepare('INSERT INTO task_context VALUES (?,?,?)').run(inquiry.id,'status',related?.id??null);
+          this.tasks.linkMessage(actor,message.id,inquiry.id,'request');
+          const snapshot=this.tasks.conversationState(actor,roomId,inquiry.id);
+          const lines=snapshot.tasks.map(t=>`${t.name}：${t.progress.label}${t.internal_autonomous?'（別の自発活動）':''} — ${t.prompt}${t.progress.waiting_for.length?`／待ち先：${t.progress.waiting_for.join('、')}`:''}`);
+          const result=`担当状況（この会話の実行記録・${new Date(snapshot.checked_at).toLocaleTimeString('ja-JP',{hour12:false,timeZone:'Asia/Tokyo'})}確認）\n${lines.join('\n')||'この会話に照会対象の仕事は記録されていません。'}${snapshot.truncated?'\n最新40件の表示です。全件の一覧ではありません。':''}\nこの照会では依頼の追加・取消・再開は行っていません。`;
+          const reply=this.post(this.agentSession(recipient),roomId,result);
+          this.tasks.linkMessage(actor,reply.id,inquiry.id,'response');
+          this.tasks.completeInquiry(actor,inquiry.id,result);task??=this.tasks.get(actor,inquiry.id);continue;
+        }
         const questions = this.tasks.list(actor).filter(task => task.agent_id === recipient && task.room_id === roomId && task.state === 'waiting_user');
-        if (questions.length === 1) {
+        if (kind!=='new' && questions.length === 1 && (!related || related.id===questions[0]!.id) && !this.#db.prepare("SELECT 1 FROM approval_requests WHERE task_id=? AND status='pending'").get(questions[0]!.id)) {
           this.tasks.resume(actor, questions[0]!.id, body);
           task ??= this.tasks.get(actor, questions[0]!.id);
-        } else { const next = this.tasks.create(actor, recipient, roomId, body); task ??= next; }
+        } else { const next = this.tasks.create(actor, recipient, roomId, body);this.#db.prepare('INSERT INTO task_context VALUES (?,?,?)').run(next.id,kind??'followup',related?.id??null);this.tasks.linkMessage(actor,message.id,next.id,'request'); task ??= next; }
       }
       this.#db.prepare('INSERT INTO submissions VALUES (?,?,?,?)').run(id, hash, message.id, task?.id ?? null);
       return { message, task };
@@ -937,6 +974,14 @@ export class Runtime {
     const escaped = query.replace(/[\\%_]/g, '\\$&');
     return db.prepare(`SELECT m.* FROM memories m JOIN memory_search s ON s.id = m.id
       WHERE s.body LIKE ? ESCAPE '\\' ORDER BY m.rowid`).all(`%${escaped}%`) as unknown as Memory[];
+  }
+  memoryReviewSkipped(actor:Actor,lease:TaskLease):boolean {
+    check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
+    return !!this.#db.prepare('SELECT 1 FROM task_memory_skips WHERE task_id=? AND memory_revision=? AND rules_revision=?').get(lease.task.id,this.context(actor,lease.task.room_id).revision,this.commonRules(actor).revision);
+  }
+  skipInvalidMemoryReview(actor:Actor,lease:TaskLease):void {
+    check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
+    this.#db.prepare('INSERT OR REPLACE INTO task_memory_skips VALUES (?,?,?,?)').run(lease.task.id,this.context(actor,lease.task.room_id).revision,this.commonRules(actor).revision,Date.now());
   }
   memoryReviewed(actor: Actor, lease: TaskLease): boolean {
     check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');

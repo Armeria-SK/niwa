@@ -10,7 +10,7 @@ import type {
 } from '../../contracts/index.ts';
 import { modelEventSchema } from '../../contracts/index.ts';
 import { Value } from '@sinclair/typebox/value';
-import { redactSecrets, sanitizeModelInputText } from '../../shared/redaction.ts';
+import { redactSecrets, redactDisplaySnapshot, sanitizeModelInputText } from '../../shared/redaction.ts';
 
 export type { ModelEvent } from '../../contracts/index.ts';
 
@@ -25,6 +25,9 @@ export type ModelEventStream = AsyncIterable<ModelEvent>;
 export type ModelEventSource = AsyncIterable<ModelEvent>;
 
 export interface CollectModelEventsPolicy {
+  /** Display-only observer after validation; never authorizes tool execution. */
+  readonly on_event?: (event:ModelEvent)=>void;
+  readonly on_summary?: (snapshot:string)=>void;
   readonly signal?: AbortSignal;
   readonly timeout_ms?: number;
   readonly max_events?: number;
@@ -61,6 +64,7 @@ export async function collectModelEvents(
   let iterator: AsyncIterator<ModelEvent> | undefined;
   const values: ModelEvent[] = [];
   let totalBytes = 0;
+  let summaryText = '';
   let toolCalls = 0;
   let terminal = false;
   let aborted = false;
@@ -135,7 +139,13 @@ export async function collectModelEvents(
         cancel();
         return [streamFailure('INVALID_RESPONSE', 'The model stream emitted secret-like tool arguments.')];
       }
+      if(event.type==='reasoning_summary')summaryText=(summaryText+event.summary).slice(0,16000);
+      if(event.type==='reasoning_summary'||event.type==='completed'){
+        const redacted=redactDisplaySnapshot(summaryText),boundary=event.type==='completed'?redacted.length:Math.max(redacted.lastIndexOf(' '),redacted.lastIndexOf('\n'),redacted.lastIndexOf('。')+1);
+        try{policy.on_summary?.(redacted.slice(0,Math.max(0,boundary)).slice(0,4000));}catch{/* display only */}
+      }
       values.push(safeEvent);
+      try { policy.on_event?.(safeEvent); } catch { /* Display failure cannot alter final response validation. */ }
       if (safeEvent.type === 'completed' || safeEvent.type === 'failed') {
         terminal = true;
       }
@@ -149,6 +159,19 @@ export async function collectModelEvents(
   } finally {
     cleanup();
   }
+}
+
+/** Bounded display channel; final/tool events are only emitted after full provider validation. */
+export function createProgressModelEventStream(work:(emit:(event:ModelEvent)=>void)=>Promise<readonly ModelEvent[]>,cancel:()=>void):ModelEventStream {
+ let used=false,closed=false,done=false,wake:(()=>void)|undefined;
+ const queue:ModelEvent[]=[];const delivered=new Map<string,number>();
+ const emit=(event:ModelEvent)=>{if(closed)return;if(queue.length<64){queue.push(event);const key=JSON.stringify(event);delivered.set(key,(delivered.get(key)??0)+1);}wake?.();};
+ const finished=work(emit).then(events=>{if(!closed)queue.push(...events.filter(e=>{const key=JSON.stringify(e),count=delivered.get(key)??0;if(!count)return true;delivered.set(key,count-1);return false;}));done=true;wake?.();},()=>{emit(streamFailure('PROVIDER_ERROR','Response stream failed'));done=true;wake?.();});
+ void finished;
+ return {[Symbol.asyncIterator](){if(used)throw Error('Stream already consumed');used=true;return {
+  async next(){while(!queue.length&&!done&&!closed)await new Promise<void>(resolve=>{wake=resolve;});wake=undefined;return queue.length?{done:false as const,value:queue.shift()!}:{done:true as const,value:undefined};},
+  async return(){closed=true;queue.length=0;cancel();wake?.();return {done:true as const,value:undefined};}
+ };}};
 }
 
 /** Wrap a buffered response in a strict one-shot async stream. */

@@ -98,7 +98,7 @@ export function App() {
       const business = new Map((state.businessTasks || []).map(item => [item.task_id, item]));
       setActivities(state.tasks.map(task => ({ ...task, member: task.agent_id, thread: task.room_id, approvalVersion: approvals.get(task.id)?.version, business: business.has(task.id), title: approvals.get(task.id)?.title || business.get(task.id)?.title || task.prompt,
         instructions: task.replies.map((reply, index) => ({ id: index, time: time(reply.created_at), text: reply.body })), detail: approvals.get(task.id)?.detail || business.get(task.id)?.detail || task.result || task.wait_reason || ({ queued: '順番を待っています', running: '実行中です', waiting_child: '仲間の結果を待っています' })[task.state],
-        reason: task.wait_reason, status: approvals.has(task.id) ? 'approval' : task.paused ? 'paused' : ({ completed: 'done', failed: 'failed', cancelled: 'canceled', waiting_child: 'waiting', waiting_user: 'waiting', waiting_provider: 'waiting' })[task.state] || 'running', time: time(task.updated_at), steps: [({ queued: '順番を待っています', running: '実行中', waiting_child: '仲間を待っています', waiting_user: '回答を待っています', waiting_provider: '接続を待っています', completed: '完了', failed: '失敗', cancelled: '取り消し' })[task.state]] })));
+        reason: task.wait_reason, status: approvals.has(task.id) ? 'approval' : task.paused ? 'paused' : ({ completed: 'done', failed: 'failed', cancelled: 'canceled', waiting_child: 'waiting', waiting_user: 'waiting', waiting_provider: 'waiting' })[task.state] || 'running', time: time(task.updated_at), steps: [task.progress?.label || ({ queued: '順番を待っています', running: '実行中', waiting_child: '仲間を待っています', waiting_user: '回答を待っています', waiting_provider: '接続を待っています', completed: '完了', failed: '失敗', cancelled: '取り消し' })[task.state]] })));
       setUpdates(savedUpdates.filter(item => item.kind === 'decision').map(item => ({ ...item, member: item.author_id, thread: item.room_id, artifact: item.artifact_id, activity: item.task_id, time: new Date(item.created_at).toLocaleString('ja-JP') })));
       setArtifacts(savedArtifacts.map(item => ({ ...item, member: item.author_id, thread: item.room_id, scope: state.rooms.find(room => room.id === item.room_id)?.visibility, updated: new Date(item.created_at).toLocaleString('ja-JP') })));
       setPaused(state.settings.paused);
@@ -148,15 +148,15 @@ export function App() {
   }, '確認済みにしました'); }
   function openMember(id) { if (memberMap[id]?.deleted) { notify('このBotは削除されています。会話と成果物は引き続き確認できます。'); return; } setSelectedMember(id); navigate('members'); }
   function togglePause() { return mutate(() => api('/settings', 'PATCH', { paused: !paused }), paused ? '活動を再開しました' : '活動を一時停止しました'); }
-  async function sendMessage(text, attachments = [], replyTo, selectedRecipients = []) {
+  async function sendMessage(text, attachments = [], replyTo, selectedRecipients = [], requestContext) {
     if (selectedRecipients.some(id => memberMap[id]?.deleted)) { notify('指定したBotは削除されています。依頼先を選び直してください。'); return false; }
     if (attachments.length) { notify('添付ファイルの保存はまだ利用できません。'); return false; }
     const body = text;
     const fallback = replyTo && memberMap[replyTo.author] && !memberMap[replyTo.author].deleted ? replyTo.author : thread.scope === 'private' ? thread.members[0] : members.find(item => item.authority === 'leader')?.id;
     const recipients = [...new Set(selectedRecipients.length ? selectedRecipients : fallback ? [fallback] : [])].sort();
-    const key = JSON.stringify([thread.id, recipients, body, replyTo?.id]);
+    const key = JSON.stringify([thread.id, recipients, body, replyTo?.id,requestContext]);
     if (submission.current?.key !== key) submission.current = { key, id: crypto.randomUUID() };
-    const ok = await mutate(() => api(`/rooms/${thread.id}/messages`, 'POST', { id: submission.current.id, body, ...(replyTo ? { reply_to: replyTo.id } : {}), ...(recipients.length ? { agent_ids: recipients } : {}) }), '送信しました');
+    const ok = await mutate(() => api(`/rooms/${thread.id}/messages`, 'POST', { id: submission.current.id, body, ...(requestContext?{request_context:requestContext}:{}), ...(replyTo ? { reply_to: replyTo.id } : {}), ...(recipients.length ? { agent_ids: recipients } : {}) }), '送信しました');
     if (ok) submission.current = null;
     return ok;
   }
