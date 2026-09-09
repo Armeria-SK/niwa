@@ -571,7 +571,10 @@ export class Runtime {
   }
   registerBusinessTask(actor: Actor, lease: TaskLease, title: string, detail: string): void {
     check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active'); text(title, 200); text(detail, 2000);
-    this.#db.prepare('INSERT INTO business_tasks VALUES (?,?,?) ON CONFLICT(task_id) DO UPDATE SET title=excluded.title,detail=excluded.detail').run(lease.task.id, title, detail);
+    const root=this.tasks.workRoot(actor,lease.task.id),task=this.tasks.get(actor,root);
+    // A child labels its parent work once; it cannot rename an existing parent purpose.
+    if(root!==lease.task.id){this.#db.prepare('INSERT OR IGNORE INTO business_tasks VALUES (?,?,?)').run(root,task.prompt.slice(0,200),task.prompt.slice(0,2000));return;}
+    this.#db.prepare('INSERT INTO business_tasks VALUES (?,?,?) ON CONFLICT(task_id) DO UPDATE SET title=excluded.title,detail=excluded.detail').run(root, title, detail);
   }
   deletedContent(actor: Actor): { kind: 'room' | 'artifact'; id: string; deleted_at: number }[] {
     this.#admin(actor); return this.#db.prepare('SELECT * FROM deleted_content').all() as ReturnType<Runtime['deletedContent']>;

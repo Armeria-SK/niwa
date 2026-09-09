@@ -44,6 +44,19 @@ export class Tasks {
     const records = this.#db.prepare('SELECT * FROM tasks ORDER BY created_at, rowid').all() as unknown as RecordWithLease[];
     return records.filter(task => { try { this.#access.room(actor, task.room_id); return true; } catch { return false; } }).map(publicTask);
   }
+  /** Work identity comes from explicit task/initiative links, never title similarity. */
+  workRoot(actor:Actor,id:string):string {
+    const initial=this.get(actor,id);
+    const ancestor=(task:Task)=>{const seen=new Set<string>();while(task.parent_id&&!seen.has(task.id)){seen.add(task.id);const parent=this.get(actor,task.parent_id);if(parent.room_id!==initial.room_id)break;task=parent;}return task;};
+    let root=ancestor(initial);
+    const link=this.#db.prepare('SELECT initiative_id FROM initiative_tasks WHERE task_id IN (?,?) LIMIT 1').get(initial.id,root.id);
+    if(link){const first=this.#db.prepare('SELECT t.id FROM initiative_tasks l JOIN tasks t ON t.id=l.task_id WHERE l.initiative_id=? AND t.room_id=? ORDER BY t.created_at,t.rowid LIMIT 1').get(link.initiative_id!,initial.room_id);if(first)root=ancestor(this.get(actor,String(first.id)));}
+    const sharedRequest=this.#db.prepare(`SELECT t.id FROM task_message_links source JOIN task_message_links peer ON peer.message_id=source.message_id
+      JOIN tasks t ON t.id=peer.task_id WHERE source.task_id=? AND source.kind='request' AND peer.kind='request' AND t.room_id=?
+      ORDER BY t.created_at,t.rowid LIMIT 1`).get(root.id,initial.room_id);
+    if(sharedRequest)root=ancestor(this.get(actor,String(sharedRequest.id)));
+    return root.id;
+  }
   create(actor: Actor, agentId: string, roomId: string, prompt: string, deadlineAt = NO_DEADLINE): Task {
     const principal = this.#access.principal(actor);
     this.#access.room(actor, roomId);

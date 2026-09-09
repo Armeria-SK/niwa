@@ -25,11 +25,3 @@
 .presence-job-count .progress-chevron { display: inline-block; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(45deg); color: var(--muted); }
 .presence-job-count[aria-expanded="true"] .progress-chevron { transform: rotate(225deg); }
 .presence-job-count:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; }
-
-.response-thinking { display:flex; align-items:flex-start; gap:12px; margin:14px 0; color:var(--muted); }
-.response-thinking-body { min-width:0; flex:1; font-size:12px; }
-.response-thinking-name { display:block; margin-bottom:5px; }
-.response-thinking summary { cursor:pointer; padding:4px 0; width:fit-content; }
-.response-thinking p { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; margin:6px 0; }
-.response-thinking details > span { display:block; margin-top:8px; }
-.response-thinking summary:focus-visible { outline:2px solid var(--muted); outline-offset:3px; border-radius:4px; }

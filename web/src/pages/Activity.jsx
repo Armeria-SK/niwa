@@ -1,3 +1,5 @@
+import {groupThreadWork} from '../work-groups.js';
+import {ThreadWorkList} from './ThreadWorkList.jsx';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Avatar, EmptyState, Modal, Segmented } from '../components.jsx';
@@ -12,6 +14,7 @@ export function Activity({ onDeleteArtifact, activities, members, paused, onPaus
   const [detail, setDetail] = useState(null);
   const [approval, setApproval] = useState(null);
   const running = activities.filter(item => item.business && item.status !== 'approval');
+  const workGroups=groupThreadWork(activities,threads);
   const pending = activities.filter(item => item.status === 'approval');
   const visible = filter === 'approval' ? pending : running;
   const selected = activities.find(item => item.id === detail);
@@ -20,14 +23,14 @@ export function Activity({ onDeleteArtifact, activities, members, paused, onPaus
   return <main className="work-area activity-page" id="main-content" tabIndex={-1}>
     <div className="page-heading"><div><span className="eyebrow">いま、どんなことをしている？</span><h1>活動</h1><p>決まったこと、収益につながる仕事、承認が必要なこと。</p></div><button className="button secondary" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? '活動を再開' : '全体を一時停止'}</button></div>
     {paused ? <div className="inline-notice"><PauseIcon size={18} /><p>Botの活動を一時停止しています。個別に再開した仕事も、全体を再開するまで待機します。</p></div> : null}
-    <Segmented label="活動の表示" className="activity-tabs" options={[{ value: 'recap', label: 'できごと', count: updates.filter(item => !seen[item.id]).length }, { value: 'running', label: '仕事', count: running.length }, { value: 'approval', label: '承認待ち', count: pending.length }, { value: 'artifacts', label: '成果物', count: artifacts.length }, { value: 'schedules', label: '定期実行' }]} value={filter} onChange={onFilter} />
+    <Segmented label="活動の表示" className="activity-tabs" options={[{ value: 'recap', label: 'できごと', count: updates.filter(item => !seen[item.id]).length }, { value: 'running', label: '仕事', count: workGroups.length }, { value: 'approval', label: '承認待ち', count: pending.length }, { value: 'artifacts', label: '成果物', count: artifacts.length }, { value: 'schedules', label: '定期実行' }]} value={filter} onChange={onFilter} />
     <div className="activity-scroll" key={filter}>
     {filter === 'recap' ? <Recap updates={updates} seen={seen} onRead={onRead} members={members} onThread={onThread} onArtifact={onArtifact} onActivity={openActivity} /> : filter === 'artifacts' ? <ArtifactLibrary onDelete={onDeleteArtifact} artifacts={artifacts} members={members} onOpen={onArtifact} onThread={onThread} /> : filter === 'schedules' ? <Schedules schedules={schedules} members={members} threads={threads} onSave={onScheduleSave} onToggle={onScheduleToggle} onDelete={onScheduleDelete} onThread={onThread} /> : <>
       {filter === 'approval' ? <p className="approval-explanation"><ShieldIcon size={18} />外部への公開など、あなたの許可が必要な操作です。</p> : null}
-      <div className="activity-list">{visible.length ? visible.map(item => <article className={`activity-row status-${item.status}`} key={item.id}>
+      {filter!=='approval'&&workGroups.length?<><p className="muted work-count">{workGroups.length}スレッド · 展開すると目的別の仕事と担当作業を確認できます</p><ThreadWorkList groups={workGroups} members={members} paused={paused} onOpen={openActivity} onThread={onThread}/></>:<div className="activity-list">{visible.length ? visible.map(item => <article className={`activity-row status-${item.status}`} key={item.id}>
         <Avatar member={members[item.member]} size={44} /><div className="activity-row-body"><div className="activity-row-meta"><span>{members[item.member]?.name}</span><time>{item.time}</time></div><h2>{item.title}</h2><p>{item.detail}</p>{item.reason ? <p className="task-reason">{item.reason}</p> : null}<div className="activity-row-bottom"><span className={`activity-status ${item.status}`}><span className="status-dot" />{paused && item.status === 'running' ? '全体の再開待ち' : taskStatus[item.status]}</span>{item.thread ? <button className="text-button" onClick={() => onThread(item.thread)}>会話を見る<ArrowUpRightIcon size={15} /></button> : null}</div></div>
         <div className="activity-row-action"><button className={`button ${item.status === 'approval' ? 'primary' : 'secondary'}`} onClick={() => openActivity(item.id)}>{item.status === 'approval' ? '内容を確認' : '詳細・操作'}</button></div>
-      </article>) : <EmptyState icon={filter === 'approval' ? CheckCircleIcon : ActivityIcon} title={filter === 'approval' ? '確認が必要なことはありません' : '収益に関する仕事はまだありません'}>収益化や費用に関する仕事が登録されると、ここに表示されます。</EmptyState>}</div>
+      </article>) : <EmptyState icon={filter === 'approval' ? CheckCircleIcon : ActivityIcon} title={filter === 'approval' ? '確認が必要なことはありません' : '収益に関する仕事はまだありません'}>収益化や費用に関する仕事が登録されると、ここに表示されます。</EmptyState>}</div>}
     </>}
     </div>
     {selected ? <TaskDetail key={selected.id} task={selected} member={members[selected.member]} paused={paused} onClose={() => setDetail(null)} onControl={onControl} onThread={onThread} /> : null}
