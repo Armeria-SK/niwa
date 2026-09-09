@@ -55,6 +55,16 @@ def workspace_entries(workspace):
     return [p for p in workspace.iterdir() if p.name != 'lost+found']
 
 
+def ensure_backup_directory(root, identity):
+    path = root / 'backups'
+    if os.path.lexists(path):
+        if path.is_symlink() or not path.is_dir():
+            raise RuntimeError('Expected real backups directory; no data removed')
+        return
+    path.mkdir(mode=0o700)
+    os.chown(path, identity.pw_uid, identity.pw_gid)
+
+
 def fingerprint(root):
     result = {}
     for directory in ('config', 'secrets'):
@@ -92,6 +102,7 @@ def reset(root, apply=False):
         print('Check only. Use --apply to erase test data, rebuild and restart.')
         return
     identity = pwd.getpwnam('niwa')
+    ensure_backup_directory(root, identity)
     services = root / 'deploy/ubuntu/services.sh'
     protected = fingerprint(root)
     stage = None
@@ -99,6 +110,8 @@ def reset(root, apply=False):
     try:
         # The helper imports this newly built Runtime; build failure precedes any deletion.
         subprocess.run(['runuser', '-u', 'niwa', '--', 'npm', 'run', 'build'], cwd=root, check=True)
+        # Both application and isolated executor services load this public code directory.
+        (root / 'dist').chmod(0o755)
         stage = Path(tempfile.mkdtemp(prefix='reset-test-', dir=root / 'runtime'))
         os.chown(stage, identity.pw_uid, identity.pw_gid)
         run('runuser', '-u', 'niwa', '--', 'node', root / 'deploy/ubuntu/reset-test-state.mjs', root / 'state', stage / 'state')

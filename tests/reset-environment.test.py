@@ -14,8 +14,24 @@ spec.loader.exec_module(reset)
 
 
 class ResetTests(unittest.TestCase):
+    def test_missing_backup_directory_is_recreated_without_following_links(self):
+        import types
+        identity = types.SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reset.ensure_backup_directory(root, identity)
+            folder = root / 'backups'
+            self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
+            (folder / 'saved').write_text('keep')
+            reset.ensure_backup_directory(root, identity)
+            self.assertEqual((folder / 'saved').read_text(), 'keep')
+            (folder / 'saved').unlink(); folder.rmdir()
+            folder.symlink_to(root / 'absent')
+            with self.assertRaises(RuntimeError): reset.ensure_backup_directory(root, identity)
+            self.assertFalse((root / 'absent').exists())
+
     def fixture(self, root):
-        for name in ['state', 'workspace', 'config', 'secrets', 'runtime', 'backups']:
+        for name in ['state', 'workspace', 'config', 'secrets', 'runtime', 'backups', 'dist']:
             (root / name).mkdir()
         (root / 'workspace/lost+found').mkdir()
         (root / 'workspace/test.txt').write_text('erase me')
@@ -37,6 +53,7 @@ r.post(a,room.id,'old message');r.tasks.create(a,b.id,room.id,'old work');r.clos
             workareas = root / 'runtime/executor/workareas'; workareas.mkdir(parents=True)
             (workareas / 'index.db').write_text('synthetic scoped journal')
             (workareas / 'areas').mkdir(); (workareas / 'areas/draft').write_text('synthetic personal draft')
+            (root / 'dist').chmod(0o700)
             before = reset.fingerprint(root); calls = []
             actual_run = subprocess.run
             def command(*args):
@@ -45,6 +62,7 @@ r.post(a,room.id,'old message');r.tasks.create(a,b.id,room.id,'old work');r.clos
                     actual_run(['node', str(REPO / 'deploy/ubuntu/reset-test-state.mjs'), str(args[6]), str(args[7])], check=True)
             with patch.object(reset, 'validate'), patch.object(reset, 'run', side_effect=command), patch.object(reset, 'wait_http'), patch.object(reset.subprocess, 'run'):
                 reset.reset(root, True)
+            self.assertEqual((root / 'dist').stat().st_mode & 0o777, 0o755)
             self.assertEqual(reset.fingerprint(root), before)
             self.assertEqual(list(workareas.iterdir()), [])
             self.assertEqual(outside.read_text(), 'keep outside')
