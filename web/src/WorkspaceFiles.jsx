@@ -1,3 +1,4 @@
+import {SettingDisclosure} from './SettingDisclosure.jsx';
 import {EnvironmentSettings} from './EnvironmentSettings.jsx';
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './components.jsx';
@@ -9,11 +10,11 @@ export function WorkspaceFiles({ onClose }) {
   const [path, setPath] = useState(''); const [listing, setListing] = useState(null);
   const [file, setFile] = useState(null); const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  const [areas,setAreas]=useState(null),[area,setArea]=useState(''),[editing,setEditing]=useState(false),[draft,setDraft]=useState('');
+  const [areasError,setAreasError]=useState('');const [areas,setAreas]=useState(null),[area,setArea]=useState(''),[editing,setEditing]=useState(false),[draft,setDraft]=useState('');
   const endpoint=area?`/workareas/${area}`:'/workspace';
   const selected=areas?.areas.find(item=>item.id===area);
   const request = useRef(0);
-  useEffect(()=>{let alive=true;api('/workareas').then(value=>{if(alive)setAreas(value);}).catch(()=>{});return()=>{alive=false;};},[]);
+  useEffect(()=>{let alive=true;api('/workareas').then(value=>{if(alive)setAreas(value);}).catch(e=>{if(alive)setAreasError(e.message);});return()=>{alive=false;};},[]);
   async function load() {
     const id = ++request.current; setBusy(true); setError(''); setFile(null); setEditing(false);
     try { const result = await api(`${endpoint}/files?path=${encodeURIComponent(path)}`); if (id === request.current) setListing({...result,available:result.available!==false}); }
@@ -54,7 +55,7 @@ export function WorkspaceFiles({ onClose }) {
   const entries = [...(listing?.entries || [])].filter(item => item.name.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name, 'ja') : a.kind === 'directory' ? -1 : 1));
   return <Modal title="共有フォルダー" onClose={onClose} className="artifact-modal"><div className="modal-body form-stack">
-    {areas?.available ? <WorkareaSettings value={areas} onChange={setAreas} area={area} onSelect={id=>{setPath('');setArea(id);}}/>:null}
+    {areas?.available ? <WorkareaSettings value={areas} onChange={setAreas} area={area} onSelect={id=>{setPath('');setArea(id);}}/>:!areas?<SettingDisclosure title="作業場所の設定" value={areasError?'取得失敗':'読込中…'}><p role="status">{areasError||'設定を確認しています。'}</p></SettingDisclosure>:null}
     {area?<EnvironmentSettings key={area} area={area}/>:null}
     <div className="inline-actions"><button className="button secondary" disabled={busy || (!path && !file)} onClick={() => file ? setFile(null) : setPath(path.split('/').slice(0, -1).join('/'))}>戻る</button><button className="button subtle" disabled={busy} onClick={load}>再読み込み</button></div>
     <p className="muted">{selected?.name||'全員共有'}{path ? ` / ${path}` : ''}{file ? ` / ${file.name}` : ''}</p>

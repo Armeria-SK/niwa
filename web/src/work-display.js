@@ -12,3 +12,9 @@ export function presenceCounts(members) {
  const labels={running:'実行中',waiting:'待機',paused:'停止',idle:'返答待機',sleeping:'休眠'};
  return Object.entries(labels).map(([kind,label])=>{const count=members.filter(m=>m.workKind===kind).length;return count?`${label}${count}人`:'';}).filter(Boolean).join('・');
 }
+
+export function workCounts(tasks,paused=false) {
+ const counts={running:0,waiting:0,paused:0,ended:0};
+ for(const task of tasks){const terminal=['completed','cancelled','failed'].includes(task.state)||['done','canceled','failed'].includes(task.status);const kind=terminal?'ended':paused||task.paused||task.status==='paused'?'paused':task.state==='running'?'running':'waiting';counts[kind]++;}
+ return Object.entries({running:'実行中',waiting:'待機',paused:'停止',ended:'終了'}).filter(([key])=>counts[key]).map(([key,label])=>`${label}${counts[key]}作業`).join('・');
+}

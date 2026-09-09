@@ -1,0 +1,20 @@
+.setting-disclosure { border:1px solid var(--border); border-radius:9px; font-size:12px; margin:10px 0; background:var(--paper); }
+.setting-disclosure > summary { display:flex; align-items:center; gap:12px; padding:12px 14px; list-style:none; cursor:pointer; border-radius:8px; }
+.setting-disclosure > summary::-webkit-details-marker { display:none; }
+.setting-name { font-weight:500; }
+.setting-value { margin-left:auto; color:var(--muted); text-align:right; }
+.setting-disclosure > summary > svg { flex-shrink:0; color:var(--muted); transition:transform .15s; }
+.setting-disclosure[open] > summary > svg { transform:rotate(90deg); }
+.setting-disclosure > summary:hover { background:var(--surface); }
+.setting-disclosure > summary:focus-visible { outline:2px solid var(--muted); outline-offset:2px; }
+.setting-content { padding:2px 14px 14px; display:grid; gap:12px; }
+.setting-content > p { margin:0; }
+.setting-content .form-stack { gap:12px; }
+.setting-content .switch-row { margin:0; padding:8px 0; }
+.setting-content input:disabled,.setting-content select:disabled { opacity:.65; cursor:not-allowed; }
+.setting-disclosure.composer-context { width:fit-content; max-width:100%; margin:0 0 8px; background:transparent; }
+.composer-context > summary { padding:6px 10px; gap:10px; }
+.composer-context .setting-content { grid-template-columns:minmax(0,1fr); width:min(440px,100%); }
+.composer-context .field { margin:0; display:grid; gap:6px; }
+.composer-context select { width:100%; min-width:0; font:inherit; }
+@media(max-width:600px) { .setting-disclosure > summary { flex-wrap:wrap; gap:6px 10px; }.setting-value { max-width:65%; }.composer-context[open] { width:100%; } }

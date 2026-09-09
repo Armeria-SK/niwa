@@ -1,3 +1,4 @@
+import {NO_DEADLINE} from '../domain/deadline.ts';
 import {redactSecrets} from '../shared/redaction.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
@@ -21,7 +22,7 @@ type RecordWithLease = Task & { lease_token: string | null };
 const publicTask = ({ lease_token: _token, ...task }: RecordWithLease): Task => task;
 const CONVERSATION_LIMIT_REASON = '会話の継続が16回の区切りに達しました。続ける場合は仕事の詳細から再開してください。';
 const TURN_LIMIT_REASON = 'この仕事の実行区切りに達しました。続行する場合は、新しい依頼として必要な範囲を指定してください。';
-const NO_DEADLINE = 8_640_000_000_000_000;
+
 
 export class Tasks {
   #db: DatabaseSync;
