@@ -20,6 +20,19 @@ function fixture(t:{after(fn:()=>void):void},run?:ConstructorParameters<typeof W
  return {root,r,admin,a,aa,b,ba,room,privateRoom,al,bl,store,transport};
 }
 const write=(path:string,content:string,expected_revision:string|null=null)=>({operation:'write',path,content,expected_revision,operation_id:randomUUID(),allow_start:true});
+test('queued project changes recheck deleted participants and conversations at commit time',async t=>{
+ const {r,admin,a,b,room}=fixture(t);
+ const existing=await r.workareas.project(admin,{name:'既存案件',room_id:room.id,members:[a.id,b.id]});
+ const pending=r.workareas.project(admin,{id:existing.id,name:'変更後',room_id:room.id,members:[b.id],expected_revision:1});
+ r.deleteAgent(admin,b.id);
+ await assert.rejects(pending,/participants/);
+ const area=r.workareas.list(admin).find(item=>item.id===existing.id)!;
+ assert.deepEqual(area.members,[a.id]);const metadata=r.workareas.authorize(admin,existing.id);
+ assert.equal(metadata.name,'既存案件');assert.equal(metadata.revision,1);
+ const created=r.workareas.project(admin,{name:'削除後に作られてはいけない案件',room_id:room.id,members:[a.id]});
+ r.deleteContent(admin,'room',room.id);
+ await assert.rejects(created,/Conversation not found/);assert.equal(r.workareas.list(admin).length,0);
+});
 test('personal ownership, explicit project membership, private conversation and stopped activity use one boundary',async t=>{
  const f=fixture(t),{r,admin,aa,ba,al,bl,transport}=f;
  const a=r.workareas.personal(aa,al).area_id!,b=r.workareas.personal(ba,bl).area_id!;

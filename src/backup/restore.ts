@@ -9,7 +9,7 @@ import { Runtime } from '../runtime/runtime.ts';
 import { assertDirectoryPath, initializeProduct, productPaths } from '../config/paths.ts';
 import { initializeInstallation, readInstallation } from '../config/installation.ts';
 import { acquireProcessLock } from '../runtime/process-lock.ts';
-import type { BackupManifest } from './backups.ts';
+import { validateBackupManifest, type BackupManifest } from './backups.ts';
 
 /** Prepare a new state directory. The caller must hold the source service lock until activation. */
 export async function prepareRestore(backup: string, target: string, deletions: ReturnType<Runtime['deletionRecords']>, deletedAgents: ReturnType<Runtime['deletedAgents']> = [], deletedContent: ReturnType<Runtime['deletedContent']> = []): Promise<BackupManifest> {
@@ -17,14 +17,7 @@ export async function prepareRestore(backup: string, target: string, deletions: 
   const manifestPath = join(backup, 'manifest.json'); const stat = await fs.lstat(manifestPath);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error('Invalid backup manifest');
   const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as BackupManifest;
-  if (manifest.version !== 1 || !Array.isArray(manifest.files) || !manifest.files.length || manifest.files.length > 1001) throw new Error('Invalid backup files');
-  const names = new Set<string>();
-  for (const file of manifest.files) {
-    if (!/^(control\.db|agents\/[0-9a-f-]{36}\/memory\.db)\.gz$/.test(file.path) || names.has(file.path)
-      || !Number.isSafeInteger(file.bytes) || file.bytes <= 0 || !/^[0-9a-f]{64}$/.test(file.sha256)) throw new Error('Invalid backup file');
-    names.add(file.path);
-  }
-  if (!names.has('control.db.gz')) throw new Error('Missing control database');
+  const names = validateBackupManifest(manifest);
   await fs.mkdir(target, { mode: 0o700 });
   try {
     for (const file of manifest.files) {

@@ -115,8 +115,10 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'GET', path: /^\/api\/subscription\/models$/, run: async () => {
       if (!models.subscription) throw new DomainError('conflict', 'Subscription service unavailable');
       return models.subscription.models(); } },
-    { method: 'GET', path: /^\/api\/backups$/, run: async () => ({ available: !!backups, error: backups?.error ?? null,
-      items: (await backups?.list() ?? []).map(item => ({ id: item.id, created_at: item.created_at, bytes: item.files.reduce((sum, file) => sum + file.bytes, 0) })) }) },
+    { method: 'GET', path: /^\/api\/backups$/, run: async () => {
+      const items = await backups?.list() ?? [];
+      return { available: !!backups, error: backups?.error ?? null,
+        items: items.map(item => ({ id: item.id, created_at: item.created_at, bytes: item.files.reduce((sum, file) => sum + file.bytes, 0) })) }; } },
     { method: 'POST', path: /^\/api\/backups$/, schema: object({}), run: async () => {
       if (!backups) throw new DomainError('conflict', 'Backup service unavailable');
       const item = await backups.create(); return { id: item.id, created_at: item.created_at }; } },

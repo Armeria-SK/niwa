@@ -582,7 +582,9 @@ export class Runtime {
   deleteContent(actor: Actor, kind: 'room' | 'artifact', id: string): void {
     this.#admin(actor);
     if (!this.#db.prepare('SELECT 1 FROM deleted_content WHERE kind=? AND id=?').get(kind, id)) {
-      if (kind === 'room') this.#room(actor, id); else this.artifact(actor, id);
+      if (kind === 'room') this.#room(actor, id);
+      // An invalidated source blocks reading, not the administrator's ability to erase its derivative.
+      else check(this.#db.prepare('SELECT 1 FROM artifacts WHERE id=?').get(text(id,100)), 'not_found', 'Artifact not found');
     }
     this.applyContentDeletions(actor, [{ kind, id, deleted_at: Date.now() }]);
   }

@@ -11,6 +11,30 @@ import { Backups } from '../src/backup/backups.ts';
 import { prepareRestore, restoreInstallation } from '../src/backup/restore.ts';
 import { acquireProcessLock } from '../src/runtime/process-lock.ts';
 
+test('incomplete backups remain untouched without blocking listing and later daily snapshots',async t=>{
+ const root=mkdtempSync(join(tmpdir(),'niwa-backup-damage-'));
+ const installation={version:1 as const,origin:'https://niwa.test',port:3210},paths=initializeInstallation(root,installation);
+ const runtime=new Runtime(paths.state);runtime.bootstrap(runtime.administrator());
+ let now=Date.parse('2026-09-10T04:00:00+09:00');const backups=new Backups(runtime,paths,installation,()=>now);
+ t.after(async()=>{await backups.stop();runtime.close();rmSync(root,{recursive:true,force:true});});
+ const good=await backups.create(),empty=randomUUID(),malformed=randomUUID(),missing=randomUUID();
+ for(const id of [empty,malformed,missing])mkdirSync(join(paths.backups,id));
+ const broken=JSON.stringify({...good,id:malformed,files:null});writeFileSync(join(paths.backups,malformed,'manifest.json'),broken);
+ writeFileSync(join(paths.backups,missing,'manifest.json'),JSON.stringify({...good,id:missing}));
+ assert.deepEqual((await backups.list()).map(x=>x.id),[good.id]);assert.match(backups.error!,/確認できない/);
+ now+=86400_000;await backups.tick();assert.equal((await backups.list()).length,2);
+ assert.match(backups.error!,/確認できない/);
+ assert.equal(readFileSync(join(paths.backups,malformed,'manifest.json'),'utf8'),broken);
+ for(const id of [empty,malformed,missing]){
+  assert.ok(existsSync(join(paths.backups,id)));
+  await assert.rejects(prepareRestore(join(paths.backups,id),join(root,'invalid-'+id),[]));
+  assert.equal(existsSync(join(root,'invalid-'+id)),false);
+ }
+ const valid=await backups.list();for(const item of valid)rmSync(join(paths.backups,item.id),{recursive:true});
+ now+=16*86400_000;await backups.tick();assert.equal((await backups.list()).length,1);
+ for(const id of [empty,malformed,missing])assert.ok(existsSync(join(paths.backups,id)));
+});
+
 test('deleted Bots lose execution and private files and cannot return from older backups', async () => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-agent-deletion-'));
   const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };

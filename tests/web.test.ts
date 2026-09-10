@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
@@ -9,6 +9,8 @@ import { request } from 'node:http';
 import { Runtime } from '../src/runtime/runtime.ts';
 import { WebAuth } from '../src/web/auth.ts';
 import { createApiServer } from '../src/web/api.ts';
+import { Backups } from '../src/backup/backups.ts';
+import { initializeProduct } from '../src/config/paths.ts';
 
 test('content deletion and approval endpoints require login and reject stale approval details', async t => {
   const f = await fixture(t); const actor = f.runtime.agentSession(f.leader.id); const room = f.runtime.createRoom(f.admin, '人工会話');
@@ -30,14 +32,24 @@ test('content deletion and approval endpoints require login and reject stale app
   assert.equal((await f.call(`/api/rooms/${room.id}/messages`)).status, 404);
 });
 
-async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
+test('backup API reports incomplete storage on its first authenticated listing and can still save',async t=>{
+ const f=await fixture(t,true);mkdirSync(join(f.root,'backups',randomUUID()));
+ assert.equal((await f.call('/api/backups')).status,401);await f.login();
+ const first=await f.call('/api/backups');assert.equal(first.status,200);
+ const listing=await first.json();assert.match(listing.error,/確認できない/);assert.deepEqual(listing.items,[]);
+ assert.equal((await f.call('/api/backups','POST',{})).status,200);
+ const next=await (await f.call('/api/backups')).json();assert.equal(next.items.length,1);assert.match(next.error,/確認できない/);
+});
+
+async function fixture(t: { after: (fn: () => Promise<void>) => void }, includeBackups=false) {
   const root = mkdtempSync(join(tmpdir(), 'niwa-web-'));
   const runtime = new Runtime(root); const admin = runtime.administrator(); const leader = runtime.bootstrap(admin);
   const key = randomBytes(32).toString('base64url'); const origin = 'https://niwa.test';
-  const server = createApiServer(runtime, new WebAuth(origin, key));
+  const backups=includeBackups?new Backups(runtime,initializeProduct(root),{version:1,origin,port:3210}):undefined;
+  const server = createApiServer(runtime, new WebAuth(origin, key),undefined,undefined,backups);
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address() as { port: number };
-  t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); runtime.close(); rmSync(root, { recursive: true, force: true }); });
+  t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); await backups?.stop();runtime.close(); rmSync(root, { recursive: true, force: true }); });
   let cookie = '';
   const call = (path: string, method = 'GET', body?: unknown, extra: Record<string, string> = {}) => new Promise<Response>((resolve, reject) => {
     const outgoing = request(`http://127.0.0.1:${address.port}${path}`, {

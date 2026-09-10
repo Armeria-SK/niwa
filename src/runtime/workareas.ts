@@ -52,10 +52,11 @@ export class Workareas {
  async project(actor:Actor,input:{id?:string;name:string;room_id:string;members:string[];expected_revision?:number}){
   check(this.principal(actor).kind==='admin','forbidden','Administrator manages project membership');text(input.name,100);
   check(input.members.length>0&&input.members.length<=100&&new Set(input.members).size===input.members.length,'invalid','Choose project participants');
-  const room=this.runtime.rooms(actor).find(r=>r.id===input.room_id);check(room,'not_found','Conversation not found');
-  for(const id of input.members)check(this.runtime.agents(actor).some(a=>a.id===id)&&(room.visibility==='shared'||this.runtime.participants(actor,room.id).includes(id)),'forbidden','Project members must be conversation participants');
   const id=input.id??randomUUID();
   return this.lock(id,()=>transaction(this.db,()=>{
+   // A pending filesystem operation may delay this edit past a Bot/conversation deletion.
+   const room=this.runtime.rooms(actor).find(r=>r.id===input.room_id);check(room,'not_found','Conversation not found');
+   for(const member of input.members)check(this.runtime.agents(actor).some(a=>a.id===member)&&(room.visibility==='shared'||this.runtime.participants(actor,room.id).includes(member)),'forbidden','Project members must be conversation participants');
    const prior=this.db.prepare('SELECT * FROM workareas WHERE id=?').get(id);
    if(prior){check(prior.kind==='project'&&prior.room_id===input.room_id&&prior.revision===input.expected_revision&&!prior.deleted,'conflict','Project changed');this.db.prepare('UPDATE workareas SET name=?,revision=revision+1 WHERE id=?').run(input.name,id);}
    else{check(!input.id,'not_found','Project not found');this.db.prepare("INSERT INTO workareas(id,kind,name,owner_id,room_id) VALUES (?,'project',?,?,?)").run(id,input.name,input.members[0]!,input.room_id);}

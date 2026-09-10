@@ -88,3 +88,16 @@ test('private evidence cannot be read through a shared derived artifact or versi
  const id=r.createArtifact(aa,room.id,'派生fixture','text','人工','観測結果の要約',lease.task.id);record(f,id,'source-fixture','supports','観測結果');
  assert.equal(r.artifactVersions.inspect(aa,id).quality!.evidence.length,1);assert.throws(()=>r.artifactVersions.inspect(ba,id));assert.ok(!r.artifacts(ba).some(x=>x.id===id));assert.ok(!r.searchHistory(ba,room.id,'観測').some(x=>x.source_id===id));
 });
+
+test('administrator can delete invalidated artifacts without making their sources readable again',t=>{
+ const f=setup(t),{r,aa,ba,admin,room,lease,root}=f;r.quality.plan(aa,lease,0,plan('source'));
+ const source=r.createArtifact(aa,room.id,'人工原資料','text','人工','後から削除する根拠',lease.task.id);
+ executeTurnTool(r,aa,lease,{name:'history_read',tool_call_id:'read',arguments:{kind:'artifact',source_id:source,offset:0,revision:null}},'source');
+ const derived=r.createArtifact(aa,room.id,'人工派生資料','text','人工','根拠から作った要約',lease.task.id);
+ record(f,derived,'source','supports','後から削除する根拠');
+ r.deleteContent(admin,'artifact',source);assert.throws(()=>r.artifact(admin,derived));
+ assert.throws(()=>r.deleteContent(ba,'artifact',derived),/Administrator/);
+ r.deleteContent(admin,'artifact',derived);r.deleteContent(admin,'artifact',derived);
+ assert.ok(r.deletedContent(admin).some(row=>row.id===derived));
+ const reopened=new Runtime(root+'/state');try{assert.throws(()=>reopened.artifact(reopened.administrator(),derived));}finally{reopened.close();}
+});
