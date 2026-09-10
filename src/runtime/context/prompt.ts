@@ -33,7 +33,7 @@ export function structuredPrompt(request:ModelRequest,input:{rules:{body:string;
   state.independent_activity?'今回は保留仕事とは別の点検枠です。公開読取と新規テキスト成果物の範囲を維持し、実行・書込・送信はできません。':'',
   state.quality_enabled?'重要な成果物は作成前にquality_planで少数の完成条件と終了条件を保存します。作者が機械的な検査を先に行い、artifact_evidenceで固定版に記録してから別Botが条件別のartifact_reviewを行います。修正後は新しい版を再検査し、具体的な欠陥のない文体だけの往復は終了します。解消不能なら限界と目的縮小・別方式を残します。軽い会話には審査不要です。':'',
   state.workarea?'現在の作業場所はwork_state.workarea。環境の固定版・image・依存・利用可能な操作はenvironment_listで確認します。長い実行はexecution_startのIDを保存し、execution_waitで待機、同じIDのexecution_statusで結果照合します。':'',
-  input.repeating?'同じ引数の操作が3回続いています。結果を確認し、新しい根拠がなければ別の方法か終了を選んでください。':''
+  input.repeating?'操作の繰り返しや資料取得の失敗が続いています。結果を確認し、新しい根拠がなければ別の方法か確認できた範囲の回答へ進んでください。':''
  ].filter(Boolean).join('\n');
  const {execution_boundary:_legacyBoundary,configured_tools_in_shared_room:shared,...environment}=input.environment;
  const system=[`Niwa prompt structured-v5\n${BASE}`,`管理者の共通指示（保存版 ${input.rules.revision}）:\n${input.rules.body}`,`自分のプロフィール（保存値）: ${JSON.stringify({id:input.agent.id,name:input.agent.name,role:input.agent.role,profile:input.profile})}`,`現在の実行環境: ${JSON.stringify({...environment,configured_tools_in_shared_room:shared,phase,tools_this_phase:request.tools.map(t=>t.name),model:{provider:input.agent.provider,model:input.agent.model,reasoning:input.agent.reasoning},workarea:state.workarea,boundary:state.independent_activity?'公開読取と新規テキスト成果物のみ':'現在のツールと認可された作業場所だけ。ホスト操作や任意mountは不可。環境と実行結果はツールで確認する。'})}`,`今の段階:\n${stage}\n${extras}`,`メンバー（配送用）: ${JSON.stringify(input.members)}`].join('\n\n');

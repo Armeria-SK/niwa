@@ -37,6 +37,50 @@ function model(reply: (request: ModelRequest) => ModelEvent[] | Promise<ModelEve
     } };
 }
 
+test('failed read recovery returns a bounded report and resumes the waiting parent',async t=>{
+ const f=fixture(t),child=f.runtime.createAgent(f.actor,'調査係');
+ const parent=f.runtime.tasks.create(f.admin,f.leader.id,f.room.id,'根拠を調べる'),parentLease=f.runtime.tasks.claim(f.admin)!;
+ executeTurnTool(f.runtime,f.actor,parentLease,{tool_call_id:'delegate',name:'task_delegate',arguments:{agent_id:child.id,prompt:'資料を比較して結果を返す'}},'delegate');
+ const lease=f.runtime.tasks.claim(f.admin)!,actor=f.runtime.agentSession(child.id);
+ assert.equal(lease.task.agent_id,child.id);
+ f.runtime.reviewMemory(actor,lease,{memories:[]});
+ f.runtime.tasks.updatePlan(actor,lease,'plan',0,['資料を比較して根拠と限界を返す']);
+ for(let i=0;i<8;i++)f.runtime.tasks.observe(actor,lease,'failed'+i,'web_read',{url:`https://example.test/${i}`},{error:'Unavailable',failure_kind:'not_found'});
+ for(let i=0;i<3;i++)f.runtime.tasks.recordPrompt(actor,lease,{version:'structured-v5',phase:'read_recovery',rules_revision:f.runtime.commonRules(actor).revision,memory_revision:f.runtime.context(actor,f.room.id).revision,input_bytes:10,estimated_input_tokens:3,removed_messages:0});
+ let reports=0;
+ const runner=new TurnRunner(f.runtime,async()=>model(request=>{
+  assert.deepEqual(request.tools.map(t=>t.name).sort(),['conversation_send','task_report']);
+  assert.match(request.system_instructions,/確認できなかった点/);reports++;
+  return tool('conversation_send',{body:'比較に必要な本文を取得できませんでした。数値は未確認で、比較の結論は出せません。',recipient_ids:[]});
+ }),{}, {promptVersion:'structured-v5'});
+ await runner.run(lease);
+ assert.equal(reports,1);assert.equal(f.runtime.tasks.get(f.admin,lease.task.id).state,'completed');
+ assert.equal(f.runtime.tasks.get(f.admin,parent.id).state,'queued');
+ assert.ok(f.runtime.messages(f.admin,f.room.id).some(m=>m.author_id===child.id&&m.body.includes('数値は未確認')));
+ assert.ok(f.runtime.tasks.promptRuns(f.admin,lease.task.id).some(p=>p.phase==='task_summary_save'));
+});
+
+test('a recovery report cannot invoke unoffered retrieval or execution tools',async t=>{
+ const f=fixture(t);f.runtime.tasks.create(f.admin,f.leader.id,f.room.id,'根拠を調べる');const lease=f.runtime.tasks.claim(f.admin)!;
+ for(let i=0;i<8;i++)f.runtime.tasks.observe(f.actor,lease,'failed'+i,'web_read',{url:`https://example.test/${i}`},{error:'Unavailable'});
+ for(let i=0;i<3;i++)f.runtime.tasks.recordPrompt(f.actor,lease,{version:'legacy-v4',phase:'read_recovery',rules_revision:f.runtime.commonRules(f.actor).revision,memory_revision:f.runtime.context(f.actor,f.room.id).revision,input_bytes:10,estimated_input_tokens:3,removed_messages:0});
+ let reads=0;
+ const runner=new TurnRunner(f.runtime,async()=>model(()=>tool('web_read',{url:'https://example.test/again'})),{readPage:async()=>{reads++;throw Error('Unexpected read');}});
+ await runner.run(lease);assert.equal(reads,0);assert.equal(f.runtime.tasks.progress(f.admin,lease.task.id).kind,'stalled');
+});
+
+test('repeated failed sources reach a final report without an unlimited model loop',async t=>{
+ const f=fixture(t);const task=f.runtime.tasks.create(f.admin,f.leader.id,f.room.id,'資料の確認結果を返す');let reads=0,reports=0;
+ const runner=new TurnRunner(f.runtime,async()=>model(request=>{
+  if(request.tools.length===2&&request.tools.every(t=>['conversation_send','task_report'].includes(t.name))){reports++;return tool('conversation_send',{body:'資料を取得できず、要求された数値は確認できませんでした。',recipient_ids:[]});}
+  assert.ok(reads<12,'Recovery must stop the retrieval loop');return tool('web_read',{url:`https://example.test/source/${reads}`});
+ }),{readPage:async()=>{reads++;throw Error('Artificial source unavailable');}}, {promptVersion:'structured-v5'});
+ await runner.run(f.runtime.tasks.claim(f.admin)!);
+ assert.equal(reads,11);assert.equal(reports,1);assert.equal(f.runtime.tasks.get(f.admin,task.id).state,'completed');
+ assert.equal(f.runtime.tasks.promptRuns(f.admin,task.id).filter(p=>p.phase==='read_recovery').length,3);
+ assert.ok(f.runtime.messages(f.admin,f.room.id).some(m=>m.body.includes('確認できませんでした')));
+});
+
 test('addressed bot replies continue at the recipient without leader echo and respect pause and archive', async t => {
   const f = fixture(t); const child = f.runtime.createAgent(f.actor, '仲間');
   let visits: string[] = [];
@@ -420,13 +464,12 @@ test('long room history is retained in storage and fitted automatically for know
   assert.equal(f.runtime.messages(f.admin, f.room.id).filter(message => message.body === '大'.repeat(10_000)).length, 5);
 });
 
-test('a single task completes more than twenty-four model steps without administrator continuation', async t => {
+test('a single task completes more than twenty-four fresh model steps without administrator continuation', async t => {
   const f = fixture(t); let requests = 0;
   const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '長い作業');
   const runner = new TurnRunner(f.runtime, async () => model(request => {
     requests++;
-    if (requests === 4) assert.match(request.system_instructions, /同じ引数のツール操作が3回/);
-    return requests <= 30 ? tool('history_search', { query: '資料' }) : complete('完了');
+    return requests <= 30 ? tool('history_search', { query: '資料 '+requests }) : complete('完了');
   }));
   await runner.run(f.runtime.tasks.claim(f.admin)!);
   assert.equal(requests, 31);

@@ -94,7 +94,8 @@ export class TurnRunner {
         // Full external results remain in receipts and task_history_read, not duplicated in every request.
         const observations=runtime.tasks.observations(actor,lease);
         const recoveringReads=!phaseTool&&observations.repeated_reads>=8;
-        if(recoveringReads&&observations.recovery_exhausted){runtime.tasks.waitForReadRecovery(actor,lease,observations.retry_at!);return;}
+        const reportingReads=recoveringReads&&observations.recovery_exhausted;
+        if(reportingReads&&observations.recovery_reported){runtime.tasks.waitForReadRecovery(actor,lease,observations.retry_at!);return;}
         const inputState = { ...workState, read_observations:observations, external_operations: workState.external_operations.map(({ result: _result, ...operation }) => operation),
           ...(phaseTool === 'task_summary_save' ? { summary_sources: runtime.completionSummarySources(actor, lease), proposed_completion: pendingCompletion!.events } : {}) };
         if (workState.autonomous && !adapter.capabilities.supports_tool_calls) {
@@ -104,7 +105,7 @@ export class TurnRunner {
         const recentCalls = history.filter(message => message.role === 'assistant').slice(-3)
           .map(message => JSON.stringify(message.tool_calls?.map(call => ({ name: call.name, arguments: call.arguments }))));
         const repeating = observations.repeated_reads>=3 || recentCalls.length === 3 && recentCalls.every(calls => calls === recentCalls[0]);
-        const RULES = `${BASE_RULES}\n管理者が設定した共通の指示（権限と停止・予算の制約は引き続き守る）: ${rules.body}${repeating ? '\n同じ引数のツール操作が3回続いています。直近の結果を確認し、進展がなければ別の方法へ変更してください。' : ''}`;
+        const RULES = `${BASE_RULES}\n管理者が設定した共通の指示（権限と停止・予算の制約は引き続き守る）: ${rules.body}${repeating ? '\n操作の繰り返しや資料取得の失敗が続いています。直近の結果を確認し、新しい根拠がなければ別の方法か確認できた範囲の回答へ進んでください。' : ''}`;
         const sharedRoom = runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared';
         let configuredTools = turnTools(agent.role === 'leader', external, sharedRoom, workState.autonomous || workState.task.conversation_reply === 1, !!this.#runtime.workareas.settings(actor).enabled).filter(tool=>tool.name!=='task_child_disposition'||workState.child_results.length>0);
         if(promptVersion==='structured-v5')configuredTools=scopedPromptTools(configuredTools,workState, runtime.initiatives.enabled());
@@ -122,7 +123,7 @@ export class TurnRunner {
           messages: [...base, { role: 'user', content: `現在の依頼: ${lease.task.prompt}` }, ...recentHistory,
             { role: 'user', content: JSON.stringify({ work_state: inputState }) }],
           tools: adapter.capabilities.supports_tool_calls ? configuredTools
-            .filter(tool => !phaseTool || tool.name === phaseTool) : [],
+            .filter(tool => (!phaseTool || tool.name === phaseTool)&&(!reportingReads||['conversation_send','task_report'].includes(tool.name))) : [],
           response_contract: { type: 'text' }, model_options: {},
           budget: { max_output_tokens: 4096, max_total_tokens: 64_000, max_requests: 1, max_tool_calls: 8 },
           ...(adapter.adapter_id === 'openai-subscription' && isReasoningEffort(agent.reasoning) ? { reasoning_effort: agent.reasoning } : {}),
@@ -131,7 +132,9 @@ export class TurnRunner {
           const request = makeRequest();
           if (reviewingMemory) request.system_instructions += '\n現在は返答・作業の前の記憶整理です。表示された会話から今後も役立つ好み・合意・経験・継続した関心を最大5件選び、実在するmessage_idをsource_message_idに指定します。推測、挨拶、重複、認証情報、一時的な進捗は保存しません。他Botの発言を自分の経験と混同せず、発言者と不確かさを保ちます。既存記憶と矛盾する場合は勝手に上書きせず省きます。memory_reviewだけを呼んでください。保存不要ならmemoriesは空配列です。ツールがない場合は同じ引数のJSON {"memories":[{"source_message_id":"表示されたID","body":"短い記憶"}]} だけを返してください。通常の会話への返答は次の呼び出しで行います。';
           else if (phaseTool === 'task_summary_save') request.system_instructions += `\n現在は仕事を完了する前の引継ぎ整理です。保存済みの事実から結論・理由・未解決事項・次の手順を短くまとめ、task_summary_saveだけを呼んでください。proposed_completionはまだ送っていない返答候補であり、実行済みの証拠ではありません。sourcesにはsummary_sourcesで確認できるkind/source_id/revisionを使い、現在の仕事自体を出所にしません。要約は承認や実行記録を置き換えません。ツールがない場合はこの形式に合うJSONだけを返します: ${JSON.stringify(summarySchema)}`;
-          return promptVersion==='structured-v5'?structuredPrompt(request,{rules,agent,profile:runtime.profile(actor,agent.id),members,memories:context.memories.slice(-20),memoryRevision:context.revision,environment,state:inputState,phase:phaseTool??'work',repeating}):request;
+          const composed=promptVersion==='structured-v5'?structuredPrompt(request,{rules,agent,profile:runtime.profile(actor,agent.id),members,memories:context.memories.slice(-20),memoryRevision:context.revision,environment,state:inputState,phase:phaseTool??'work',repeating}):request;
+          if(reportingReads)composed.system_instructions+='\n資料取得の巡回から回復を試みましたが、新しい根拠を十分に得られませんでした。これ以上検索や履歴巡回を続けず、現在の依頼に対して確認できた事実・暫定的な判断・確認できなかった点を本文にまとめ、今回の確認結果をconversation_sendで返してください。未確認の数値や出典は作らず、調査全体の成功を装いません。「調査を続ける」「次にまとめる」だけでは返答になりません。未完了の必須子タスク等により終了できない場合だけ、task_reportで現時点の結果と具体的な再開条件を伝えます。次の自動再確認までは追加の資料取得をしません。';
+          return composed;
         };
         let fitted: FittedContext;
         try {
@@ -151,8 +154,8 @@ export class TurnRunner {
         if (!runtime.tasks.reserveModelCall(actor, lease)) {
           if (runtime.tasks.active(actor,lease)) {runtime.tasks.wait(actor, lease, 'waiting_user', '定期実行のモデル呼び出し上限に達しました。');runtime.tasks.waitKind(actor,lease,'schedule_budget');} return;
         }
-        const modelPhase=phaseTool??(recoveringReads?'read_recovery':'model');
-        const promptRun=runtime.tasks.recordPrompt(actor,lease,{version:promptVersion,phase:recoveringReads?'read_recovery':phaseTool??'work',rules_revision:rules.revision,memory_revision:context.revision,input_bytes:fitted.input_bytes,estimated_input_tokens:fitted.estimated_input_tokens,removed_messages:fitted.removed_messages+history.length-recentHistory.length+roomMessages.length-selectedMessages.length});
+        const modelPhase=phaseTool??(reportingReads?'read_recovery_report':recoveringReads?'read_recovery':'model');
+        const promptRun=runtime.tasks.recordPrompt(actor,lease,{version:promptVersion,phase:reportingReads?'read_recovery_report':recoveringReads?'read_recovery':phaseTool??'work',rules_revision:rules.revision,memory_revision:context.revision,input_bytes:fitted.input_bytes,estimated_input_tokens:fitted.estimated_input_tokens,removed_messages:fitted.removed_messages+history.length-recentHistory.length+roomMessages.length-selectedMessages.length});
         runtime.tasks.activity(actor,lease,String(promptRun),modelPhase,'running',context.revision);
         let events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 600_000, ...(signal ? { signal } : {}) }),
           { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024,on_summary:summary=>runtime.tasks.summary(actor,lease,String(promptRun),context.revision,summary),on_event:event=>{if(event.type!=='reasoning_summary'&&runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),modelPhase,'running',context.revision);} });
@@ -171,6 +174,9 @@ export class TurnRunner {
           }
           runtime.tasks.providerFailure(actor,lease,failure.error);
           return;
+        }
+        if(reportingReads&&events.some(event=>event.type==='tool_call'&&!['conversation_send','task_report'].includes(event.name))){
+          runtime.tasks.waitForReadRecovery(actor,lease,observations.retry_at!);return;
         }
         if (phaseTool) {
           let review = events.filter(event => event.type === 'tool_call');

@@ -80,6 +80,27 @@ test('read observations ignore retrieval clock but preserve changed content; his
  r.tasks.observe(aa,lease,'changed','web_read',{url:'https://example.com'},{text:'内容更新',fetched_at:'7'});assert.equal(r.tasks.observations(aa,lease).repeated_reads,0);
  for(let i=0;i<6;i++)r.tasks.observe(aa,lease,'indirect'+i,'task_history_read',{step:i,offset:0},{history_indirection:true,text:'参照'+i});assert.ok(r.tasks.observations(aa,lease).repeated_reads>=3);
 });
+test('changed search queries, failed URLs and acknowledgments do not mask repeated evidence',t=>{
+ const {r,aa,lease}=fixture(t);
+ for(let i=0;i<12;i++){
+  if(i%4===0)r.tasks.observe(aa,lease,'failed'+i,'web_read',{url:`https://example.test/missing/${i}`},{error:'Unavailable',failure_kind:'not_found'});
+  else r.tasks.observe(aa,lease,'query'+i,'web_read',{url:`https://example.test/search?q=${i}`},{url:`https://example.test/search?q=${i}`,title:`query ${i}`,text:'同じ検索結果の本文',links:[{url:`https://example.test/track?id=${i}`}],fetched_at:String(i)});
+  r.tasks.observe(aa,lease,'ack'+i,'task_acknowledge',{body:'調査を続ける'},{acknowledged:true});
+  r.tasks.observe(aa,lease,'history'+i,'history_search',{query:'根拠'},{matches:[]});
+ }
+ assert.ok(r.tasks.observations(aa,lease).repeated_reads>=8);
+ r.tasks.observe(aa,lease,'written','workspace_write',{path:'comparison.md'},{written:true});
+ assert.equal(r.tasks.observations(aa,lease).repeated_reads,0);
+});
+test('occasional new reads cannot hide mostly unsuccessful retrievals, while fresh research proceeds',t=>{
+ const {r,aa,lease}=fixture(t);
+ for(let i=0;i<12;i++)r.tasks.observe(aa,lease,'mixed'+i,'web_read',{url:`https://example.test/${i}`},i%3===2?{text:`新しい資料 ${i}`}:{error:'Unavailable',failure_kind:'http_failure'});
+ assert.equal(r.tasks.observations(aa,lease).repeated_reads,0);
+ r.tasks.observe(aa,lease,'failed-again','web_read',{url:'https://example.test/another'},{error:'Unavailable',failure_kind:'http_failure'});
+ assert.ok(r.tasks.observations(aa,lease).repeated_reads>=8);
+ for(let i=0;i<12;i++)r.tasks.observe(aa,lease,'fresh'+i,'web_read',{url:`https://example.test/new/${i}`},{text:`確認できた本文 ${i}`});
+ assert.equal(r.tasks.observations(aa,lease).repeated_reads,0);
+});
 test('correction and deletion invalidate display and observation cache without reviving old callbacks',t=>{
  const {r,aa,admin,a,room,lease}=fixture(t);const msg=r.post(admin,room.id,'人工の旧情報'),memory=r.remember(aa,msg.id,'旧情報'),rev=r.context(aa,room.id).revision;
  r.tasks.activity(aa,lease,'call','model');r.tasks.summary(aa,lease,'call',rev,'旧情報の要約');r.tasks.observe(aa,lease,'read','workspace_read',{path:'draft'},{content:'旧情報'});

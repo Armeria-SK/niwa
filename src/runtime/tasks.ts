@@ -22,6 +22,11 @@ type RecordWithLease = Task & { lease_token: string | null };
 const publicTask = ({ lease_token: _token, ...task }: RecordWithLease): Task => task;
 const CONVERSATION_LIMIT_REASON = '会話の継続が16回の区切りに達しました。続ける場合は仕事の詳細から再開してください。';
 const TURN_LIMIT_REASON = 'この仕事の実行区切りに達しました。続行する場合は、新しい依頼として必要な範囲を指定してください。';
+const READ_OBSERVATION=/^(task_history_read|history_read|history_search|memory_search|web_read|web_search|browser_navigate|browser_snapshot|browser_follow|workspace_read|workspace_list)$/;
+function pageEvidence(name:string,result:JsonObject):string|undefined {
+  if(name!=='web_read'||typeof result.text!=='string'||!result.text.trim())return;
+  return 'read:'+createHash('sha256').update(JSON.stringify([name,result.text,result.revision??null,result.truncated??false])).digest('hex');
+}
 
 
 export class Tasks {
@@ -549,7 +554,7 @@ export class Tasks {
     }
     const kind=task.paused||this.#paused()?'paused':['waiting_provider','waiting_user'].includes(task.state)&&waiting!=='unknown'?String(waiting):task.state;
     const labels:Record<string,string>={running:'作業中',paused:'停止中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_provider:'理由未確認の待機',waiting_user:'対応待ち（理由未確認）',user_input:'管理者の入力待ち',member_input:'仲間の対応待ち',approval:'承認の判断待ち',invalid_output:'応答形式の確認待ち',budget:'自発活動の利用枠待ち',schedule_budget:'予定の利用枠待ち',network:task.provider_retry_at?'接続の再試行待ち':'接続の確認待ち',authentication:'認証の確認待ち',configuration:'モデル設定の確認待ち',provider_quota:'接続先の利用枠待ち',unknown:'理由未確認の待機',stalled:'進展がないため再確認待ち',completed:'完了',failed:'失敗',cancelled:'中止'};
-    const phases:Record<string,string>={resolve:'接続を準備中',model:'返答を考え中',read_recovery:'調査方法と確認結果を整理中',memory_review:'記憶を整理中',task_summary_save:'結果を整理中',read:'資料を確認中',execute:'コードを実行中',tool:'操作中'};
+    const phases:Record<string,string>={resolve:'接続を準備中',model:'返答を考え中',read_recovery:'調査方法と確認結果を整理中',read_recovery_report:'確認できた範囲をまとめ中',memory_review:'記憶を整理中',task_summary_save:'結果を整理中',read:'資料を確認中',execute:'コードを実行中',tool:'操作中'};
     const waitingTasks=task.state==='waiting_child'?this.#db.prepare(`SELECT t.id,t.agent_id,a.name,t.prompt,t.state FROM tasks t JOIN agents a ON a.id=t.agent_id
       LEFT JOIN task_child_dependencies d ON d.task_id=t.id WHERE t.parent_id=? AND t.room_id=? AND t.state NOT IN ('completed','failed','cancelled') AND coalesce(d.required,1)=1`).all(id,task.room_id):[];
     const summary=this.#summaries.get(id);
@@ -566,34 +571,44 @@ export class Tasks {
   observe(actor:Actor,lease:TaskLease,operation:string,name:string,args:JsonObject,result:JsonObject) {
     this.#owned(actor,lease);const memory=this.#access.memory(actor,lease.task.agent_id).prepare('SELECT revision FROM memory_state WHERE id=1').get()!.revision;
     const rules=this.#db.prepare('SELECT revision FROM common_rules WHERE id=1').get()!.revision;
-    const read=/^(task_history_read|history_read|web_read|browser_navigate|browser_snapshot|workspace_read|workspace_list)$/.test(name);
+    const read=READ_OBSERVATION.test(name);
     const raw=JSON.stringify(result),failure=result.error?String(result.failure_kind??'unknown'):null;
     // History pages reference their source; never recursively embed another history read.
     const value=name==='history_read'?{source_reference:args,retained:false}:name==='task_history_read'?{step:args.step,offset:args.offset,revision:result.revision??null,next_offset:result.next_offset??null,history_reference:true}:
       raw.length<=20000?result:{retained:false,reason:'Read the original source in pages',bytes:Buffer.byteLength(raw)};
     const stable=JSON.stringify(result,(key,value)=>['fetched_at','checked_at','observed_at'].includes(key)?undefined:value);
-    const fingerprint=createHash('sha256').update(JSON.stringify(result.history_indirection===true?[name,'history-indirection']:[name,args,stable])).digest('hex');
-    this.#db.prepare('INSERT OR IGNORE INTO task_observations VALUES (?,?,?,?,?,?,?,?,?)').run(lease.task.id,operation,Number(memory),Number(rules),name,(read?'read:':'work:')+fingerprint,redactSecrets(JSON.stringify(value)),failure,Date.now());
+    // Query strings, search titles and tracking links can change while the retrieved
+    // body stays identical. Count that as the same evidence, not fresh progress.
+    const fingerprint=pageEvidence(name,result)??(read?'read:':'work:')+createHash('sha256').update(JSON.stringify(result.history_indirection===true?[name,'history-indirection']:[name,args,stable])).digest('hex');
+    this.#db.prepare('INSERT OR IGNORE INTO task_observations VALUES (?,?,?,?,?,?,?,?,?)').run(lease.task.id,operation,Number(memory),Number(rules),name,fingerprint,redactSecrets(JSON.stringify(value)),failure,Date.now());
     this.#db.prepare('DELETE FROM task_observations WHERE task_id=? AND rowid NOT IN (SELECT rowid FROM task_observations WHERE task_id=? ORDER BY rowid DESC LIMIT 32)').run(lease.task.id,lease.task.id);
   }
   observations(actor:Actor,lease:TaskLease) {
     this.#owned(actor,lease);const revision=this.#access.memory(actor,lease.task.agent_id).prepare('SELECT revision FROM memory_state WHERE id=1').get()!.revision;
     const rules=this.#db.prepare('SELECT revision FROM common_rules WHERE id=1').get()!.revision;
-    const rows=this.#db.prepare('SELECT * FROM task_observations WHERE task_id=? AND memory_revision=? AND rules_revision=? AND created_at>? ORDER BY rowid').all(lease.task.id,Number(revision),Number(rules),Date.now()-30*60_000);
+    const rows=this.#db.prepare('SELECT * FROM task_observations WHERE task_id=? AND memory_revision=? AND rules_revision=? AND created_at>? ORDER BY rowid').all(lease.task.id,Number(revision),Number(rules),Date.now()-30*60_000)
+      .map(row=>{row.fingerprint=pageEvidence(String(row.name),JSON.parse(String(row.result)))??String(row.fingerprint);return row;});
     const count=(items:typeof rows)=>{
-      let repeats=0,since=0;const seen=new Set();
+      let repeats=0,since=0;const seen=new Set();const recent:{stalled:boolean;at:number}[]=[];
       for(const row of items){
-        if(!String(row.fingerprint).startsWith('read:')){if(!['work_note','task_plan_update','coordination_read'].includes(String(row.name))){repeats=0;since=0;seen.clear();}continue;}
-        if(seen.has(row.fingerprint)){if(!repeats)since=Number(row.created_at);repeats++;}
+        if(!READ_OBSERVATION.test(String(row.name))&&!String(row.fingerprint).startsWith('read:')){if(!['work_note','task_plan_update','coordination_read','task_acknowledge','task_report','task_status_update','browser_interact'].includes(String(row.name))){repeats=0;since=0;seen.clear();recent.length=0;}continue;}
+        const stalled=!!row.failure||seen.has(row.fingerprint);
+        recent.push({stalled,at:Number(row.created_at)});if(recent.length>12)recent.shift();
+        if(stalled){if(!repeats)since=Number(row.created_at);repeats++;}
         else {seen.add(row.fingerprint);repeats=0;since=0;}
       }
+      // An occasional different page must not hide a loop dominated by rereads
+      // and failed retrievals. Productive writes still start a fresh window.
+      const stalled=recent.filter(row=>row.stalled);
+      if(recent.at(-1)?.stalled&&recent.length===12&&stalled.length>=8&&stalled.length>repeats){repeats=stalled.length;since=stalled[0]!.at;}
       return {repeats,since};
     };
     const {repeats,since}=count(rows);
     // Count recovery requests durably, including across reports, retries and process restarts.
     const recoveryCalls=repeats>=8?Number(this.#db.prepare("SELECT count(*) AS count FROM prompt_runs WHERE task_id=? AND phase='read_recovery' AND memory_revision=? AND rules_revision=? AND created_at>=?").get(lease.task.id,Number(revision),Number(rules),since)!.count):0;
+    const reportCalls=repeats>=8?Number(this.#db.prepare("SELECT count(*) AS count FROM prompt_runs WHERE task_id=? AND phase='read_recovery_report' AND status='completed' AND memory_revision=? AND rules_revision=? AND created_at>=?").get(lease.task.id,Number(revision),Number(rules),since)!.count):0;
     const expires=repeats>=8?[...new Set(rows.map(row=>Number(row.created_at)))].sort((a,b)=>a-b).find(time=>count(rows.filter(row=>Number(row.created_at)>time)).repeats<8):undefined;
-    return {repeated_reads:repeats,...(repeats>=8?{recovery_calls:recoveryCalls,recovery_exhausted:recoveryCalls>=3,retry_at:expires!+30*60_000}:{}),
+    return {repeated_reads:repeats,...(repeats>=8?{recovery_calls:recoveryCalls,recovery_exhausted:recoveryCalls>=3,recovery_reported:reportCalls>0,retry_at:expires!+30*60_000}:{}),
       recovery:repeats>=8?'履歴の巡回から回復する段階です。同じ版・ページを先頭から読み直さず、別の資料・取得方法か確認できた範囲の回答へ進んでください。途中報告だけでは回復になりません。回復の試行枠は3回で、完了前の引継ぎ整理は別に行えます。観測は原資料・実行証拠の代わりではありません。':repeats>=3?'同じ資料/版/ページや取得失敗への巡回です。以下の観測を使い、別の方法か分かった範囲の回答へ進んでください。観測は原資料・実行証拠の代わりではありません。':null,
       recent:rows.slice(-8).map(row=>({operation_id:row.operation_id,name:row.name,observed_at:row.created_at,failure:row.failure,result_preview:String(row.result).slice(0,1500)}))};
   }
