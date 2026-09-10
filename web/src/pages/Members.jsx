@@ -10,6 +10,9 @@ import { ChatIcon, ChevronRightIcon, EditIcon, LockIcon, MemoryIcon, SearchIcon,
 
 export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, onDeleteMemory, onDM, paused, onAdd, maxMembers, onDelete }) {
   const [tab, setTab] = useState('profile');
+  const [memoryFor,setMemoryFor]=useState(null);const memoryTrigger=useRef(null);
+  function selectTab(value){if(value==='memory'){memoryTrigger.current=document.activeElement;setMemoryFor(member.id);}else setTab(value);}
+  function closeMemory(){setMemoryFor(null);requestAnimationFrame(()=>memoryTrigger.current?.focus());}
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState(null);
   const atLimit = members.filter(item => item.authority !== 'leader').length >= maxMembers;
@@ -18,10 +21,10 @@ export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, o
     <div className="page-heading"><div><span className="eyebrow">それぞれの個性を、大切に。</span><h1>メンバー</h1><p>話し方、記憶、見た目。ひとりずつ、少しずつ。</p></div><div className="member-heading-actions"><span className="quiet-count">{members.length}人の仲間</span><button className="button primary" onClick={() => setAdding(true)}><PlusIcon size={17} />メンバー追加</button></div></div>
     <div className="members-layout"><MemberScroll>{members.map(item => <button key={item.id} className={`member-list-row ${item.id === member.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)} aria-pressed={item.id === member.id}><Avatar member={item} size={64} /><span><strong>{item.name}{item.authority === 'leader' ? <span className="role-label">リーダー</span> : null}</strong><small>{item.role}</small><StatusLabel member={item} paused={paused} showDescription={false} /></span><ChevronRightIcon size={17} /></button>)}</MemberScroll>
       <section className="member-detail" aria-label={`${member.name}の詳細`}><div className="member-detail-top"><Avatar member={member} size={76} /><div><h2>{member.name}</h2><span className="muted">{member.role}</span></div><button className="button secondary" onClick={() => onDM(member.id)}><ChatIcon size={18} />個別に話す</button></div>
-        <Segmented label="メンバーの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }, { value: 'appearance', label: '見た目' }]} value={tab} onChange={setTab} />
+        <Segmented label="メンバーの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }, { value: 'appearance', label: '見た目' }]} value={memoryFor===member.id?'memory':tab} onChange={selectTab} />
         <div className="member-detail-scroll" key={`${member.id}-${tab}`}>
         {tab === 'profile' ? <Profile key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
-        {tab !== 'appearance' ? <MemoryList key={member.id} member={member} onSave={onSaveMemory} onDelete={onDeleteMemory} /> : null}
+        {memoryFor===member.id ? <MemoryList key={member.id} member={member} onClose={closeMemory} onSave={onSaveMemory} onDelete={onDeleteMemory} /> : null}
         {tab === 'appearance' ? <AppearanceEditor key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
         {tab === 'profile' && member.authority !== 'leader' ? <button className="button subtle" onClick={() => setDeleting(member)}>このBotを削除</button> : null}
         </div>
@@ -58,9 +61,8 @@ function Profile({ member, onSave }) {
   </form>;
 }
 
-function MemoryList({ member, onSave, onDelete }) {
-  const [open,setOpen]=useState(false);const trigger=useRef(null),list=useRef(null),position=useRef(0);
-  function close(){setOpen(false);setQuery('');requestAnimationFrame(()=>trigger.current?.focus());}
+function MemoryList({ member, onSave, onDelete, onClose }) {
+  const list=useRef(null),position=useRef(0);
   function remember(){position.current=list.current?.closest('dialog')?.scrollTop||0;}
   const [query, setQuery] = useState('');
   const page = useMemoryPage(member, query);
@@ -71,9 +73,9 @@ function MemoryList({ member, onSave, onDelete }) {
   const selectedHistory = memories.find(item => item.id === history);
   const visible = memories;
   const detailOpen=!!editing||!!deleting||!!selectedHistory;
-  useEffect(()=>{if(open&&!detailOpen){const frame=requestAnimationFrame(()=>{const dialog=list.current?.closest('dialog');if(dialog)dialog.scrollTop=position.current;});return()=>cancelAnimationFrame(frame);}},[open,detailOpen]);
-  return <><div className="memory-overview"><span>{page.loading?'記憶を確認中…':page.error?'記憶を取得できません':`記憶 ${page.total}件`}</span><button ref={trigger} className="button secondary" onClick={()=>{position.current=0;setOpen(true);}}>記憶を見る</button></div>
-  {open&&!detailOpen?<Modal title={`${member.name}の記憶`} onClose={close} className="memory-modal"><div ref={list} className="memory-view" aria-busy={page.loading}>
+  useEffect(()=>{if(!detailOpen){const frame=requestAnimationFrame(()=>{const dialog=list.current?.closest('dialog');if(dialog)dialog.scrollTop=position.current;});return()=>cancelAnimationFrame(frame);}},[detailOpen]);
+  return <>
+  {!detailOpen?<Modal title={`${member.name}の記憶`} onClose={onClose} className="memory-modal"><div ref={list} className="memory-view" aria-busy={page.loading}>
     <div className="privacy-note"><LockIcon size={20} /><div><strong>{member.name}だけの記憶</strong><p>この記憶を見られるのは、{member.name}とあなたです。</p></div></div>
     <div className="search-field"><SearchIcon size={18} /><input type="search" aria-label={`${member.name}の記憶を検索`} placeholder="記憶を検索" maxLength={200} value={query} onChange={e => setQuery(e.target.value)} />{query ? <IconButton label="記憶の検索をクリア" onClick={() => setQuery('')}><CloseIcon size={16} /></IconButton> : null}</div>
     <div className="memory-count" role="status">{page.loading ? '読み込み中…' : `${page.total}件の記憶（${visible.length}件を表示）`}</div>
