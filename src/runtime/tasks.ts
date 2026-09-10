@@ -91,7 +91,7 @@ export class Tasks {
   }
   queuedRequestAgents(actor: Actor): Set<string> {
     this.#admin(actor);
-    return new Set(this.#db.prepare("SELECT DISTINCT agent_id FROM tasks WHERE state='queued' AND paused=0 AND internal_autonomous=0 AND NOT EXISTS(SELECT 1 FROM execution_bindings e WHERE e.task_id=tasks.id AND e.waiting=1 AND e.state='pending')").all().map(row=>String(row.agent_id)));
+    return new Set(this.#db.prepare("SELECT id,agent_id FROM tasks WHERE state='queued' AND paused=0 AND internal_autonomous=0 AND NOT EXISTS(SELECT 1 FROM execution_bindings e WHERE e.task_id=tasks.id AND e.waiting=1 AND e.state='pending')").all().filter(row=>this.#autonomyAllowed(String(row.id))).map(row=>String(row.agent_id)));
   }
   /** Claims one task atomically; waiting parents consume no execution slot. */
   claim(actor: Actor, excludedAgents: ReadonlySet<string> = new Set()): TaskLease | undefined {

@@ -139,3 +139,27 @@ test('disabled ancestor reply does not block independent wakes or bypass held op
  assert.equal(r.autonomousWakes.list(admin).find(row=>row.agent_id===leader.id)!.reason,'前回の活動を継続・待機中');
  }finally{db.close();}
 });
+
+test('blocked replies cannot repeatedly preempt a running independent wake',async t=>{
+ const {root,r,admin,leader,actor}=fixture(t),other=r.createAgent(actor,'停止した起点'),room=r.createRoom(admin,'共有');
+ const origin=r.tasks.create(admin,other.id,room.id,'人工起点'),reply=r.tasks.create(admin,leader.id,room.id,'保留返信');
+ const db=new DatabaseSync(join(root,'control.db'));
+ db.prepare("UPDATE tasks SET internal_autonomous=1,state='waiting_user' WHERE id=?").run(origin.id);
+ db.prepare('UPDATE tasks SET conversation_reply=1,parent_id=? WHERE id=?').run(origin.id,reply.id);db.close();
+ r.autonomousWakes.configure(admin,other.id,false);
+ const now=Date.now();r.autonomousWakes.dispatch(admin,now-61000);r.autonomousWakes.dispatch(admin,now);
+ const {Scheduler}=await import('../src/runtime/scheduler.ts');let runs=0,aborts=0;
+ const scheduler=new Scheduler(r,{async run(_lease,signal){runs++;await new Promise<void>(resolve=>signal!.addEventListener('abort',()=>{aborts++;resolve();},{once:true}));}});
+ try{
+ scheduler.tick();await new Promise(resolve=>setImmediate(resolve));
+ for(let i=0;i<4;i++){scheduler.tick();await new Promise(resolve=>setImmediate(resolve));}
+ assert.equal(runs,1);assert.equal(aborts,0);assert.equal(r.tasks.get(admin,reply.id).state,'queued');
+ r.tasks.create(admin,leader.id,room.id,'本当のユーザー依頼');scheduler.tick();await new Promise(resolve=>setImmediate(resolve));assert.equal(aborts,1);
+ }finally{await scheduler.stop();}
+});
+
+test('wake status exposes the actual budget reset instead of an overdue wake time',t=>{
+ const {root,r,admin}=fixture(t),now=Date.now();r.autonomousWakes.dispatch(admin,now);
+ const db=new DatabaseSync(join(root,'control.db'));db.prepare('UPDATE autonomous_wakes SET model_calls=24,budget_reset_at=?,next_at=?').run(now+3600000,now-60000);db.close();
+ const row=r.autonomousWakes.list(admin)[0]!;assert.equal(row.reason,'自発活動の利用枠待ち');assert.equal(row.next_at,now+3600000);
+});

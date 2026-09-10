@@ -109,7 +109,7 @@ export class Schedules {
     transaction(this.db, () => {
       if (this.db.prepare('SELECT paused FROM settings WHERE id=1').get()!.paused === 1) return;
       for (const row of this.list(actor).filter(item => item.enabled)) {
-        if (row.autonomous && this.db.prepare('SELECT autonomous FROM settings WHERE id=1').get()!.autonomous !== 1) continue;
+        if (row.autonomous && (this.db.prepare('SELECT autonomous FROM settings WHERE id=1').get()!.autonomous !== 1 || this.db.prepare('SELECT enabled FROM agent_autonomy WHERE agent_id=?').get(row.agent_id)?.enabled === 0)) continue;
         const recent = this.db.prepare(`SELECT t.id,t.state FROM schedule_runs r JOIN tasks t ON t.id=r.task_id
           WHERE r.schedule_id=? ORDER BY r.scheduled_at DESC LIMIT 3`).all(row.id);
         if (this.db.prepare(`SELECT 1 FROM schedule_runs r JOIN tasks t ON t.id=r.task_id

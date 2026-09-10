@@ -276,3 +276,10 @@ test('editing a dormant schedule keeps its recipient and does not erase concurre
   const edited = r.schedules.update(f.admin, { ...input, prompt: 'Changed while dormant', next_at: before.next_at }, before.version);
   assert.equal(edited.agent_id, child.id); assert.equal(edited.model_calls, 2); assert.equal(edited.run_count, 1);
 });
+
+test('individual autonomy off preserves an autonomous occurrence without consuming a run',t=>{
+ const f=fixture(t),r=f.runtime;r.schedules.create(f.admin,{...f.input,autonomous:true});r.autonomousWakes.configure(f.admin,f.leader.id,false);
+ r.schedules.dispatch(f.admin,f.input.next_at);assert.equal(r.tasks.list(f.admin).length,0);assert.equal(r.schedules.list(f.admin)[0]!.run_count,0);
+ r.autonomousWakes.configure(f.admin,f.leader.id,true);r.schedules.dispatch(f.admin,f.input.next_at+60000);
+ assert.equal(r.tasks.list(f.admin).length,1);assert.equal(r.schedules.list(f.admin)[0]!.run_count,1);
+});

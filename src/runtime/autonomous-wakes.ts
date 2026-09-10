@@ -40,15 +40,14 @@ export class AutonomousWakes {
     const roomBlocked = !shared && !!this.db.prepare("SELECT 1 FROM rooms WHERE visibility='shared' LIMIT 1").get();
     const gate = Number(this.db.prepare('SELECT coalesce(max(last_started_at),0)+? AS due FROM autonomous_wakes').get(MINUTE)!.due);
     const ongoing=this.initiatives.enabled()?this.initiatives.list(actor):[];
-    return this.db.prepare(`SELECT a.id AS agent_id,a.name,a.status,coalesce((SELECT enabled FROM agent_autonomy WHERE agent_id=a.id),1) AS enabled,w.next_at,w.reason,w.model_calls,w.budget_reset_at,w.task_id,t.state,t.provider_retry_at,
-      EXISTS(SELECT 1 FROM tasks busy WHERE busy.agent_id=a.id AND busy.paused=0 AND (busy.state IN ('queued','running') OR (busy.state='waiting_provider' AND (SELECT enabled FROM initiative_settings)=0))) AS busy
+    return this.db.prepare(`SELECT a.id AS agent_id,a.name,a.status,coalesce((SELECT enabled FROM agent_autonomy WHERE agent_id=a.id),1) AS enabled,w.next_at,w.reason,w.model_calls,w.budget_reset_at,w.task_id,t.state,t.provider_retry_at
       FROM agents a LEFT JOIN autonomous_wakes w ON w.agent_id=a.id LEFT JOIN tasks t ON t.id=w.task_id
-      WHERE a.id NOT IN (SELECT id FROM deleted_agents) ORDER BY a.rowid`).all().map(row => {const blocked=roomBlocked&&!ongoing.some(i=>i.owner_id===row.agent_id&&i.state==='active'&&!this.db.prepare('SELECT 1 FROM room_preferences WHERE room_id=? AND archived=1').get(i.room_id));return ({
+      WHERE a.id NOT IN (SELECT id FROM deleted_agents) ORDER BY a.rowid`).all().map(row => {const budgetWait=Number(row.model_calls)>=24&&Number(row.budget_reset_at)>Date.now();const blocked=roomBlocked&&!ongoing.some(i=>i.owner_id===row.agent_id&&i.state==='active'&&!this.db.prepare('SELECT 1 FROM room_preferences WHERE room_id=? AND archived=1').get(i.room_id));return ({
         enabled: row.enabled === 1, agent_id: row.agent_id, name: row.name, task_id: row.task_id, model_calls: row.model_calls ?? 0, budget_reset_at: row.budget_reset_at,
         reason: settings.paused ? '全体停止中' : !settings.autonomous ? '自発活動オフ' : !row.enabled ? 'このBotの自発活動オフ' : row.status !== 'active' ? '休眠中'
-          : blocked ? '利用できる共有会話がありません' : busy.has(String(row.agent_id)) ? (row.task_id ? '前回の活動を継続・待機中' : '既存の仕事を優先') : row.reason ?? '起動判定の準備中',
+          : blocked ? '利用できる共有会話がありません' : busy.has(String(row.agent_id)) ? (row.task_id ? '前回の活動を継続・待機中' : '既存の仕事を優先') : budgetWait ? '自発活動の利用枠待ち' : row.reason ?? '起動判定の準備中',
         next_at: settings.paused || !settings.autonomous || !row.enabled || row.status !== 'active' || blocked ? null
-          : busy.has(String(row.agent_id)) ? (row.state === 'waiting_provider' ? row.provider_retry_at : null) : Math.max(Number(row.next_at ?? Date.now()+MINUTE),gate),
+          : busy.has(String(row.agent_id)) ? (row.state === 'waiting_provider' ? row.provider_retry_at : null) : Math.max(Number(row.next_at ?? Date.now()+MINUTE),gate,budgetWait?Number(row.budget_reset_at):0),
       });});
   }
 
