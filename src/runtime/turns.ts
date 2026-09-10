@@ -103,7 +103,7 @@ export class TurnRunner {
         const repeating = observations.repeated_reads>=3 || recentCalls.length === 3 && recentCalls.every(calls => calls === recentCalls[0]);
         const RULES = `${BASE_RULES}\n管理者が設定した共通の指示（権限と停止・予算の制約は引き続き守る）: ${rules.body}${repeating ? '\n同じ引数のツール操作が3回続いています。直近の結果を確認し、進展がなければ別の方法へ変更してください。' : ''}`;
         const sharedRoom = runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared';
-        let configuredTools = turnTools(agent.role === 'leader', this.#external, sharedRoom, workState.autonomous, !!this.#runtime.workareas.settings(actor).enabled).filter(tool=>tool.name!=='task_child_disposition'||workState.child_results.length>0);
+        let configuredTools = turnTools(agent.role === 'leader', this.#external, sharedRoom, workState.autonomous || workState.task.conversation_reply === 1, !!this.#runtime.workareas.settings(actor).enabled).filter(tool=>tool.name!=='task_child_disposition'||workState.child_results.length>0);
         if(promptVersion==='structured-v5')configuredTools=scopedPromptTools(configuredTools,workState, runtime.initiatives.enabled());
         const settings = runtime.settings(actor);
         const environment = { conversation: sharedRoom ? 'shared' : 'private', model_supports_tools: adapter.capabilities.supports_tool_calls,

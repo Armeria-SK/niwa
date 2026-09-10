@@ -64,6 +64,8 @@ test('leader escalation does not disclose a private task to a nonparticipant',t=
 
 test('planned next owners never dispatch work; one explicit fixed-version handoff completes revision, review and freeze',t=>{
  const {r,admin,leader,actor,bot,other,room}=fixture(t);
+ r.updateSettings(admin,{autonomous:false});
+ r.autonomousWakes.configure(admin,bot.id,false);
  const started=Date.now();r.tasks.create(admin,leader.id,room.id,'期限：20分。文書を作成し確認に渡す');const lease=r.tasks.claim(admin)!;
  assert.ok(lease.task.deadline_at>=started+1199000 && lease.task.deadline_at<=Date.now()+1200000);
  const fields={completion_condition:'固定版の内容確認',stop_condition:'入力不足',blocker:'',waiting_for:null,next_agent_id:bot.id,notify:'involved' as const};

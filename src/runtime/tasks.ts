@@ -153,21 +153,25 @@ export class Tasks {
   active(actor: Actor, lease: TaskLease): boolean {
     try { this.#owned(actor, lease); return true; } catch { return false; }
   }
-  #autonomyAllowed(taskId: string): boolean {
-    // A disabled origin cannot continue through delegation; direct user work remains allowed.
-    if (this.#db.prepare(`WITH RECURSIVE ancestors AS (
+  #autonomyLineage(taskId: string) {
+    // Replies carry routing, not permission. Only a wake/autonomous schedule makes
+    // its descendants autonomous; an orphaned legacy reply remains conservative.
+    return this.#db.prepare(`WITH RECURSIVE ancestors AS (
       SELECT id,parent_id,agent_id,conversation_reply,internal_autonomous FROM tasks WHERE id=?
       UNION SELECT t.id,t.parent_id,t.agent_id,t.conversation_reply,t.internal_autonomous FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
-      SELECT 1 FROM ancestors a LEFT JOIN schedule_runs r ON r.task_id=a.id LEFT JOIN schedules s ON s.id=r.schedule_id
-      WHERE (a.conversation_reply=1 OR a.internal_autonomous=1 OR s.autonomous=1)
-      AND EXISTS(SELECT 1 FROM agent_autonomy p WHERE p.enabled=0 AND (p.agent_id=a.agent_id OR p.agent_id=(SELECT agent_id FROM tasks WHERE id=?))) LIMIT 1`).get(taskId,taskId)) return false;
+      SELECT MAX(CASE WHEN a.internal_autonomous=1 OR s.autonomous=1 OR (a.conversation_reply=1 AND a.parent_id IS NULL) THEN 1 ELSE 0 END) AS autonomous,
+        MAX(CASE WHEN p.enabled=0 THEN 1 ELSE 0 END) AS disabled, MAX(a.conversation_reply) AS reply
+      FROM ancestors a LEFT JOIN schedule_runs r ON r.task_id=a.id LEFT JOIN schedules s ON s.id=r.schedule_id
+        LEFT JOIN agent_autonomy p ON p.agent_id=a.agent_id`).get(taskId)!;
+  }
+  #autonomyAllowed(taskId: string): boolean {
+    const lineage = this.#autonomyLineage(taskId);
+    if (lineage.autonomous === 1 && (lineage.disabled === 1 ||
+      this.#db.prepare('SELECT autonomous FROM settings WHERE id=1').get()!.autonomous !== 1)) return false;
     if(this.#db.prepare(`SELECT 1 FROM initiative_tasks l JOIN initiatives i ON i.id=l.initiative_id JOIN tasks t ON t.id=l.task_id WHERE l.task_id=? AND (NOT EXISTS(SELECT 1 FROM json_each(i.body,'$.participants') WHERE value=t.agent_id) OR i.state='paused' OR (t.internal_autonomous=1 AND (SELECT enabled FROM initiative_settings)=0))`).get(taskId))return false;
-    if (this.#db.prepare('SELECT autonomous FROM settings WHERE id=1').get()!.autonomous === 1 &&
-      !this.#db.prepare('SELECT 1 FROM tasks t JOIN room_preferences p ON p.room_id=t.room_id WHERE t.id=? AND p.archived=1').get(taskId)) return true;
-    return !this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id,conversation_reply,internal_autonomous) AS (
-      SELECT id,parent_id,conversation_reply,internal_autonomous FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id,t.conversation_reply,t.internal_autonomous FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
-      SELECT 1 FROM ancestors a LEFT JOIN schedule_runs r ON r.task_id=a.id LEFT JOIN schedules s ON s.id=r.schedule_id
-      WHERE a.conversation_reply=1 OR a.internal_autonomous=1 OR s.autonomous=1 LIMIT 1`).get(taskId);
+    // Archiving still stops conversation chains, independently of the autonomy switch.
+    return !(lineage.autonomous === 1 || lineage.reply === 1) ||
+      !this.#db.prepare('SELECT 1 FROM tasks t JOIN room_preferences p ON p.room_id=t.room_id WHERE t.id=? AND p.archived=1').get(taskId);
   }
   autonomyBlocked(actor: Actor): Set<string> {
     this.#admin(actor);
@@ -183,12 +187,13 @@ export class Tasks {
     }
   }
   #autonomous(taskId: string): boolean {
-    return !!this.#db.prepare('SELECT 1 FROM tasks t LEFT JOIN schedule_runs r ON r.task_id=t.id LEFT JOIN schedules s ON s.id=r.schedule_id WHERE t.id=? AND (t.conversation_reply=1 OR t.internal_autonomous=1 OR s.autonomous=1)').get(taskId);
+    return !!this.#db.prepare('SELECT 1 FROM tasks t LEFT JOIN schedule_runs r ON r.task_id=t.id LEFT JOIN schedules s ON s.id=r.schedule_id WHERE t.id=? AND (t.conversation_reply=1 OR t.internal_autonomous=1 OR s.autonomous=1)').get(taskId)
+      && this.#autonomyLineage(taskId).autonomous === 1;
   }
   rest(actor: Actor, lease: TaskLease): void {
     transaction(this.#db, () => {
       const task = this.#owned(actor, lease); this.#access.room(actor, task.room_id);
-      check(this.#autonomous(task.id), 'forbidden', 'Only autonomous work can choose rest');
+      check(this.#autonomous(task.id) || task.conversation_reply === 1, 'forbidden', 'Only autonomous work or a conversational reply can choose rest');
       this.assertCompletion(actor, lease);
       this.#change(task.id, 'completed', '今回は休息しました。', null, false);
       this.#resumeParent(task.parent_id);

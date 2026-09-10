@@ -42,14 +42,18 @@ test('addressed bot replies continue at the recipient without leader echo and re
   let visits: string[] = [];
   const runner = new TurnRunner(f.runtime, async agent => model(request => {
     assert.match(request.system_instructions, /@相手の名前/); assert.match(request.system_instructions, /ラベルや署名を付けず/);
+    if (agent.id === child.id) {
+      assert.match(request.system_instructions, /"this_task_autonomous":false/);
+      assert.doesNotMatch(request.system_instructions, /今回は自発活動の機会/);
+      assert.ok(request.tools.some(tool => tool.name === 'task_rest'));
+    }
     visits.push(agent.id);
     return agent.id === f.leader.id ? complete('@仲間 この話題はどう思いますか？') : complete('面白いと思います。');
   }));
   const root = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '会話してください');
   const original = f.runtime.tasks.claim(f.admin)!; await runner.run(original); await runner.run(original);
   assert.equal(f.runtime.tasks.list(f.admin).length, 2);
-  f.runtime.updateSettings(f.admin, { autonomous: false }); assert.equal(f.runtime.tasks.claim(f.admin), undefined);
-  f.runtime.updateSettings(f.admin, { autonomous: true });
+  f.runtime.updateSettings(f.admin, { autonomous: false });
   f.runtime.organizeRoom(f.admin, f.room.id, { archived: true }); assert.equal(f.runtime.tasks.claim(f.admin), undefined);
   f.runtime.organizeRoom(f.admin, f.room.id, { archived: false });
   await runner.run(f.runtime.tasks.claim(f.admin)!);
