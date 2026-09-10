@@ -1,4 +1,4 @@
-export class RetrievalFailure extends Error { constructor(readonly code:'not_found'|'refused'|'http_failure'|'invalid_response'|'policy_blocked'|'invalid_request'|'aborted',message='Page could not be read'){super(message);} }
+export class RetrievalFailure extends Error { constructor(readonly code:'not_found'|'refused'|'http_failure'|'invalid_response'|'empty_content'|'policy_blocked'|'invalid_request'|'aborted',message='Page could not be read'){super(message);} }
 import { lookup } from 'node:dns/promises';
 import { isIPv4 } from 'node:net';
 import { get as httpGet } from 'node:http';
@@ -111,8 +111,12 @@ async function fetchPublic(input: string, types: RegExp, signal: AbortSignal | u
 
 export async function readPublicPage(input: string, signal?: AbortSignal, transport: PageNetwork = network) {
   const { body, ...source } = await fetchPublic(input, PAGE_TYPES, signal, transport);
-  const text = body.toString('utf8');
-  return { ...source, text: text.slice(0, 20_000), truncated: text.length > 20_000 };
+  const raw = body.toString('utf8');
+  // The browser image shares resource/network helpers but does not ship the host's HTML parser.
+  const extracted=/^text\/html(?:;|$)/i.test(source.content_type)?(await import('./html-text.ts')).htmlText(raw,source.url):null;
+  if(extracted&&!extracted.text)throw new RetrievalFailure('empty_content');
+  const text=extracted?.text??raw;
+  return { ...source, ...(extracted?{title:extracted.title,links:extracted.links}:{}), text: text.slice(0, 20_000), truncated: text.length > 20_000 };
 }
 
 /** Broker-only anonymous GET. No caller-controlled headers, cookies, body, credentials or proxy. */

@@ -1,7 +1,8 @@
 export const shortWork = text => {const line=String(text||'名称未設定の仕事').split(/\n/)[0];return line.length>64?line.slice(0,64)+'…':line;};
 export const workLabel=(task,paused=false)=>paused&&!['completed','cancelled','failed'].includes(task.state)?'停止中':task.progress?.label||({running:'作業中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_user:'対応待ち（理由未確認）',waiting_provider:'理由未確認の待機',completed:'完了',cancelled:'中止',failed:'失敗'})[task.state]||'状態未確認';
 export function memberWork(jobs,paused=false,sleeping=false) {
- const open=jobs.filter(t=>!['completed','cancelled','failed'].includes(t.state));
+ const updated=task=>task.progress?.last_activity_at??task.updated_at??task.created_at??0;
+ const open=jobs.filter(t=>!['completed','cancelled','failed'].includes(t.state)).sort((a,b)=>updated(b)-updated(a));
  const running=open.filter(t=>t.state==='running'&&!t.paused&&!paused&&!sleeping);
  const waiting=open.filter(t=>!running.includes(t)&&!t.paused&&!paused&&!sleeping);
  const stopped=open.filter(t=>t.paused||paused||sleeping);

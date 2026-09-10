@@ -23,3 +23,26 @@ test('waiting facts use required children in the same conversation and preserve 
 test('client merges reconnect and older pages once using stable server timestamps',async()=>{
  const {mergeMessages}=await import(pathToFileURL(resolve('web/src/message-order.js')).href);const a={id:'a',sequence:2,created_at:'2026-01-01T10:00:00Z'},b={id:'b',sequence:1,created_at:'2026-01-01T11:00:00Z'},c={id:'c',sequence:3,created_at:a.created_at};assert.deepEqual(mergeMessages([b,a],[a,c]).map((m:any)=>m.id),['a','c','b']);
 });
+
+test('member presence shows the latest waiting work, keeps every job and still prioritizes running work',async()=>{
+ const {memberWork}=await import(pathToFileURL(resolve('web/src/work-display.js')).href);
+ const old={id:'old',state:'waiting_user',updated_at:1,progress:{label:'管理者の入力待ち'}},recent={id:'recent',state:'waiting_provider',updated_at:2,progress:{label:'進展がないため再確認待ち'}};
+ const jobs=[old,recent],before=JSON.stringify(jobs),work=memberWork(jobs);
+ assert.equal(work.activity,'進展がないため再確認待ち・ほか1件');assert.deepEqual(work.jobs.map((t:any)=>t.id),['recent','old']);assert.equal(JSON.stringify(jobs),before);
+ assert.equal(memberWork([...jobs,{id:'running',state:'running',updated_at:0,progress:{label:'資料を確認中'}}]).activity,'資料を確認中・ほか2件');
+ assert.equal(memberWork(jobs,true).kind,'paused');assert.equal(memberWork(jobs,false,true).kind,'sleeping');
+});
+
+test('coordination wait labels use saved recipients including legacy records without inventing missing reasons',t=>{
+ const {r,admin,a,aa,b,room,db}=fixture(t);
+ for(const waitingFor of ['administrator',b.id]){
+  const task=r.tasks.create(admin,a.id,room.id,'人工の確認依頼'),lease=r.tasks.claim(admin)!;
+  const input={expected_revision:0,completion_condition:'入力後に処理',stop_condition:'入力なし',blocker:'人工入力待ち',waiting_for:waitingFor,next_agent_id:null,notify:'none' as const};
+  r.updateCoordination(aa,lease,input);
+  const kind=waitingFor==='administrator'?'user_input':'member_input';assert.equal(r.tasks.progress(admin,task.id).kind,kind);
+  db.prepare("UPDATE task_waits SET kind='unknown' WHERE task_id=?").run(task.id);assert.equal(r.tasks.progress(admin,task.id).kind,kind);
+  db.prepare("UPDATE tasks SET wait_reason='別の理由' WHERE id=?").run(task.id);assert.equal(r.tasks.progress(admin,task.id).kind,'waiting_user');
+  r.tasks.resume(admin,task.id);r.updateCoordination(aa,r.tasks.claim(admin)!,{...input,expected_revision:1});assert.equal(r.tasks.progress(admin,task.id).kind,kind);
+  r.tasks.cancel(admin,task.id);
+ }
+});

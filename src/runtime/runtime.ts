@@ -753,7 +753,7 @@ export class Runtime {
       check(Number(old?.revision ?? 0)===input.expected_revision,'conflict','Task coordination changed; read it again');
       const fields=['completion_condition','stop_condition','blocker','waiting_for','next_agent_id'] as const;
       if(old && fields.every(key=>old[key]===input[key])) {
-        if(input.blocker) this.tasks.wait(actor,lease,'waiting_user',input.blocker);
+        if(input.blocker){this.tasks.wait(actor,lease,'waiting_user',input.blocker);this.tasks.waitKind(actor,lease,input.waiting_for==='administrator'?'user_input':'member_input');}
         return {revision:Number(old.revision),changed:false};
       }
       const revision=input.expected_revision+1;
@@ -771,7 +771,7 @@ export class Runtime {
         const message=this.post(actor,lease.task.room_id,body);
         for(const id of recipients) this.tasks.address(actor,lease,id,body,message.id);
       }
-      if(input.blocker) this.tasks.wait(actor,lease,'waiting_user',input.blocker);
+      if(input.blocker){this.tasks.wait(actor,lease,'waiting_user',input.blocker);this.tasks.waitKind(actor,lease,input.waiting_for==='administrator'?'user_input':'member_input');}
       return {revision,changed:true};
     });
   }

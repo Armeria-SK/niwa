@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtempSync,copyFileSync,rmSync,writeFileSync} from 'node:fs';
+import {pathToFileURL} from 'node:url';
 import { publicIPv4, readPublicPage, readPublicResource, type PageNetwork } from '../src/tools/web/public-page.ts';
 
 test('public page destination policy rejects private, reserved and alternate IP forms', async () => {
@@ -74,4 +76,44 @@ test('public page returns source and bounded untrusted text, caps redirects and 
   const abort = new AbortController();
   const pending = readPublicPage('https://public.example.com/', abort.signal, transport);
   abort.abort(); await assert.rejects(pending, /cancelled/);
+});
+
+test('HTML reading reaches article text after a large head and preserves safe source links without scripts',async()=>{
+ const transport:PageNetwork={resolve:async()=>['8.8.8.8'],get:async()=>({status:200,contentType:'text/html',body:`<!doctype html><html><head><title>人工 &amp; 資料</title><style>${'x'.repeat(24000)}</style><script>forbiddenHead()</script></head><body><nav>メニューだけ</nav><main><h1>調査結果</h1><p>価格は100円 &lt; 200円。</p><p hidden>hidden secret</p><p aria-hidden="true">aria secret</p><script>forbiddenBody()</script><a href="/source">根拠</a><a href="javascript:bad()">無効リンク</a></main></body></html>`})};
+ const page=await readPublicPage('https://example.com/article',undefined,transport);
+ assert.match(page.text,/調査結果/);assert.match(page.text,/100円 < 200円/);assert.doesNotMatch(page.text,/forbidden|secret|メニューだけ|<script|xxx/);assert.equal(page.truncated,false);
+ assert.ok(JSON.stringify(page).includes('https://example.com/source'));assert.ok(!JSON.stringify(page).includes('javascript:'));
+});
+
+test('empty dynamic HTML is a classified retrieval failure, while plain text and JSON remain literal',async()=>{
+ const transport:PageNetwork={resolve:async()=>['8.8.8.8'],get:async()=>({status:200,contentType:'text/html',body:'<title>App</title><script>document.write("unexecuted")</script><body><div id="app"></div></body>'})};
+ await assert.rejects(readPublicPage('https://example.com/',undefined,transport),(error:unknown)=>(error as {code?:string}).code==='empty_content');
+ for(const contentType of ['text/plain','application/json']){
+  transport.get=async()=>({status:200,contentType,body:'{"example":"<script>literal</script>"}'});
+  assert.equal((await readPublicPage('https://example.com/',undefined,transport)).text,'{"example":"<script>literal</script>"}');
+ }
+});
+
+test('HTML limits apply to extracted text and hidden containers cannot nominate the article',async()=>{
+ const transport:PageNetwork={resolve:async()=>['8.8.8.8'],get:async()=>({status:200,contentType:'text/html',body:'<body><div style="display: none!important"><main>隠された本文</main></div><article><p>'+ '本文'.repeat(12000)+'</p><template>非表示テンプレート</template></article></body>'})};
+ const page=await readPublicPage('https://example.com/',undefined,transport);
+ assert.equal(page.text,'本文'.repeat(10000));assert.equal(page.truncated,true);assert.doesNotMatch(page.text,/隠された|テンプレート/);
+});
+
+test('many long HTML links cannot inflate the model result beyond the reference budget',async()=>{
+ const transport:PageNetwork={resolve:async()=>['8.8.8.8'],get:async()=>({status:200,contentType:'text/html',body:'<main>本文'+Array.from({length:45},(_,i)=>`<a href="https://example.com/${i}?q=${'a'.repeat(3900)}">出所</a>`).join('')+'</main>'})};
+ const page=await readPublicPage('https://example.com/',undefined,transport);
+ assert.match(page.text,/本文/);assert.ok(page.links!.length>0);assert.ok(Buffer.byteLength(JSON.stringify(page))<10_000);
+});
+
+test('the browser resource module works without the host-only HTML parser in its image',async()=>{
+ const root=mkdtempSync('/tmp/niwa-browser-resource-');
+ try{
+  writeFileSync(root+'/package.json','{"type":"module"}');
+  copyFileSync(new URL('../src/tools/web/public-page.js',import.meta.url),root+'/public-page.js');
+  const isolated=await import(pathToFileURL(root+'/public-page.js').href);
+  const raw='<script>resourceBytes()</script>',transport:PageNetwork={resolve:async()=>['8.8.8.8'],get:async()=>({status:200,contentType:'text/html',body:raw})};
+  const result=await isolated.readPublicResource('https://example.com/',undefined,transport);
+  assert.equal(Buffer.from(result.body_base64,'base64').toString(),raw);
+ }finally{rmSync(root,{recursive:true,force:true});}
 });

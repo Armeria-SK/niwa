@@ -91,7 +91,8 @@ export class TurnRunner {
         const phaseSchema = phaseTool === 'memory_review' ? memoryReviewSchema : summarySchema;
         // Full external results remain in receipts and task_history_read, not duplicated in every request.
         const observations=runtime.tasks.observations(actor,lease);
-        if(observations.repeated_reads>=8){runtime.tasks.wait(actor,lease,'waiting_provider','同じ資料・失敗の巡回が回復案の提示後も続いたため休息します。新しい資料・取得方法を確認してから再開します。',true);runtime.tasks.waitKind(actor,lease,'stalled');return;}
+        const recoveringReads=!phaseTool&&observations.repeated_reads>=8;
+        if(recoveringReads&&observations.recovery_exhausted){runtime.tasks.waitForReadRecovery(actor,lease,observations.retry_at!);return;}
         const inputState = { ...workState, read_observations:observations, external_operations: workState.external_operations.map(({ result: _result, ...operation }) => operation),
           ...(phaseTool === 'task_summary_save' ? { summary_sources: runtime.completionSummarySources(actor, lease), proposed_completion: pendingCompletion!.events } : {}) };
         if (workState.autonomous && !adapter.capabilities.supports_tool_calls) {
@@ -148,12 +149,13 @@ export class TurnRunner {
         if (!runtime.tasks.reserveModelCall(actor, lease)) {
           if (runtime.tasks.active(actor,lease)) {runtime.tasks.wait(actor, lease, 'waiting_user', '定期実行のモデル呼び出し上限に達しました。');runtime.tasks.waitKind(actor,lease,'schedule_budget');} return;
         }
-        const promptRun=runtime.tasks.recordPrompt(actor,lease,{version:promptVersion,phase:phaseTool??'work',rules_revision:rules.revision,memory_revision:context.revision,input_bytes:fitted.input_bytes,estimated_input_tokens:fitted.estimated_input_tokens,removed_messages:fitted.removed_messages+history.length-recentHistory.length+roomMessages.length-selectedMessages.length});
-        runtime.tasks.activity(actor,lease,String(promptRun),phaseTool??'model','running',context.revision);
+        const modelPhase=phaseTool??(recoveringReads?'read_recovery':'model');
+        const promptRun=runtime.tasks.recordPrompt(actor,lease,{version:promptVersion,phase:recoveringReads?'read_recovery':phaseTool??'work',rules_revision:rules.revision,memory_revision:context.revision,input_bytes:fitted.input_bytes,estimated_input_tokens:fitted.estimated_input_tokens,removed_messages:fitted.removed_messages+history.length-recentHistory.length+roomMessages.length-selectedMessages.length});
+        runtime.tasks.activity(actor,lease,String(promptRun),modelPhase,'running',context.revision);
         let events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 600_000, ...(signal ? { signal } : {}) }),
-          { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024,on_summary:summary=>runtime.tasks.summary(actor,lease,String(promptRun),context.revision,summary),on_event:event=>{if(event.type!=='reasoning_summary'&&runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),phaseTool??'model','running',context.revision);} });
+          { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024,on_summary:summary=>runtime.tasks.summary(actor,lease,String(promptRun),context.revision,summary),on_event:event=>{if(event.type!=='reasoning_summary'&&runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),modelPhase,'running',context.revision);} });
         runtime.tasks.finishPrompt(actor,lease,promptRun,events);
-        if(runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),phaseTool??'model',events.some(e=>e.type==='failed')?'failed':'completed',context.revision);
+        if(runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),modelPhase,events.some(e=>e.type==='failed')?'failed':'completed',context.revision);
         events=events.filter(event=>event.type!=='reasoning_summary');
         if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
         if (!runtime.isContextCurrent(actor, context.revision)) continue;
