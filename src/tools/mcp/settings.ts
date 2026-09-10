@@ -48,7 +48,13 @@ export class McpSettings{
    try{next=await McpConnector.connect(input.servers,AbortSignal.timeout(10000));}
    catch{return {ok:false,message:connectionMessage};}
    if(this.closed)throw new DomainError('conflict','MCP service closing');
-   const servers=saveMcpInstallation(this.root,input.servers,input.revision);
+   let servers:McpServerConfig[];
+   try{servers=saveMcpInstallation(this.root,input.servers,input.revision);}
+   catch(error){
+    next.retire();
+    if(['EACCES','EPERM','EROFS','ENOSPC','EDQUOT'].includes((error as NodeJS.ErrnoException).code??''))return {ok:false,message:'MCP設定を保存できませんでした。Niwaの保存先の書き込み権限と空き容量を確認してください。'};
+    throw error;
+   }
    this.connector.retire();this.connector=next;this.applied=mcpConfigRevision(servers);this.failure=null;this.saved(servers);
    return {ok:true,...this.status(),busy:false};
   }finally{this.busy=false;}

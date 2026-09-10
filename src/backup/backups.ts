@@ -84,7 +84,7 @@ export class Backups {
     try {
       // No await inside snapshot: control and private DBs represent one application boundary.
       const names = this.#runtime.snapshot(admin, stage);
-      const manifest: BackupManifest = { version: 1, id, created_at, installation: this.#installation, files: [] };
+      const manifest: BackupManifest = { version: 1, id, created_at, installation: structuredClone(this.#installation), files: [] };
       for (const name of names) {
         const raw = join(stage, name); const compressed = `${raw}.gz`;
         await pipeline(createReadStream(raw), createGzip(), createWriteStream(compressed, { flags: 'wx', mode: 0o600 }));

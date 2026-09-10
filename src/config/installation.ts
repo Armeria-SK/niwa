@@ -1,9 +1,9 @@
-import { constants, closeSync, fsyncSync, lstatSync, openSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { constants, closeSync, fsyncSync, fstatSync, lstatSync, openSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
-import { initializeProduct, productPaths, type ProductPaths } from './paths.ts';
+import { assertDirectoryPath, initializeProduct, productPaths, type ProductPaths } from './paths.ts';
 import { WebAuth } from '../web/auth.ts';
 import {mcpServerSchema,type McpServerConfig} from '../tools/mcp/client.ts';
 import {DomainError} from '../domain/types.ts';
@@ -16,6 +16,7 @@ const schema = Type.Object({ version: Type.Literal(1), origin: Type.String({ max
   programExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })), browserExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
   workareasEnabled: Type.Optional(Type.Boolean()), packagesEnabled: Type.Optional(Type.Boolean()), xAccountId: Type.Optional(Type.String({ pattern: '^[0-9]{1,19}$' })) }, { additionalProperties: false });
 export type Installation = Static<typeof schema>;
+const savedMcpSchema=Type.Object({version:Type.Literal(1),servers:Type.Array(mcpServerSchema,{maxItems:8})},{additionalProperties:false});
 function validate(value: unknown): Installation {
   if (!Value.Check(schema, value)) throw new Error('Invalid config/niwa.json');
   const config = value as Installation;
@@ -36,10 +37,23 @@ export function initializeInstallation(root: string, config: Installation): Prod
   return paths;
 }
 export function readInstallation(root: string): Installation {
-  const file = join(productPaths(root).config, 'niwa.json');
+  const paths=productPaths(root),file = join(paths.config, 'niwa.json');
   const stat = lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || stat.size > 65_536) throw new Error('Invalid config/niwa.json');
-  return validate(JSON.parse(readFileSync(file, 'utf8')) as unknown);
+  const config=validate(JSON.parse(readFileSync(file, 'utf8')) as unknown);
+  // Fixed deployment settings stay read-only under systemd. UI-managed MCP settings
+  // take precedence, including an empty list; legacy config is only the initial seed.
+  assertDirectoryPath(paths.state);
+  let fd:number;
+  try{fd=openSync(join(paths.state,'mcp.json'),constants.O_RDONLY|(constants.O_NOFOLLOW??0));}
+  catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return config;throw error;}
+  try{
+    const info=fstatSync(fd);
+    if(!info.isFile()||info.nlink!==1||info.size>65_536||(process.platform!=='win32'&&((info.mode&0o077)!==0||info.uid!==process.getuid!())))throw new Error('Unsafe state/mcp.json');
+    const saved:unknown=JSON.parse(readFileSync(fd,'utf8'));
+    if(!Value.Check(savedMcpSchema,saved))throw new Error('Invalid state/mcp.json');
+    return validate({...config,mcpServers:saved.servers});
+  }finally{closeSync(fd);}
 }
 export const mcpConfigRevision=(servers:McpServerConfig[])=>createHash('sha256').update(JSON.stringify(servers)).digest('hex');
 /** The service lock serializes writers; re-read to preserve unrelated installation settings. */
@@ -48,11 +62,11 @@ export function saveMcpInstallation(root:string,servers:McpServerConfig[],expect
   if(mcpConfigRevision(current.mcpServers??[])!==expected)throw new DomainError('conflict','MCP settings changed');
   const next={...current,mcpServers:servers};
   try{validate(next);}catch{throw new DomainError('invalid','Invalid MCP settings');}
-  const text=JSON.stringify(next,null,2)+'\n';if(Buffer.byteLength(text)>65_536)throw new DomainError('limit','Installation too large');
-  const dir=productPaths(root).config,temp=join(dir,`.mcp-${randomUUID()}.tmp`);
+  const text=JSON.stringify({version:1,servers},null,2)+'\n';if(Buffer.byteLength(text)>65_536)throw new DomainError('limit','MCP settings too large');
+  const dir=productPaths(root).state,temp=join(dir,`.mcp-${randomUUID()}.tmp`);assertDirectoryPath(dir);
   const fd=openSync(temp,'wx',0o600);
   try{writeFileSync(fd,text);fsyncSync(fd);}catch(error){unlinkSync(temp);throw error;}finally{closeSync(fd);}
-  try{renameSync(temp,join(dir,'niwa.json'));}catch(error){unlinkSync(temp);throw error;}
+  try{renameSync(temp,join(dir,'mcp.json'));}catch(error){unlinkSync(temp);throw error;}
   if(process.platform!=='win32'){const directory=openSync(dir,'r');try{fsyncSync(directory);}finally{closeSync(directory);}}
   return servers;
 }

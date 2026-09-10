@@ -1,11 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,chmodSync,rmSync,statSync,readFileSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,chmodSync,rmSync,statSync,readFileSync,writeFileSync,symlinkSync,linkSync,unlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer,request} from 'node:http';
 import {once} from 'node:events';
-import {initializeInstallation,readInstallation} from '../src/config/installation.ts';
+import {initializeInstallation,readInstallation,saveMcpInstallation,mcpConfigRevision} from '../src/config/installation.ts';
 import {McpSettings} from '../src/tools/mcp/settings.ts';
 import {mcpScope} from '../src/tools/mcp/client.ts';
 import {Runtime} from '../src/runtime/runtime.ts';
@@ -13,6 +13,9 @@ import {WebAuth} from '../src/web/auth.ts';
 import {createApiServer} from '../src/web/api.ts';
 import {TurnRunner} from '../src/runtime/turns.ts';
 import {openAISubscriptionAdapterCapabilities} from '../src/providers/codex/adapter.ts';
+import {Backups} from '../src/backup/backups.ts';
+import {restoreInstallation} from '../src/backup/restore.ts';
+import {productPaths} from '../src/config/paths.ts';
 
 async function fixture(t:{after:(fn:()=>Promise<void>)=>void}){
  const root=mkdtempSync(join(tmpdir(),'niwa-mcp-settings-')),socket=join(root,'mcp.sock');chmodSync(root,0o700);
@@ -40,7 +43,7 @@ test('MCP probe discovers permissions without publishing tools or changing saved
  assert.equal(f.manager.connector.tools(true).length,0);assert.equal(readFileSync(join(f.root,'config/niwa.json'),'utf8'),before);assert.ok(!f.methods.includes('tools/call'));
 });
 test('MCP changes persist, preserve other settings and retire previous connectors without redirecting an in-flight write',async t=>{
- const f=await fixture(t),revision=f.manager.status().revision;
+ const f=await fixture(t),revision=f.manager.status().revision,fixed=readFileSync(join(f.root,'config/niwa.json'),'utf8');
  assert.equal((await f.manager.save({revision,servers:[f.config]})).ok,true);
  const old=f.manager.connector,ctx={scope:mcpScope('epoch','room'),deadline:Date.now()+10000,execution_id:'00000000-0000-4000-8000-000000000001',allow_start:true};
  const running=old.call('mcp_local_write',{},ctx);await f.writeStarted;
@@ -48,19 +51,73 @@ test('MCP changes persist, preserve other settings and retire previous connector
  assert.equal((await f.manager.save({revision:current.revision,servers:[{...f.config,enabled:false}]})).ok,true);
  assert.equal(old.tools(true).length,0);await assert.rejects(old.call('mcp_local_write',{},ctx));
  f.release();assert.match(JSON.stringify(await running),/finished original request/);assert.equal(f.methods.filter(m=>m==='tools/call').length,1);
- const stored=readInstallation(f.root);assert.equal(stored.reasoningSummary,true);assert.equal(stored.promptVersion,'structured-v5');assert.equal(stored.mcpServers?.[0]?.enabled,false);assert.equal(statSync(join(f.root,'config/niwa.json')).mode&0o777,0o600);
+ const stored=readInstallation(f.root);assert.equal(stored.reasoningSummary,true);assert.equal(stored.promptVersion,'structured-v5');assert.equal(stored.mcpServers?.[0]?.enabled,false);assert.equal(statSync(join(f.root,'state/mcp.json')).mode&0o777,0o600);
+ assert.equal(readFileSync(join(f.root,'config/niwa.json'),'utf8'),fixed);
  const reopened=await McpSettings.open(f.root);assert.equal(reopened.status().servers[0]?.enabled,false);assert.equal(reopened.status().applied,true);reopened.close();
 });
 test('MCP connection failure and stale edits preserve current configuration and active tools',async t=>{
  const f=await fixture(t),initial=f.manager.status().revision;
- await f.manager.save({revision:initial,servers:[f.config]});const before=readFileSync(join(f.root,'config/niwa.json'),'utf8'),active=f.manager.connector,revision=f.manager.status().revision;
+ await f.manager.save({revision:initial,servers:[f.config]});const before=readFileSync(join(f.root,'state/mcp.json'),'utf8'),active=f.manager.connector,revision=f.manager.status().revision;
  assert.equal((await f.manager.save({revision,servers:[{...f.config,socket:join(f.root,'missing.sock')}]})).ok,false);
- assert.equal(f.manager.connector,active);assert.equal(readFileSync(join(f.root,'config/niwa.json'),'utf8'),before);
+ assert.equal(f.manager.connector,active);assert.equal(readFileSync(join(f.root,'state/mcp.json'),'utf8'),before);
  await assert.rejects(f.manager.save({revision:initial,servers:[]}));
  await assert.rejects(f.manager.save({revision,servers:[f.config,f.config]}));
  await assert.rejects(f.manager.save({revision,servers:[{...f.config,tools:[]}]}));
- assert.equal(readFileSync(join(f.root,'config/niwa.json'),'utf8'),before);
+ assert.equal(readFileSync(join(f.root,'state/mcp.json'),'utf8'),before);
  await f.manager.save({revision,servers:[]});assert.equal(f.manager.connector.tools(true).length,0);
+});
+test('MCP saves with read-only deployment configuration and removed legacy connections stay removed after reopening',{skip:process.platform==='win32'||process.getuid?.()===0},async t=>{
+ const f=await fixture(t),dir=join(f.root,'config'),file=join(dir,'niwa.json');
+ writeFileSync(file,JSON.stringify({...readInstallation(f.root),mcpServers:[f.config]}));
+ const fixed=readFileSync(file,'utf8');chmodSync(file,0o400);chmodSync(dir,0o500);
+ try{
+  // Prove this fixture rejects both overwriting and the old atomic rename approach.
+  assert.throws(()=>writeFileSync(file,fixed),{code:'EACCES'});
+  assert.throws(()=>writeFileSync(join(dir,'blocked.tmp'),'blocked'),{code:'EACCES'});
+  assert.equal((await f.manager.save({revision:f.manager.status().revision,servers:[f.config]})).ok,true);
+  assert.deepEqual(f.manager.status().connected,['local']);
+  assert.equal((await f.manager.save({revision:f.manager.status().revision,servers:[]})).ok,true);
+  assert.equal(readFileSync(file,'utf8'),fixed);
+  const reopened=await McpSettings.open(f.root);
+  try{assert.deepEqual(reopened.status().servers,[]);assert.deepEqual(reopened.status().connected,[]);assert.equal(reopened.status().applied,true);}finally{reopened.close();}
+ }finally{chmodSync(dir,0o700);chmodSync(file,0o600);}
+});
+test('MCP storage failures preserve the active connector and report a storage error',{skip:process.platform==='win32'||process.getuid?.()===0},async t=>{
+ const f=await fixture(t);await f.manager.save({revision:f.manager.status().revision,servers:[f.config]});
+ const dir=join(f.root,'state'),before=readFileSync(join(dir,'mcp.json'),'utf8'),active=f.manager.connector;
+ chmodSync(dir,0o500);
+ try{
+  const result=await f.manager.save({revision:f.manager.status().revision,servers:[]});
+  assert.equal(result.ok,false);assert.ok('message' in result);assert.match(result.message,/保存先の書き込み権限と空き容量/);
+  assert.equal(f.manager.connector,active);assert.deepEqual(active.connections(),['local']);assert.equal(f.manager.status().busy,false);
+  assert.equal(readFileSync(join(dir,'mcp.json'),'utf8'),before);
+ }finally{chmodSync(dir,0o700);}
+ assert.equal((await f.manager.save({revision:f.manager.status().revision,servers:[]})).ok,true);
+});
+test('MCP saved state rejects unsafe files and cannot override fixed deployment fields',async t=>{
+ const f=await fixture(t),file=join(f.root,'state/mcp.json');
+ for(const value of [{version:2,servers:[]},{version:1,servers:[],port:9999},{version:1,servers:[f.config,f.config]},'{broken']){
+  writeFileSync(file,typeof value==='string'?value:JSON.stringify(value),{mode:0o600});assert.throws(()=>readInstallation(f.root));
+ }
+ writeFileSync(file,' '.repeat(65537));assert.throws(()=>readInstallation(f.root));unlinkSync(file);
+ if(process.platform!=='win32'){
+  symlinkSync(join(f.root,'config/niwa.json'),file);assert.throws(()=>readInstallation(f.root));unlinkSync(file);
+  writeFileSync(file,JSON.stringify({version:1,servers:[]}),{mode:0o644});assert.throws(()=>readInstallation(f.root));chmodSync(file,0o600);
+  const linked=join(f.root,'hardlink');linkSync(file,linked);assert.throws(()=>readInstallation(f.root));unlinkSync(linked);
+ }
+});
+test('MCP settings in state survive backup and installation restore with a consistent configuration snapshot',async t=>{
+ const f=await fixture(t);await f.manager.save({revision:f.manager.status().revision,servers:[{...f.config,enabled:false}]});
+ const installation=readInstallation(f.root),saved=structuredClone(installation),r=new Runtime(join(f.root,'state'));r.bootstrap(r.administrator());
+ const backups=new Backups(r,productPaths(f.root),installation),destination=f.root+'-restored';
+ t.after(async()=>{await backups.stop();r.close();rmSync(destination,{recursive:true,force:true});});
+ const snapshot=r.snapshot.bind(r);
+ r.snapshot=(actor,dir)=>{const names=snapshot(actor,dir);queueMicrotask(()=>{saveMcpInstallation(f.root,[],mcpConfigRevision(installation.mcpServers!));installation.mcpServers=[];});return names;};
+ const backup=await backups.create();assert.deepEqual(backup.installation,saved);assert.deepEqual(readInstallation(f.root).mcpServers,[]);
+ await backups.stop();r.close();await restoreInstallation(f.root,backup.id,destination);
+ assert.deepEqual(readInstallation(destination),saved);
+ const restored=await McpSettings.open(destination);
+ try{assert.equal(restored.status().servers[0]?.enabled,false);assert.equal(restored.status().applied,true);}finally{restored.close();}
 });
 test('MCP startup connection failures can be disabled and recovered from saved settings',async t=>{
  const f=await fixture(t),file=join(f.root,'config/niwa.json');
