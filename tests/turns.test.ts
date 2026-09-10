@@ -780,3 +780,32 @@ test('public progress tool continues work and a final reply closes its notes wit
   const notes = f.runtime.workNotes(f.admin, f.room.id);
   assert.equal(notes.length, 1); assert.ok(notes[0]!.reply_id);
 });
+
+test('missing send recipients gives actionable feedback and recovers once without another task', async t => {
+  const f = fixture(t); let calls = 0;
+  const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '人工の結果を返してください');
+  const runner = new TurnRunner(f.runtime, async () => model(request => {
+    if (++calls <= 3) return tool('conversation_send', {body:'人工の結果'});
+    const input = JSON.stringify(request.messages);
+    assert.match(input, /recipient_ids/); assert.match(input, /投稿は実行されていません/);
+    assert.equal(f.runtime.messages(f.admin, f.room.id).length, 0);
+    return tool('conversation_send', {body:'人工の結果',recipient_ids:[]});
+  }));
+  await runner.run(f.runtime.tasks.claim(f.admin)!);
+  assert.equal(calls,4);
+  assert.equal(f.runtime.tasks.get(f.admin,task.id).state,'completed');
+  assert.equal(f.runtime.tasks.list(f.admin).length,1);
+  assert.deepEqual(f.runtime.messages(f.admin,f.room.id).map(m=>m.body),['人工の結果']);
+});
+
+test('invalid send arguments do not publish, infer recipients or echo invalid secrets', t => {
+  const f=fixture(t); f.runtime.tasks.create(f.admin,f.leader.id,f.room.id,'人工');
+  const lease=f.runtime.tasks.claim(f.admin)!;
+  for(const args of [{body:'人工'}, {body:'人工',recipient_ids:'synthetic-secret'}, {body:'',recipient_ids:[]}, {body:'人工',recipient_ids:['same','same']}]) {
+    const result=executeTurnTool(f.runtime,f.actor,lease,{name:'conversation_send',tool_call_id:'invalid',arguments:args},'invalid');
+    assert.equal(result.error,'invalid_arguments');
+    assert.equal(JSON.stringify(result).includes('synthetic-secret'),false);
+  }
+  assert.equal(f.runtime.messages(f.admin,f.room.id).length,0);
+  assert.equal(f.runtime.tasks.get(f.admin,lease.task.id).state,'running');
+});

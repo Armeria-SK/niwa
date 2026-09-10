@@ -123,7 +123,17 @@ export function turnTools(isLeader: boolean, external: ExternalTools = {}, share
 }
 export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease, call: ModelToolCall, operationId: string): JsonObject {
   const definition: { description: string; schema: TSchema } | undefined = definitions[call.name as keyof typeof definitions];
-  if (!definition || !Value.Check(definition.schema, call.arguments)) return { error: 'Unknown tool or invalid arguments' };
+  if (!definition) return { error: 'Unknown tool' };
+  if (!Value.Check(definition.schema, call.arguments)) {
+    // Report only schema-owned field names, never invalid values or caller-supplied keys.
+    const properties = definition.schema.properties as Record<string, TSchema>;
+    const invalid = Object.keys(properties).filter(key =>
+      call.arguments[key] === undefined ? definition.schema.required?.includes(key) : !Value.Check(properties[key]!, call.arguments[key]));
+    return { error: 'invalid_arguments', fields: invalid.slice(0, 8),
+      message: call.name === 'conversation_send'
+        ? '投稿は実行されていません。bodyは1〜20000文字、recipient_idsは必須の宛先Bot ID配列です。Bot宛先がない場合もrecipient_ids: []を明示してください。本文を作り直さず、不足・不正な引数を修正して単独で再送してください。宛先や権限は推測しないでください。'
+        : '操作は実行されていません。fieldsとツール定義を確認し、必要な引数・型・範囲を修正してください。余分な引数は削除してください。' };
+  }
   const args = call.arguments as Record<string, string>;
   if (call.name.startsWith('procedure_')) {
     try { return runtime.procedureTool(actor, lease, operationId, call.name, call.arguments); }
