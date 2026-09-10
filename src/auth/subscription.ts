@@ -44,15 +44,16 @@ export class Subscription {
   async status() {
     return { connected: !!await this.account.read(), pending: !!this.#attempt, url: this.#url, error: this.#error };
   }
-  async models() {
+  async models(signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const revision = this.#revision;
     check(!this.#attempt && !this.#disconnecting && await this.account.read(), 'conflict', 'Subscription login is required');
-    const result = await this.connection.catalog.discover({ account_scope: 'default', refresh_mode: 'online' });
+    const result = await this.connection.catalog.discover({ account_scope: 'default', refresh_mode: 'online', ...(signal?{signal}: {}) });
     check(revision === this.#revision && result.kind === 'snapshot', 'conflict', 'Subscription account changed');
     return result.snapshot.models.filter(model => model.visibility !== 'hidden');
   }
-  async profile(modelId: string, effort: string): Promise<ModelProfile> {
-    const model = (await this.models()).find(item => item.model_id === modelId);
+  async profile(modelId: string, effort: string, signal?: AbortSignal): Promise<ModelProfile> {
+    const model = (await this.models(signal)).find(item => item.model_id === modelId);
     check(model && model.supported_efforts.some(value => value === effort), 'invalid', 'Model or reasoning effort is unavailable');
     return { runtime: 'gpt', provider_id: 'openai_subscription', provider_model_id: modelId, supported_efforts: [...model.supported_efforts],
       ...(model.context_window === undefined ? {} : { context_window: model.context_window }),

@@ -11,6 +11,10 @@ export class ProviderLimits {
     this.key(actor, key);
     return Number(this.db.prepare('SELECT next_probe_at FROM provider_limits WHERE account_key=?').get(key)?.next_probe_at ?? 0) > now;
   }
+  nextProbe(actor: Actor, key: string): number {
+    this.key(actor,key);
+    return Number(this.db.prepare('SELECT next_probe_at FROM provider_limits WHERE account_key=?').get(key)?.next_probe_at??0);
+  }
   begin(actor: Actor, key: string, now = Date.now()): number | undefined {
     this.key(actor, key);
     return transaction(this.db, () => {

@@ -1,3 +1,5 @@
+import {ModelCatalogError} from '../src/providers/shared/catalog.ts';
+import {DatabaseSync} from 'node:sqlite';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -808,4 +810,31 @@ test('invalid send arguments do not publish, infer recipients or echo invalid se
   }
   assert.equal(f.runtime.messages(f.admin,f.room.id).length,0);
   assert.equal(f.runtime.tasks.get(f.admin,lease.task.id).state,'running');
+});
+
+test('transient catalog setup failure is classified, retries the same autonomous work and survives reopen',async t=>{
+ const f=fixture(t),now=Date.now();f.runtime.autonomousWakes.dispatch(f.admin,now-61000);f.runtime.autonomousWakes.dispatch(f.admin,now);
+ const lease=f.runtime.tasks.claim(f.admin)!;const secret='synthetic-secret-do-not-store';
+ await new TurnRunner(f.runtime,async()=>{throw new ModelCatalogError('CATALOG_NETWORK_ERROR',secret,true);}).run(lease);
+ const task=f.runtime.tasks.get(f.admin,lease.task.id),progress=f.runtime.tasks.progress(f.admin,task.id);
+ assert.equal(progress.kind,'network');assert.match(task.wait_reason!,/モデル接続の準備.*NETWORK_ERROR/);
+ assert.ok(task.provider_retry_at!>=now+60000&&task.provider_retry_at!<now+90000);
+ assert.equal(JSON.stringify(task).includes(secret),false);assert.equal(f.runtime.tasks.steps(f.admin,task.id).length,0);
+ const reopened=new Runtime(f.root);try{
+  const admin=reopened.administrator();assert.equal(reopened.tasks.get(admin,task.id).provider_retry_at,task.provider_retry_at);
+  reopened.tasks.retryProviders(admin,task.provider_retry_at!+1);
+  const next=reopened.tasks.claim(admin)!;assert.equal(next.task.id,task.id);
+  await new TurnRunner(reopened,async()=>model(()=>complete('接続回復後に同じ仕事を完了'))).run(next);
+  assert.equal(reopened.tasks.get(admin,task.id).state,'completed');assert.equal(reopened.messages(admin,task.room_id).length,1);
+ }finally{reopened.close();}
+});
+
+test('authentication setup errors do not schedule blind retry; cancelled discovery keeps queued work',async t=>{
+ const f=fixture(t),task=f.runtime.tasks.create(f.admin,f.leader.id,f.room.id,'人工'),lease=f.runtime.tasks.claim(f.admin)!;
+ await new TurnRunner(f.runtime,async()=>{throw new ModelCatalogError('AUTHENTICATION_FAILED','synthetic-private',false);}).run(lease);
+ assert.equal(f.runtime.tasks.progress(f.admin,task.id).kind,'authentication');assert.equal(f.runtime.tasks.get(f.admin,task.id).provider_retry_at,null);
+ const other=f.runtime.tasks.create(f.admin,f.leader.id,f.room.id,'別の人工'),next=f.runtime.tasks.claim(f.admin)!,abort=new AbortController();
+ await new TurnRunner(f.runtime,async()=>{f.runtime.tasks.interrupt(f.admin,next);abort.abort();throw new ModelCatalogError('ABORTED','cancelled');}).run(next,abort.signal);
+ assert.equal(f.runtime.tasks.get(f.admin,other.id).state,'queued');
+ const db=new DatabaseSync(join(f.root,'control.db'));try{assert.equal(db.prepare('SELECT count(*) n FROM provider_failures WHERE task_id=?').get(other.id)!.n,0);}finally{db.close();}
 });

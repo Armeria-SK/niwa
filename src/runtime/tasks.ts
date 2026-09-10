@@ -481,14 +481,14 @@ export class Tasks {
         summary:task.paused||this.#paused()?null:row.finished_at?this.#responseSummaries.get(String(row.id))??null:progress.summary}];
     });
   }
-  providerFailure(actor:Actor,lease:TaskLease,error:Extract<ModelEvent,{type:'failed'}>['error']) {
+  providerFailure(actor:Actor,lease:TaskLease,error:Extract<ModelEvent,{type:'failed'}>['error'],phase:'response'|'setup'='response') {
     this.#owned(actor,lease);
     const retry=error.code==='QUOTA_EXCEEDED'||(error.retryable&&['PROVIDER_UNAVAILABLE','NETWORK_ERROR','TIMED_OUT','RATE_LIMITED'].includes(error.code));
     this.#db.prepare(`INSERT INTO provider_failures VALUES (?,?,?,1,?,?) ON CONFLICT(task_id) DO UPDATE SET code=excluded.code,retryable=excluded.retryable,attempts=attempts+1,reset_at=excluded.reset_at,created_at=excluded.created_at`).run(lease.task.id,error.code,Number(retry),error.reset_at??null,Date.now());
     const attempts=Number(this.#db.prepare('SELECT attempts FROM provider_failures WHERE task_id=?').get(lease.task.id)!.attempts);
-    this.wait(actor,lease,'waiting_provider',`モデル応答を完了できませんでした (${error.code})。${retry?'再確認予定まで待機します。':'接続設定の確認後、同じ仕事を再開してください。'}`,retry);
-    this.waitKind(actor,lease,error.code==='QUOTA_EXCEEDED'?'provider_quota':['AUTH_UNAVAILABLE','AUTHENTICATION_FAILED','PERMISSION_DENIED'].includes(error.code)?'authentication':retry?'network':'unknown');
-    if(retry){const delay=lease.task.internal_autonomous?Math.min(60,15*2**Math.min(attempts-1,2))*60000:Math.min(900000,60000*2**Math.min(attempts-1,4));
+    this.wait(actor,lease,'waiting_provider',`${phase==='setup'?'モデル接続の準備を完了できませんでした':'モデル応答を完了できませんでした'} (${error.code})。${retry?'再確認予定まで待機します。':'接続設定の確認後、同じ仕事を再開してください。'}`,retry);
+    this.waitKind(actor,lease,error.code==='QUOTA_EXCEEDED'?'provider_quota':['AUTH_UNAVAILABLE','AUTHENTICATION_FAILED','PERMISSION_DENIED'].includes(error.code)?'authentication':retry?'network':['INVALID_REQUEST','CAPABILITY_MISMATCH'].includes(error.code)?'configuration':error.code==='INVALID_RESPONSE'?'invalid_output':'unknown');
+    if(retry){const delay=phase!=='setup'&&lease.task.internal_autonomous?Math.min(60,15*2**Math.min(attempts-1,2))*60000:Math.min(900000,60000*2**Math.min(attempts-1,4));
       this.#db.prepare('UPDATE tasks SET provider_retry_at=? WHERE id=?').run(Math.max(Date.now()+delay,(error.reset_at??0)*1000),lease.task.id);}
   }
   #summaries = new Map<string,{call:string;revision:number;text:string}>();
@@ -534,7 +534,7 @@ export class Tasks {
     const active=task.state==='running'&&!task.paused&&!this.#paused()&&current&&row?.lease===this.#read(id).lease_token;
     const waiting=this.#db.prepare('SELECT kind FROM task_waits WHERE task_id=?').get(id)?.kind??'unknown';
     const kind=task.paused||this.#paused()?'paused':['waiting_provider','waiting_user'].includes(task.state)&&waiting!=='unknown'?String(waiting):task.state;
-    const labels:Record<string,string>={running:'作業中',paused:'停止中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_provider:'理由未確認の待機',waiting_user:'対応待ち（理由未確認）',user_input:'管理者の入力待ち',approval:'承認の判断待ち',invalid_output:'応答形式の確認待ち',budget:'自発活動の利用枠待ち',schedule_budget:'予定の利用枠待ち',network:task.provider_retry_at?'接続の再試行待ち':'接続の確認待ち',authentication:'認証の確認待ち',provider_quota:'接続先の利用枠待ち',unknown:'理由未確認の待機',stalled:'進展がないため再確認待ち',completed:'完了',failed:'失敗',cancelled:'中止'};
+    const labels:Record<string,string>={running:'作業中',paused:'停止中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_provider:'理由未確認の待機',waiting_user:'対応待ち（理由未確認）',user_input:'管理者の入力待ち',approval:'承認の判断待ち',invalid_output:'応答形式の確認待ち',budget:'自発活動の利用枠待ち',schedule_budget:'予定の利用枠待ち',network:task.provider_retry_at?'接続の再試行待ち':'接続の確認待ち',authentication:'認証の確認待ち',configuration:'モデル設定の確認待ち',provider_quota:'接続先の利用枠待ち',unknown:'理由未確認の待機',stalled:'進展がないため再確認待ち',completed:'完了',failed:'失敗',cancelled:'中止'};
     const phases:Record<string,string>={resolve:'接続を準備中',model:'返答を考え中',memory_review:'記憶を整理中',task_summary_save:'結果を整理中',read:'資料を確認中',execute:'コードを実行中',tool:'操作中'};
     const waitingTasks=task.state==='waiting_child'?this.#db.prepare(`SELECT t.id,t.agent_id,a.name,t.prompt,t.state FROM tasks t JOIN agents a ON a.id=t.agent_id
       LEFT JOIN task_child_dependencies d ON d.task_id=t.id WHERE t.parent_id=? AND t.room_id=? AND t.state NOT IN ('completed','failed','cancelled') AND coalesce(d.required,1)=1`).all(id,task.room_id):[];

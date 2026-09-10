@@ -1,3 +1,4 @@
+import {ModelSetupError} from './shared/setup-error.ts';
 import type { Agent } from '../domain/types.ts';
 import { check } from '../domain/types.ts';
 import type { Runtime } from '../runtime/runtime.ts';
@@ -74,15 +75,17 @@ export class ModelGateway {
     if (agent.provider === 'openai_subscription' && this.subscription) {
       const subscription = this.subscription; const generation = subscription.revision;
       const credential = await subscription.account.read();
-      check(credential, 'conflict', 'Subscription login is required');
-      check(credential.account_id, 'conflict', 'Subscription account identity is required');
+      if(!credential)throw new ModelSetupError({code:'AUTH_UNAVAILABLE',retryable:false,message:'モデル接続のログインが必要です。'});
+      if(!credential.account_id)throw new ModelSetupError({code:'AUTH_UNAVAILABLE',retryable:false,message:'モデル接続のアカウント情報を確認してください。'});
       const key = createHash('sha256').update(credential.account_id).digest('hex');
       const runtime = this.#runtime; const admin = runtime.administrator();
       if (runtime.providerLimits.blocked(admin, key)) {
+        const settings=runtime.modelSettings(admin);
+        if(!settings.ollamaUrl||!settings.fallbackModel)throw new ModelSetupError({code:'QUOTA_EXCEEDED',retryable:true,message:'接続先の利用枠回復を待っています。',reset_at:Math.ceil(runtime.providerLimits.nextProbe(admin,key)/1000)});
         const fallback = await this.#fallback(agent, signal);
         check(subscription.revision === generation, 'conflict', 'Subscription account changed'); return fallback;
       }
-      const profile = await this.subscription.profile(agent.model, agent.reasoning); signal?.throwIfAborted();
+      const profile = await this.subscription.profile(agent.model, agent.reasoning, signal); signal?.throwIfAborted();
       check(subscription.revision === generation, 'conflict', 'Subscription account changed');
       const adapter = subscription.connection.create(profile);
       return this.#gate.wrap({ adapter_id: adapter.adapter_id, capabilities: adapter.capabilities,

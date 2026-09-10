@@ -1,3 +1,4 @@
+import {setupFailure} from '../providers/shared/setup-error.ts';
 import {retainCompleteExchanges} from './context/retention.ts';
 import {LEGACY_RULES as BASE_RULES} from './context/legacy-rules.ts';
 import {structuredPrompt, scopedPromptTools, type PromptVersion} from './context/prompt.ts';
@@ -35,8 +36,8 @@ export class TurnRunner {
     runtime.tasks.activity(actor,lease,`resolve:${lease.task.attempt}`,'resolve');
     let adapter: ModelAdapter;
     try { adapter = await this.#resolve(agent, lease.task.id, signal); }
-    catch {
-      if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデル接続の設定・認証・能力確認が必要です。1分後に再確認します。', true);
+    catch (error) {
+      if (!signal?.aborted && runtime.tasks.active(actor, lease)) runtime.tasks.providerFailure(actor,lease,setupFailure(error),'setup');
       return;
     }
     const promptVersion=runtime.tasks.bindPrompt(actor,lease,this.#promptVersion);
@@ -56,8 +57,8 @@ export class TurnRunner {
         position = 0;
         // Provider-owned opaque continuation may also contain the superseded memory.
         try { adapter = await this.#resolve(agent, lease.task.id, signal); }
-        catch {
-          if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_provider', '記憶更新後のモデル接続を再作成できませんでした。1分後に再確認します。', true);
+        catch (error) {
+          if (!signal?.aborted && runtime.tasks.active(actor, lease)) runtime.tasks.providerFailure(actor,lease,setupFailure(error),'setup');
           return;
         }
         if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
@@ -75,7 +76,7 @@ export class TurnRunner {
       if (!step) {
         if (agent.provider === 'openai_subscription' && adapter.adapter_id === 'ollama') {
           try { adapter = await this.#resolve(agent, lease.task.id, signal); }
-          catch { if (runtime.tasks.active(actor, lease)) runtime.tasks.wait(actor, lease, 'waiting_provider', '切替先のモデル接続を確認してください。1分後に再確認します。', true); return; }
+          catch (error) { if (!signal?.aborted && runtime.tasks.active(actor, lease)) runtime.tasks.providerFailure(actor,lease,setupFailure(error),'setup'); return; }
           if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
           if (!runtime.isContextCurrent(actor, context.revision)) continue;
         }
@@ -180,7 +181,7 @@ export class TurnRunner {
           }
           if (review.length !== 1 || review[0]!.name !== phaseTool || !Value.Check(phaseSchema, review[0]!.arguments)) {
             if(phaseTool==='memory_review'){runtime.skipInvalidMemoryReview(actor,lease);continue;}
-            runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデルが引継ぎ整理の形式を返せませんでした。1分後に再確認します。', true);runtime.tasks.waitKind(actor,lease,'invalid_output'); return;
+            runtime.tasks.wait(actor, lease, 'waiting_provider', 'モデルが引継ぎ整理の形式を返せませんでした。表示された再確認予定まで待機します。', true);runtime.tasks.waitKind(actor,lease,'invalid_output'); return;
           }
         }
         const index = runtime.tasks.saveStep(actor, lease, context.revision, events);

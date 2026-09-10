@@ -1,3 +1,5 @@
+import {ModelSetupError} from '../src/providers/shared/setup-error.ts';
+import {createHash} from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -273,7 +275,7 @@ test('subscription gateway validates catalog selection, runs a response and inva
     assert.equal(runtime.messages(admin, room.id)[0]?.body, 'サブスク経路の人工応答');
     runtime.tasks.create(admin, leader.id, room.id, '中断する仕事'); const lease = runtime.tasks.claim(admin)!;
     await subscription.logout(); assert.equal(runtime.tasks.active(runtime.agentSession(leader.id), lease), false);
-    await assert.rejects(gateway.resolve(runtime.agents(admin)[0]!, lease.task.id), /login is required/);
+    await assert.rejects(gateway.resolve(runtime.agents(admin)[0]!, lease.task.id), error=>error instanceof ModelSetupError&&error.failure.code==='AUTH_UNAVAILABLE');
   } finally { await subscription.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -315,4 +317,18 @@ test('default service resolver uses the saved Ollama endpoint and runs its model
     await service.close(); await new Promise<void>(resolve => { provider.close(() => resolve()); provider.closeAllConnections(); });
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('subscription discovery follows cancellation and account quota without a fallback remains quota waiting',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'niwa-setup-')),r=new Runtime(root),admin=r.administrator(),leader=r.bootstrap(admin),store=new MemoryCredentialStore();await store.write(credential);
+ let began!:()=>void;const started=new Promise<void>(resolve=>{began=resolve;});
+ let aborted=false;const transport:typeof fetch=async(_url,options)=>{began();return new Promise((_resolve,reject)=>{options!.signal!.addEventListener('abort',()=>{aborted=true;reject(options!.signal!.reason);},{once:true});});};
+ const sub=new Subscription(store,()=>{},{fetch:transport}),gateway=new ModelGateway(r,transport,sub);
+ try{
+ r.setAgentModel(admin,leader.id,'openai_subscription','artificial-model','low');const agent=r.agents(admin)[0]!,signal=new AbortController();
+ const pending=gateway.resolve(agent,'synthetic',signal.signal);await started;signal.abort();await assert.rejects(pending);assert.equal(aborted,true);
+ const key=createHash('sha256').update(credential.account_id!).digest('hex'),reset=Math.floor(Date.now()/1000)+3600;r.providerLimits.exceeded(admin,key,reset);
+ await assert.rejects(gateway.resolve(agent,'synthetic'),error=>error instanceof ModelSetupError&&error.failure.code==='QUOTA_EXCEEDED'&&error.failure.reset_at===reset);
+ assert.equal(r.modelSettings(admin).fallbackModel,null);
+ }finally{await sub.close();r.close();rmSync(root,{recursive:true,force:true});}
 });
