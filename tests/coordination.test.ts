@@ -102,3 +102,22 @@ test('work receipt is durable once, visible in its room and never dispatches a r
  assert.equal(r.tasks.get(admin,lease.task.id).state,'running');assert.equal(r.tasks.progress(admin,lease.task.id).work_acknowledged,true);assert.ok(Number.isFinite(Date.parse(r.messages(admin,room.id)[0]!.created_at)));
  r.tasks.pause(admin,lease.task.id);assert.throws(()=>r.tasks.acknowledgeWork(actor,lease));assert.equal(r.messages(admin,room.id).length,1);
 });
+
+test('custom first reply is bounded, redacted, room-scoped and idempotent after reopening', t=>{
+ const {r,root,admin,actor,leader,bot}=fixture(t),room=r.createRoom(admin,'限定の依頼',[leader.id]);
+ const task=r.tasks.create(admin,leader.id,room.id,'人工の確認');const lease=r.tasks.claim(admin)!;
+ assert.throws(()=>r.tasks.acknowledgeWork(actor,lease,' '.repeat(4)));
+ assert.throws(()=>r.tasks.acknowledgeWork(actor,lease,'x'.repeat(501)));
+ assert.equal(r.messages(admin,room.id).length,0);
+ r.tasks.acknowledgeWork(actor,lease,'確認するね。 token=synthetic-secret-value');
+ r.tasks.acknowledgeWork(actor,lease,'もう一度');
+ assert.equal(r.messages(admin,room.id).length,1);
+ assert.doesNotMatch(r.messages(admin,room.id)[0]!.body,/synthetic-secret-value/);
+ assert.throws(()=>r.messages(r.agentSession(bot.id),room.id));
+ const reopened=new Runtime(root);
+ try{const a=reopened.administrator();reopened.tasks.recover(a);const next=reopened.tasks.claim(a)!;
+ reopened.tasks.acknowledgeWork(reopened.agentSession(leader.id),next,'再開した受領');
+ assert.equal(reopened.messages(a,room.id).length,1);assert.equal(reopened.tasks.list(a).length,1);
+ assert.equal(reopened.tasks.get(a,task.id).state,'running');
+ }finally{reopened.close();}
+});

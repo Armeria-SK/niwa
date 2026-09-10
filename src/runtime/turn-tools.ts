@@ -63,7 +63,7 @@ const definitions = {
   work_note: { description: 'この会話のユーザー向け作業メモを1〜2文で残す。確認できた事実・進捗・方針変更だけを簡潔に書く。内部思考・秘密・内部IDは書かない。新しい気付きがあるときだけ使い、実作業を続ける。本文投稿、返信要求、他Bot起動、完了は発生しない。', schema: object({ body: Type.String({minLength:1,maxLength:300}) }) },
   task_review_ready: {description:'自分の仕事で作成した最新成果物をreview_ready（受け渡し準備完了）にする。固定IDとSHA256が必要。これだけでは他Botを起動しない。',schema:object({artifact_id:short(),sha256:Type.String({pattern:'^[a-f0-9]{64}$'})})},
   task_handoff: {description:'準備済みの固定成果物を、予定した次担当に明示的に渡して結果を待つ。task_review_readyの登録と具体的な依頼内容が必要。重要成果物では必要な証拠が先。purpose=reviewは内容レビューへの依頼、deliveryは確認済み成果物の配送（既定）。1タスクからの受け渡しは1回だけ。単独で呼ぶ。',schema:object({prompt:Type.String({minLength:1,maxLength:17000}),purpose:Type.Optional(Type.Union([Type.Literal('review'),Type.Literal('delivery')]))})},
-  task_acknowledge: {description:'実作業に着手するとき最初に呼ぶ。受領をチャットへ一度だけ投稿し、受領済みの状態を記録する。別Botの起動や作業の完了は発生しない。再呼出しでも投稿は重複しない。そのまま作業を続ける。',schema:object({})},
+  task_acknowledge: {description:'時間のかかる調査・制作で、先に短い連絡が役立つ場合だけ使う。雑談・感想・短い質問には使わず直接返答する。bodyは依頼に合う自然な一言（省略時は従来の受領文）。チャット投稿と受領済みの状態を一度だけ記録し、同じ仕事を続ける。別Botの起動・完了・再開予約は発生しない。',schema:object({body:Type.Optional(Type.String({minLength:1,maxLength:500}))})},
   task_timebox: {description:'現在の仕事と子タスクに今からの制限秒数（1〜86400）を設定する。既存の期限を延長できない。期限で実行を停止し、時間切れとして保存する。',schema:object({seconds:Type.Integer({minimum:1,maximum:86400})})},
   coordination_digest: {description:'この会話の直近24時間の保存成果物、送信記録と結果不明、承認待ち、ブロッカー、期限超過を読む。売上・入金・顧客接点の実績は未検証。発言数や自己申告を実績と数えない。',schema:object({})},
   artifact_inspect: {description:'この会話の成果物の固定ID、SHA256、版一覧、確認記録、凍結状態を読む。本文はhistory_readで確認する。',schema:object({id:short()})},
@@ -176,7 +176,7 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
           if(call.name==='artifact_freeze') return runtime.artifactVersions.freeze(actor,args.id!,args.expected_sha256!);
           const {content:_content,...metadata}=runtime.artifactVersions.reference(actor,args.id!,lease.task.id);return JSON.parse(JSON.stringify(metadata));
         }
-        case 'task_acknowledge': return runtime.tasks.acknowledgeWork(actor,lease);
+        case 'task_acknowledge': return runtime.tasks.acknowledgeWork(actor,lease,args.body);
         case 'task_review_ready': return runtime.reviewReady(actor,lease,args.artifact_id!,args.sha256!);
         case 'task_handoff': return runtime.handoff(actor,lease,args.prompt!,args.purpose as 'review'|'delivery'|undefined);
         case 'coordination_read': return {tasks:JSON.parse(JSON.stringify(runtime.coordination(actor,lease.task.room_id)))};

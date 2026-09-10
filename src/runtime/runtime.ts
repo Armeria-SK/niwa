@@ -1223,7 +1223,7 @@ export class Runtime {
   needsCompletionSummary(actor: Actor, lease: TaskLease): boolean {
     const state = this.tasks.workState(actor, lease);
     const workedTools = this.tasks.steps(actor, lease.task.id).some(step => !step.discarded && step.events.some(event => event.type === 'tool_call' &&
-      !['memory_review', 'memory_search', 'memory_remember', 'task_history_read', 'task_summary_save', 'conversation_send', 'task_rest'].includes(event.name)));
+      !['memory_review', 'memory_search', 'memory_remember', 'task_history_read', 'task_summary_save', 'conversation_send', 'task_rest', 'task_acknowledge'].includes(event.name)));
     const worked = state.remaining_plan.revision > 0 || state.external_operations.length > 0 || state.artifacts.length > 0 || state.child_results.length > 0 ||
       workedTools || !!this.#db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(lease.task.id);
     return worked && !this.#summary(actor, lease.task.room_id, lease.task.id) && this.completionSummarySources(actor, lease).length > 0;

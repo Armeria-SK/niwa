@@ -199,13 +199,14 @@ export class Tasks {
       this.#resumeParent(task.parent_id);
     });
   }
-  acknowledgeWork(actor:Actor,lease:TaskLease) {
+  acknowledgeWork(actor:Actor,lease:TaskLease,body?:string) {
     return transaction(this.#db,()=>{
       const task=this.#owned(actor,lease);this.#access.room(actor,task.room_id);
       check(!this.#paused(),'conflict','Activity is paused');
+      const message = redactSecrets(text(body ?? '依頼を受け取りました。作業を進めます。', 500));
       if(!this.#db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='work_acknowledged'").get(task.id)) {
         const id=randomUUID();
-        this.#db.prepare('INSERT INTO messages(id,room_id,author_id,body,created_at) VALUES (?,?,?,?,?)').run(id,task.room_id,task.agent_id,'依頼を受け取りました。作業を進めます。',new Date().toISOString());
+        this.#db.prepare('INSERT INTO messages(id,room_id,author_id,body,created_at) VALUES (?,?,?,?,?)').run(id,task.room_id,task.agent_id,message,new Date().toISOString());
         this.#db.prepare('INSERT INTO task_message_links VALUES (?,?,?)').run(id,task.id,'progress');
         this.#event(task.id,'work_acknowledged');
       }

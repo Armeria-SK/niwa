@@ -15,6 +15,46 @@ const done=(text:string):ModelEvent[]=>[{type:'text_delta',text},{type:'complete
 const call=(name:string,args:Record<string,unknown>):ModelEvent[]=>[{type:'tool_call',tool_call_id:name,name,arguments:args},{type:'completed',finish_reason:'tool_calls'}];
 function fixture(t:{after(fn:()=>void):void}){const root=mkdtempSync(join(tmpdir(),'niwa-prompts-')),r=new Runtime(root),admin=r.administrator(),a=r.bootstrap(admin),aa=r.agentSession(a.id),room=r.createRoom(admin,'人工評価');t.after(()=>{r.close();rmSync(root,{recursive:true,force:true});});return {root,r,admin,a,aa,room};}
 function model(run:(request:ModelRequest)=>ModelEvent[]):ModelAdapter{return {adapter_id:'artificial',capabilities:openAISubscriptionAdapterCapabilities,async *run(request){yield* run(request);}};}
+for (const version of ['legacy-v4', 'structured-v5'] as const) {
+ test(`${version}: conversation replies directly without receipt, work delegation or completion summary`, async t => {
+  const {r,admin,a,aa,room}=fixture(t), other=r.createAgent(aa,'人工の話し相手');
+  const rules=r.commonRules(admin);let workCalls=0;
+  r.updateSettings(admin,{autonomous:false});
+  r.tasks.create(admin,a.id,room.id,'名前を覚えてもらうことについて、みんなで普通に話そう');
+  const runner=new TurnRunner(r,async agent=>model(req=>{
+   if(req.tools.length===1&&req.tools[0]!.name==='memory_review')return call('memory_review',{memories:[]});
+   assert.notEqual(req.tools[0]?.name,'task_summary_save');
+   if(version==='structured-v5') {
+    assert.match(req.system_instructions,/受領や着手の報告を挟まず/);
+    assert.match(req.system_instructions,/全員が司会になる指示ではありません/);
+   }
+   assert.doesNotMatch(req.tools.find(t=>t.name==='task_acknowledge')!.description,/最初に呼ぶ/);
+   workCalls++;
+   return call('conversation_send',{body:agent.id===a.id?'名前を覚えてもらえると、前の話の続きがしやすいね。どう思う？':'うん、前の話に戻れるところが大きいと思う。',recipient_ids:agent.id===a.id?[other.id]:[]});
+  }),{},{promptVersion:version});
+  await runner.run(r.tasks.claim(admin)!);await runner.run(r.tasks.claim(admin)!);
+  assert.equal(workCalls,2);assert.equal(r.tasks.claim(admin),undefined);
+  assert.equal(r.tasks.list(admin).length,2);assert.equal(r.messages(admin,room.id).length,2);
+  assert.ok(r.tasks.list(admin).every(task=>task.state==='completed'&&!r.tasks.progress(admin,task.id).work_acknowledged));
+  assert.equal(r.artifacts(admin).length,0);assert.deepEqual(r.commonRules(admin),rules);
+ });
+ test(`${version}: optional natural first reply retains the work and does not itself require a completion summary`, async t => {
+  const {r,admin,a,aa,room}=fixture(t);let calls=0;
+  const task=r.tasks.create(admin,a.id,room.id,'内容を確認して返答する');
+  const runner=new TurnRunner(r,async()=>model(req=>{
+   if(req.tools.length===1&&req.tools[0]!.name==='memory_review')return call('memory_review',{memories:[]});
+   assert.notEqual(req.tools[0]?.name,'task_summary_save');
+   if(calls++===0)return call('task_acknowledge',{body:'気になる点を確認してから返すね。'});
+   assert.equal(r.tasks.get(admin,task.id).state,'running');
+   assert.equal(r.tasks.progress(admin,task.id).work_acknowledged,true);
+   return call('conversation_send',{body:'この範囲では問題は見当たらなかったよ。',recipient_ids:[]});
+  }),{},{promptVersion:version});
+  await runner.run(r.tasks.claim(admin)!);
+  assert.equal(calls,2);assert.equal(r.tasks.list(admin).length,1);
+  assert.equal(r.tasks.get(admin,task.id).state,'completed');
+  assert.deepEqual(r.messages(admin,room.id).map(m=>m.body),['気になる点を確認してから返すね。','この範囲では問題は見当たらなかったよ。']);
+ });
+}
 test('structured instructions separate saved policy and phases; retain administrator requirements outside recent messages',async t=>{
  const {r,admin,a,aa,room}=fixture(t);r.updateCommonRules(admin,r.commonRules(admin).revision,'人工方針をそのまま保持');r.updateProfile(admin,a.id,{name:'人工Bot',persona:'静かな観察者'});
  r.post(admin,room.id,'古いが重要：人数を推測しない');for(let i=0;i<35;i++)r.post(aa,room.id,`古い会話${i}`);
