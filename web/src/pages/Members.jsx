@@ -5,7 +5,7 @@ import { api } from '../api.js';
 import { SHAPES } from '../data.js';
 import { MemoryHistory } from '../MemoryHistory.jsx';
 import { useMemoryPage } from '../useMemoryPage.js';
-import { Avatar, AppearanceEditor, MotionPicker, EmptyState, IconButton, Modal, Segmented, StatusLabel, Switch } from '../components.jsx';
+import { Avatar, AppearanceEditor, MotionPicker, EmptyState, IconButton, Modal, Segmented, StatusLabel } from '../components.jsx';
 import { ChatIcon, ChevronRightIcon, EditIcon, LockIcon, MemoryIcon, SearchIcon, TrashIcon, CloseIcon, CheckIcon, PlusIcon } from '../icons.jsx';
 
 export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, onDeleteMemory, onDM, paused, onAdd, maxMembers, onDelete }) {
@@ -53,21 +53,12 @@ function Profile({ member, onSave }) {
     <div className="field-pair"><label className="field"><span>名前</span><input value={draft.name} onChange={e => change('name', e.target.value)} maxLength={20} required /></label><label className="field"><span>役割</span><input value={draft.role} onChange={e => change('role', e.target.value)} maxLength={40} /></label></div>
     <label className="field"><span>性格と話し方</span><textarea rows={5} value={draft.persona} onChange={e => change('persona', e.target.value)} /></label>
     {member.interests.some(interest=>interest.trim())?<div className="interest-block"><span className="field-label">気になっていること</span><div className="interest-tags">{member.interests.map(interest => <span key={interest}>{interest}</span>)}</div></div>:null}
-    <AgentAutonomy key={member.id} id={member.id} />
     <div className="form-section-label">このBotのモデル</div>
     <div className="field-pair"><label className="field"><span>モデル</span><select aria-label="モデル" value={key(draft)} onChange={e => { const model = choices.find(item => key(item) === e.target.value); setDraft(current => ({ ...current, provider: model.provider, model: model.model, effort: model.provider === 'ollama' ? 'native' : model.default_effort || model.supported_efforts?.[0] || member.effort })); setSaved(false); }}>{choices.map(item => <option key={key(item)} value={key(item)}>{item.model} · {item.provider === 'ollama' ? 'Ollama' : 'Codex'}</option>)}</select></label><label className="field"><span>推論の強さ</span><select aria-label="推論の強さ" value={draft.effort} disabled={draft.provider === 'ollama'} onChange={e => change('effort', e.target.value)}>{efforts.map(value => <option key={value}>{value}</option>)}</select></label></div>
     <div className="inline-actions"><button type="button" className="button subtle" onClick={() => load('ollama')}>Ollamaのモデル一覧を取得</button><button type="button" className="button subtle" onClick={() => load('openai_subscription')}>Codexのモデル一覧を取得</button></div>{modelError ? <p role="alert">{modelError}</p> : null}
     <p className="field-hint">モデルを変えても、人格と記憶は引き継ぎます。</p>
     <div className="form-actions"><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />保存しました</> : null}</span><button type="button" className="button subtle" onClick={() => { setDraft(member); setSaved(false); }}>最新の内容を読み込む</button><button className="button primary" disabled={!draft.name.trim()}>変更を保存</button></div>
   </form>;
-}
-
-function AgentAutonomy({id}) {
-  const [enabled,setEnabled]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
-  useEffect(()=>{let active=true;api('/autonomy').then(rows=>{if(active)setEnabled(rows.find(row=>row.agent_id===id)?.enabled??null);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[id]);
-  async function change(value){setBusy(true);setError('');try{await api(`/agents/${id}/autonomy`,'PATCH',{enabled:value});setEnabled(value);}catch(e){setError(e.message);}finally{setBusy(false);}}
-  return <div><Switch checked={enabled===true} disabled={enabled===null||busy} onChange={change} label="このBotの自発的な活動を許可する" description="変更はすぐに保存されます。全体の許可がオンの場合だけ有効です。オフでもユーザーからの通常の依頼は処理します。" />
-    {enabled===null&&!error?<p role="status">設定を読み込んでいます</p>:null}{busy?<p role="status">保存中</p>:null}{error?<p role="alert">{error}</p>:null}</div>;
 }
 
 function MemoryList({ member, onSave, onDelete, onClose }) {

@@ -1,22 +1,31 @@
-import { useEffect, useState } from 'react';
-import { Avatar } from './components.jsx';
+import { useEffect, useRef, useState } from 'react';
+import { Avatar, Switch } from './components.jsx';
 import { ChevronDownIcon } from './icons.jsx';
 import './AutonomyStatus.css';
 import { api } from './api.js';
 
 export function AutonomyStatus({ members = [] }) {
+  const epoch=useRef(0),pending=useRef(false);
+  const [savingAgent,setSavingAgent]=useState(null),[saveError,setSaveError]=useState('');
   const [rows, setRows] = useState([]), [error, setError] = useState('');
   const [initiatives,setInitiatives]=useState(null),[saving,setSaving]=useState(false);
   useEffect(() => {
     let active = true, timer;
     async function load() {
-      try { const [data,work] = await Promise.all([api('/autonomy'),api('/initiatives')]); if (active) { setRows(data);setInitiatives(work); setError(''); } }
+      const version=epoch.current;
+      try { const [data,work] = await Promise.all([api('/autonomy'),api('/initiatives')]); if (active && version===epoch.current && !pending.current) { setRows(data);setInitiatives(work); setError(''); } }
       catch (e) { if (active) setError(e.message); }
       finally { if (active) timer = setTimeout(load, 5000); }
     }
     void load(); return () => { active = false; clearTimeout(timer); };
   }, []);
   async function change(path,body){setSaving(true);try{await api(path,'PATCH',body);setInitiatives(await api('/initiatives'));setError('');}catch(e){setError(e.message);}finally{setSaving(false);}}
+  async function setAgent(id,enabled){
+    pending.current=true;epoch.current++;setSavingAgent(id);setSaveError('');
+    try{await api(`/agents/${id}/autonomy`,'PATCH',{enabled});setRows(await api('/autonomy'));}
+    catch(e){setSaveError(e.message);}
+    finally{epoch.current++;pending.current=false;setSavingAgent(null);}
+  }
   const labels = { '予定なしの起動機会を待機中': '順番待ち', '予定なしの定期判定から起動': '活動を開始', '前回の活動を継続・待機中': '取り組みを継続中', '活動完了後の間隔': 'ひと休み', '失敗後の待機': '再試行待ち', '既存の仕事を優先': '依頼を優先', '利用できる共有会話がありません': '共有会話の準備待ち' };
   const nextTime = value => {
     if (!value) return '';
@@ -25,15 +34,16 @@ export function AutonomyStatus({ members = [] }) {
   };
   return <section className="autonomy-status" aria-label="自発活動の起動状況">
     <div className="autonomy-status-heading"><h3>自発活動の起動状況</h3><span>保存済みの設定</span></div>
-    <p className="autonomy-status-hint">それぞれのペースで活動し、必要がなければ休みます。</p>
-    <div className="autonomy-status-list">{rows.map(row => <details className="autonomy-member" key={row.agent_id}>
+    <p className="autonomy-status-hint">Botごとの許可を切り替えられます。変更はすぐに保存され、全体の許可がオンの場合だけ有効です。</p>
+    <div className="autonomy-status-list">{rows.map(row => <div className="autonomy-member-row" key={row.agent_id}><details className="autonomy-member">
       <summary><Avatar member={members.find(member => member.id === row.agent_id)} size={30} motion="none" />
         <span className="autonomy-member-name">{row.name}</span>
         <span className="autonomy-member-state"><span>{labels[row.reason] || row.reason}</span>{row.next_at ? <time dateTime={new Date(row.next_at).toISOString()}>{nextTime(row.next_at)}</time> : null}</span>
         <ChevronDownIcon className="autonomy-member-chevron" size={14} />
       </summary>
       <div className="autonomy-member-detail"><p>{row.reason}</p><p>この時間枠のモデル呼出し：{row.model_calls} / 24（文脈整理・委任を含む）</p><p>{row.next_at ? `次の判定：${new Date(row.next_at).toLocaleString('ja-JP')}` : '停止や待ち条件が解消した後に、改めて判定します。'}</p></div>
-    </details>)}</div>
+    </details><div className="autonomy-member-toggle"><Switch label={`${row.name}の自発活動を許可する`} checked={row.enabled===true} disabled={savingAgent!==null||typeof row.enabled!=='boolean'} onChange={value=>setAgent(row.agent_id,value)} />{savingAgent===row.agent_id?<small role="status">保存中</small>:null}</div></div>)}</div>
+    {saveError?<p className="autonomy-status-error" role="alert">保存できませんでした。{saveError}</p>:null}
     {initiatives ? <details className="initiative-section"><summary>継続する取り組み <span>{initiatives.items.length}件</span></summary>
       <label className="autonomy-status-hint"><input type="checkbox" checked={initiatives.enabled} disabled={saving} onChange={e=>change('/initiatives',{enabled:e.target.checked})} /> 継続記録を自発活動に利用する</label>
       <p className="autonomy-status-hint">目的と次の行動を引き継ぎます。既存の保留操作や承認は変更しません。停止した仕事の再開は、仕事ごとに確認します。</p>
