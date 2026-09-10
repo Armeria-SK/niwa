@@ -1,3 +1,4 @@
+import {check} from '../domain/types.ts';
 import type {Initiatives} from './initiatives.ts';
 import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
@@ -13,6 +14,17 @@ export class AutonomousWakes {
   constructor(private db: DatabaseSync, private tasks: Tasks, private admin: (actor: Actor) => void,
     private createRoom: (actor: Actor) => string, private initiatives: Initiatives) {}
 
+  configure(actor: Actor, agentId: string, enabled: boolean) {
+    this.admin(actor);
+    check(typeof enabled === 'boolean', 'invalid', 'Expected autonomy boolean');
+    check(!!this.db.prepare('SELECT id FROM agents WHERE id=? AND id NOT IN (SELECT id FROM deleted_agents)').get(agentId), 'not_found', 'Agent not found');
+    transaction(this.db, () => {
+      this.db.prepare('INSERT INTO agent_autonomy VALUES (?,?) ON CONFLICT(agent_id) DO UPDATE SET enabled=excluded.enabled').run(agentId,Number(enabled));
+      if (!enabled) this.tasks.suspendAutonomous(actor);
+    });
+    return {enabled};
+  }
+
   list(actor: Actor) {
     this.admin(actor);
     const settings = this.db.prepare('SELECT paused,autonomous FROM settings WHERE id=1').get()!;
@@ -21,14 +33,14 @@ export class AutonomousWakes {
     const roomBlocked = !shared && !!this.db.prepare("SELECT 1 FROM rooms WHERE visibility='shared' LIMIT 1").get();
     const gate = Number(this.db.prepare('SELECT coalesce(max(last_started_at),0)+? AS due FROM autonomous_wakes').get(MINUTE)!.due);
     const ongoing=this.initiatives.enabled()?this.initiatives.list(actor):[];
-    return this.db.prepare(`SELECT a.id AS agent_id,a.name,a.status,w.next_at,w.reason,w.model_calls,w.budget_reset_at,w.task_id,t.state,t.provider_retry_at,
+    return this.db.prepare(`SELECT a.id AS agent_id,a.name,a.status,coalesce((SELECT enabled FROM agent_autonomy WHERE agent_id=a.id),1) AS enabled,w.next_at,w.reason,w.model_calls,w.budget_reset_at,w.task_id,t.state,t.provider_retry_at,
       EXISTS(SELECT 1 FROM tasks busy WHERE busy.agent_id=a.id AND busy.paused=0 AND (busy.state IN ('queued','running') OR (busy.state='waiting_provider' AND (SELECT enabled FROM initiative_settings)=0))) AS busy
       FROM agents a LEFT JOIN autonomous_wakes w ON w.agent_id=a.id LEFT JOIN tasks t ON t.id=w.task_id
       WHERE a.id NOT IN (SELECT id FROM deleted_agents) ORDER BY a.rowid`).all().map(row => {const blocked=roomBlocked&&!ongoing.some(i=>i.owner_id===row.agent_id&&i.state==='active'&&!this.db.prepare('SELECT 1 FROM room_preferences WHERE room_id=? AND archived=1').get(i.room_id));return ({
-        agent_id: row.agent_id, name: row.name, task_id: row.task_id, model_calls: row.model_calls ?? 0, budget_reset_at: row.budget_reset_at,
-        reason: settings.paused ? '全体停止中' : !settings.autonomous ? '自発活動オフ' : row.status !== 'active' ? '休眠中'
+        enabled: row.enabled === 1, agent_id: row.agent_id, name: row.name, task_id: row.task_id, model_calls: row.model_calls ?? 0, budget_reset_at: row.budget_reset_at,
+        reason: settings.paused ? '全体停止中' : !settings.autonomous ? '自発活動オフ' : !row.enabled ? 'このBotの自発活動オフ' : row.status !== 'active' ? '休眠中'
           : blocked ? '利用できる共有会話がありません' : row.busy ? (row.task_id ? '前回の活動を継続・待機中' : '既存の仕事を優先') : row.reason ?? '起動判定の準備中',
-        next_at: settings.paused || !settings.autonomous || row.status !== 'active' || blocked ? null
+        next_at: settings.paused || !settings.autonomous || !row.enabled || row.status !== 'active' || blocked ? null
           : row.busy ? (row.state === 'waiting_provider' ? row.provider_retry_at : null) : Math.max(Number(row.next_at ?? Date.now()+MINUTE),gate),
       });});
   }
@@ -69,7 +81,7 @@ export class AutonomousWakes {
       const last = Number(this.db.prepare('SELECT coalesce(max(last_started_at),0) AS last FROM autonomous_wakes').get()!.last);
       if (now < last+MINUTE) return;
       const candidates = this.db.prepare(`SELECT w.agent_id,w.stagnant FROM autonomous_wakes w JOIN agents a ON a.id=w.agent_id
-        WHERE w.task_id IS NULL AND w.next_at<=? AND a.status='active' AND a.id NOT IN (SELECT id FROM deleted_agents)
+        WHERE coalesce((SELECT enabled FROM agent_autonomy WHERE agent_id=a.id),1)=1 AND w.task_id IS NULL AND w.next_at<=? AND a.status='active' AND a.id NOT IN (SELECT id FROM deleted_agents)
         AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.agent_id=a.id AND (t.state IN ('queued','running') OR (t.state='waiting_provider' AND (SELECT enabled FROM initiative_settings)=0)) AND t.paused=0)
         AND NOT (w.model_calls>=24 AND w.budget_reset_at>?)
         ORDER BY w.last_started_at,w.next_at,a.rowid`).all(now,now);

@@ -56,7 +56,7 @@ test('restored work disables fresh wakeups until explicit review, and deleted bo
  assert.ok(!r.autonomousWakes.list(admin).some(row=>row.agent_id===bot.id));
  r.tasks.protectRestoredWork(admin);assert.equal(r.settings(admin).autonomous,false);
  r.autonomousWakes.dispatch(admin,now+60000);assert.equal(r.tasks.list(admin).length,0);
- const db=new DatabaseSync(join(root,'control.db'),{readOnly:true});try{assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,44);}finally{db.close();}
+ const db=new DatabaseSync(join(root,'control.db'),{readOnly:true});try{assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,45);}finally{db.close();}
 });
 
 test('a normal request interrupts an in-flight wake before claiming the same Bot again',async t=>{
@@ -100,4 +100,23 @@ test('pending approval stays held while a separate bounded activity can start',t
  assert.equal(r.tasks.get(admin,lease.task.id).state,'waiting_user');assert.notEqual(r.autonomousWakes.list(admin)[0]!.task_id,lease.task.id);
  const approval=r.approvals(admin)[0]!;r.decideApproval(admin,lease.task.id,false,String(approval.version));
  r.autonomousWakes.dispatch(admin);assert.equal(r.tasks.list(admin).length,2);
+});
+
+test('per-agent autonomy gates wakes and running leases while retaining manual work and persisted preference',t=>{
+ const {root,r,admin,leader,actor}=fixture(t),other=r.createAgent(actor,'仲間'),room=r.createRoom(admin,'共有'),now=Date.now();
+ assert.throws(()=>r.autonomousWakes.configure(actor,leader.id,false));
+ r.autonomousWakes.configure(admin,leader.id,false);
+ r.autonomousWakes.dispatch(admin,now);r.autonomousWakes.dispatch(admin,now+60000);
+ assert.equal(r.tasks.list(admin).length,1);assert.equal(r.tasks.list(admin)[0]!.agent_id,other.id);
+ const lease=r.tasks.claim(admin)!;
+ r.autonomousWakes.configure(admin,other.id,false);
+ assert.equal(r.tasks.claim(admin),undefined);
+ assert.throws(()=>r.respond(r.agentSession(other.id),lease,'遅れて届いた返答'));
+ const manual=r.tasks.create(admin,other.id,room.id,'ユーザーの依頼');
+ assert.equal(r.tasks.claim(admin)!.task.id,manual.id);
+ r.close();const reopened=new Runtime(root);
+ try{assert.equal(reopened.autonomousWakes.list(reopened.administrator()).find(a=>a.agent_id===other.id)!.enabled,false);
+ reopened.updateSettings(reopened.administrator(),{autonomous:false});reopened.autonomousWakes.configure(reopened.administrator(),leader.id,true);
+ reopened.autonomousWakes.dispatch(reopened.administrator(),now+120000);assert.equal(reopened.tasks.list(reopened.administrator()).length,2);
+ }finally{reopened.close();}
 });

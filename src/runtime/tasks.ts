@@ -154,6 +154,13 @@ export class Tasks {
     try { this.#owned(actor, lease); return true; } catch { return false; }
   }
   #autonomyAllowed(taskId: string): boolean {
+    // A disabled origin cannot continue through delegation; direct user work remains allowed.
+    if (this.#db.prepare(`WITH RECURSIVE ancestors AS (
+      SELECT id,parent_id,agent_id,conversation_reply,internal_autonomous FROM tasks WHERE id=?
+      UNION SELECT t.id,t.parent_id,t.agent_id,t.conversation_reply,t.internal_autonomous FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
+      SELECT 1 FROM ancestors a LEFT JOIN schedule_runs r ON r.task_id=a.id LEFT JOIN schedules s ON s.id=r.schedule_id
+      WHERE (a.conversation_reply=1 OR a.internal_autonomous=1 OR s.autonomous=1)
+      AND EXISTS(SELECT 1 FROM agent_autonomy p WHERE p.enabled=0 AND (p.agent_id=a.agent_id OR p.agent_id=(SELECT agent_id FROM tasks WHERE id=?))) LIMIT 1`).get(taskId,taskId)) return false;
     if(this.#db.prepare(`SELECT 1 FROM initiative_tasks l JOIN initiatives i ON i.id=l.initiative_id JOIN tasks t ON t.id=l.task_id WHERE l.task_id=? AND (NOT EXISTS(SELECT 1 FROM json_each(i.body,'$.participants') WHERE value=t.agent_id) OR i.state='paused' OR (t.internal_autonomous=1 AND (SELECT enabled FROM initiative_settings)=0))`).get(taskId))return false;
     if (this.#db.prepare('SELECT autonomous FROM settings WHERE id=1').get()!.autonomous === 1 &&
       !this.#db.prepare('SELECT 1 FROM tasks t JOIN room_preferences p ON p.room_id=t.room_id WHERE t.id=? AND p.archived=1').get(taskId)) return true;

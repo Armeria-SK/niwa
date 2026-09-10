@@ -95,6 +95,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method:'GET',path:/^\/api\/initiatives$/,run:()=>({...runtime.initiatives.settings(admin),items:runtime.initiatives.list(admin)}) },
     { method:'PATCH',path:/^\/api\/initiatives$/,schema:object({enabled:Type.Boolean()}),run:(_m,b)=>{runtime.initiatives.enable(admin,b.enabled as boolean);return {ok:true};} },
     { method:'PATCH',path:/^\/api\/initiatives\/([0-9a-f-]{36})$/,schema:object({paused:Type.Boolean(),revision:Type.Integer({minimum:1})}),run:(m,b)=>{runtime.initiatives.pause(admin,m[1]!,b.revision as number,b.paused as boolean);return {ok:true};} },
+    {method:'PATCH',path:/^\/api\/agents\/([0-9a-f-]{36})\/autonomy$/,schema:object({enabled:Type.Boolean()}),run:(m,b)=>runtime.autonomousWakes.configure(admin,m[1]!,b.enabled as boolean)},
     { method: 'GET', path: /^\/api\/autonomy$/, run: () => runtime.autonomousWakes.list(admin) },
     { method: 'GET', path: /^\/api\/schedules$/, run: () => runtime.schedules.list(admin) },
     { method: 'DELETE', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, run: m => { runtime.schedules.remove(admin, m[1]!); return { ok: true }; } },
