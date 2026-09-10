@@ -120,3 +120,22 @@ test('per-agent autonomy gates wakes and running leases while retaining manual w
  reopened.autonomousWakes.dispatch(reopened.administrator(),now+120000);assert.equal(reopened.tasks.list(reopened.administrator()).length,2);
  }finally{reopened.close();}
 });
+
+test('disabled ancestor reply does not block independent wakes or bypass held operations',t=>{
+ const {root,r,admin,leader,actor}=fixture(t),other=r.createAgent(actor,'起点'),room=r.createRoom(admin,'共有'),now=Date.now();
+ const origin=r.tasks.create(admin,other.id,room.id,'人工の自発起点');
+ const reply=r.tasks.create(admin,leader.id,room.id,'人工の返信');
+ const db=new DatabaseSync(join(root,'control.db'));
+ try{
+ db.prepare("UPDATE tasks SET internal_autonomous=1,state='waiting_user' WHERE id=?").run(origin.id);
+ db.prepare('UPDATE tasks SET conversation_reply=1,parent_id=? WHERE id=?').run(origin.id,reply.id);
+ r.autonomousWakes.configure(admin,other.id,false);
+ assert.equal(r.tasks.claim(admin),undefined);
+ r.autonomousWakes.dispatch(admin,now);r.autonomousWakes.dispatch(admin,now+60000);
+ const lease=r.tasks.claim(admin)!;assert.ok(lease);assert.notEqual(lease.task.id,reply.id);assert.equal(lease.task.agent_id,leader.id);
+ assert.ok(db.prepare('SELECT 1 FROM autonomous_boundaries WHERE task_id=?').get(lease.task.id));
+ assert.equal(r.tasks.get(admin,reply.id).state,'queued');
+ r.autonomousWakes.dispatch(admin,now+120000);assert.equal(r.tasks.list(admin).length,3);
+ assert.equal(r.autonomousWakes.list(admin).find(row=>row.agent_id===leader.id)!.reason,'前回の活動を継続・待機中');
+ }finally{db.close();}
+});

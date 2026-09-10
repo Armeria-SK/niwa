@@ -169,6 +169,11 @@ export class Tasks {
       SELECT 1 FROM ancestors a LEFT JOIN schedule_runs r ON r.task_id=a.id LEFT JOIN schedules s ON s.id=r.schedule_id
       WHERE a.conversation_reply=1 OR a.internal_autonomous=1 OR s.autonomous=1 LIMIT 1`).get(taskId);
   }
+  autonomyBlocked(actor: Actor): Set<string> {
+    this.#admin(actor);
+    return new Set((this.#db.prepare("SELECT id FROM tasks WHERE state IN ('queued','waiting_provider')").all() as {id:string}[])
+      .filter(task => !this.#autonomyAllowed(task.id)).map(task => task.id));
+  }
   suspendAutonomous(actor: Actor): void {
     this.#admin(actor);
     for (const task of this.#db.prepare("SELECT id FROM tasks WHERE state='running'").all() as { id: string }[]) {

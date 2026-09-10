@@ -25,8 +25,15 @@ export class AutonomousWakes {
     return {enabled};
   }
 
+  private busyAgents(blocked: Set<string>): Set<string> {
+    return new Set(this.db.prepare(`SELECT id,agent_id FROM tasks WHERE paused=0 AND
+      (state IN ('queued','running') OR (state='waiting_provider' AND (SELECT enabled FROM initiative_settings)=0))`).all()
+      .filter(task=>!blocked.has(String(task.id))).map(task=>String(task.agent_id)));
+  }
+
   list(actor: Actor) {
     this.admin(actor);
+    const busy=this.busyAgents(this.tasks.autonomyBlocked(actor));
     const settings = this.db.prepare('SELECT paused,autonomous FROM settings WHERE id=1').get()!;
     const shared = this.db.prepare(`SELECT 1 FROM rooms r LEFT JOIN room_preferences p ON p.room_id=r.id WHERE r.visibility='shared'
       AND coalesce(p.archived,0)=0 AND r.id NOT IN (SELECT id FROM deleted_content WHERE kind='room') LIMIT 1`).get();
@@ -39,9 +46,9 @@ export class AutonomousWakes {
       WHERE a.id NOT IN (SELECT id FROM deleted_agents) ORDER BY a.rowid`).all().map(row => {const blocked=roomBlocked&&!ongoing.some(i=>i.owner_id===row.agent_id&&i.state==='active'&&!this.db.prepare('SELECT 1 FROM room_preferences WHERE room_id=? AND archived=1').get(i.room_id));return ({
         enabled: row.enabled === 1, agent_id: row.agent_id, name: row.name, task_id: row.task_id, model_calls: row.model_calls ?? 0, budget_reset_at: row.budget_reset_at,
         reason: settings.paused ? '全体停止中' : !settings.autonomous ? '自発活動オフ' : !row.enabled ? 'このBotの自発活動オフ' : row.status !== 'active' ? '休眠中'
-          : blocked ? '利用できる共有会話がありません' : row.busy ? (row.task_id ? '前回の活動を継続・待機中' : '既存の仕事を優先') : row.reason ?? '起動判定の準備中',
+          : blocked ? '利用できる共有会話がありません' : busy.has(String(row.agent_id)) ? (row.task_id ? '前回の活動を継続・待機中' : '既存の仕事を優先') : row.reason ?? '起動判定の準備中',
         next_at: settings.paused || !settings.autonomous || !row.enabled || row.status !== 'active' || blocked ? null
-          : row.busy ? (row.state === 'waiting_provider' ? row.provider_retry_at : null) : Math.max(Number(row.next_at ?? Date.now()+MINUTE),gate),
+          : busy.has(String(row.agent_id)) ? (row.state === 'waiting_provider' ? row.provider_retry_at : null) : Math.max(Number(row.next_at ?? Date.now()+MINUTE),gate),
       });});
   }
 
@@ -71,6 +78,9 @@ export class AutonomousWakes {
         this.db.prepare('UPDATE autonomous_wakes SET task_id=NULL,next_at=?,failures=?,reason=?,evidence=?,stagnant=? WHERE agent_id=?')
           .run(Math.max(Number(row.next_at),Number(row.updated_at)+Math.max(delay,Math.min(1440,15*2**Math.min(stagnant,7)))*MINUTE),failures,held?'保留した仕事とは別の活動を判定':stagnant>=2?'進展がないため方法の見直し待ち':failed?'失敗後の待機':rested?'休息中':'活動完了後の間隔',evidence,stagnant,row.agent_id!);
       }
+      const blockedTasks=this.tasks.autonomyBlocked(actor),busy=this.busyAgents(blockedTasks);
+      // A queued activity blocked by an ancestor must not own future wake opportunities.
+      for (const id of blockedTasks) this.db.prepare('UPDATE autonomous_wakes SET task_id=NULL WHERE task_id=?').run(id);
       if(this.initiatives.enabled())this.db.exec("UPDATE autonomous_wakes SET task_id=NULL WHERE task_id IN (SELECT id FROM tasks WHERE paused=1 AND state<>'running')");
       const settings = this.db.prepare('SELECT paused,autonomous FROM settings WHERE id=1').get()!;
       if (settings.paused || !settings.autonomous) return;
@@ -82,10 +92,9 @@ export class AutonomousWakes {
       if (now < last+MINUTE) return;
       const candidates = this.db.prepare(`SELECT w.agent_id,w.stagnant FROM autonomous_wakes w JOIN agents a ON a.id=w.agent_id
         WHERE coalesce((SELECT enabled FROM agent_autonomy WHERE agent_id=a.id),1)=1 AND w.task_id IS NULL AND w.next_at<=? AND a.status='active' AND a.id NOT IN (SELECT id FROM deleted_agents)
-        AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.agent_id=a.id AND (t.state IN ('queued','running') OR (t.state='waiting_provider' AND (SELECT enabled FROM initiative_settings)=0)) AND t.paused=0)
         AND NOT (w.model_calls>=24 AND w.budget_reset_at>?)
         ORDER BY w.last_started_at,w.next_at,a.rowid`).all(now,now);
-      const candidate=candidates.find(c=>!this.initiatives.enabled()||this.initiatives.candidate(actor,String(c.agent_id),now)||!this.initiatives.list(actor).some(i=>i.owner_id===c.agent_id&&i.state==='resting'));
+      const candidate=candidates.filter(c=>!busy.has(String(c.agent_id))).find(c=>!this.initiatives.enabled()||this.initiatives.candidate(actor,String(c.agent_id),now)||!this.initiatives.list(actor).some(i=>i.owner_id===c.agent_id&&i.state==='resting'));
       if (!candidate) return;
       const initiative=this.initiatives.candidate(actor,String(candidate.agent_id),now);
       const room = initiative ? {id:initiative.room_id} : this.db.prepare(`SELECT r.id FROM rooms r LEFT JOIN room_preferences p ON p.room_id=r.id
@@ -95,6 +104,9 @@ export class AutonomousWakes {
       if (!room && this.db.prepare("SELECT 1 FROM rooms WHERE visibility='shared' LIMIT 1").get()) return;
       const roomId = String(room?.id ?? this.createRoom(actor));
       const held = this.db.prepare("SELECT id FROM tasks WHERE (agent_id=? OR room_id=?) AND (state IN ('waiting_user','waiting_child') OR ((SELECT enabled FROM initiative_settings)=1 AND (state='waiting_provider' OR (paused=1 AND state NOT IN ('completed','failed','cancelled'))))) ORDER BY id").all(candidate.agent_id!,roomId);
+      for (const row of this.db.prepare('SELECT id FROM tasks WHERE agent_id=? OR room_id=?').all(candidate.agent_id!,roomId)) {
+        if(blockedTasks.has(String(row.id))&&!held.some(item=>item.id===row.id))held.push(row);
+      }
       const task = this.tasks.create(actor,String(candidate.agent_id),roomId,(initiative?this.initiatives.prompt(actor,initiative.id):PROMPT) + '\n保留中の仕事と独立した活動を選んでください。進展のない周期数：' + Number(candidate.stagnant) + '。2周期以上なら同じ確認を繰り返さず、情報源・仮説・方法を変えます。');
       if(initiative)this.initiatives.bind(task.id,initiative.id,now);
       if (held.length) this.db.prepare('INSERT INTO autonomous_boundaries VALUES (?,?)').run(task.id,JSON.stringify(held.map(row=>row.id)));
