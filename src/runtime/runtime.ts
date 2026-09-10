@@ -937,7 +937,13 @@ export class Runtime {
           this.tasks.resume(actor, question.id, body, { preservePause: true });
           this.tasks.linkMessage(actor, message.id, question.id, 'followup');
           task ??= this.tasks.get(actor, question.id);
-        } else { const next = this.tasks.create(actor, recipient, roomId, body);this.#db.prepare('INSERT INTO task_context VALUES (?,?,?)').run(next.id,kind??'followup',related?.id??null);this.tasks.linkMessage(actor,message.id,next.id,'request'); task ??= next; }
+        } else {
+          // Context only: never infer an amendment, cancellation or approval from free text.
+          const contextualTask = related?.id ?? (!kind && !replyTo ? this.tasks.followupContext(actor,recipient,roomId) : null);
+          const next = this.tasks.create(actor, recipient, roomId, body);
+          this.#db.prepare('INSERT INTO task_context VALUES (?,?,?)').run(next.id,kind??'followup',contextualTask);
+          this.tasks.linkMessage(actor,message.id,next.id,'request'); task ??= next;
+        }
       }
       this.#db.prepare('INSERT INTO submissions VALUES (?,?,?,?)').run(id, hash, message.id, task?.id ?? null);
       return { message, task };

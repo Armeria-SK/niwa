@@ -2,12 +2,89 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
+import {join} from 'node:path';
 import {Runtime} from '../src/runtime/runtime.ts';
 import {TurnRunner} from '../src/runtime/turns.ts';
 import {executeTurnTool} from '../src/runtime/turn-tools.ts';
 import {openAISubscriptionAdapterCapabilities} from '../src/providers/codex/adapter.ts';
 import {isStatusInquiry} from '../src/runtime/conversation-work.ts';
 function fixture(t:{after(fn:()=>void):void}){const root=mkdtempSync('/tmp/niwa-followup-'),r=new Runtime(root),admin=r.administrator(),a=r.bootstrap(admin),aa=r.agentSession(a.id),b=r.createAgent(aa,'人工担当'),room=r.createRoom(admin,'人工の案件');t.after(()=>{r.close();rmSync(root,{recursive:true,force:true});});return {root,r,admin,a,aa,b,room};}
+test('delegates receive the original request and parent corrections, without unrelated or private requests',t=>{
+ const {r,admin,a,aa,b,room}=fixture(t);
+ const parent=r.submit(admin,randomUUID(),room.id,'人工題材の脚本構成を比較してください',a.id).task!;
+ const child=r.tasks.delegate(aa,r.tasks.claim(admin)!,b.id,'人工商品の販売価格を調査');
+ const lease=r.tasks.claim(admin)!,actor=r.agentSession(b.id);
+ assert.equal(lease.task.id,child.id);
+ const before=r.tasks.workState(actor,lease).request_brief;
+ assert.equal(before.origin_request.prompt,parent.prompt);assert.equal(before.origin_relation,'delegation');
+ const correction=r.submit(admin,randomUUID(),room.id,'価格は対象外です。脚本構成を比較してください',a.id);
+ let brief=r.tasks.requestBrief(actor,lease);
+ assert.notEqual(brief.revision,before.revision);
+ assert.ok(brief.administrator_messages.some(m=>m.message_id===correction.message.id));
+ assert.equal(r.tasks.get(admin,parent.id).state,'waiting_child');assert.equal(r.tasks.get(admin,child.id).state,'running');
+ r.submit(admin,randomUUID(),room.id,'結末の構成も比較してください',a.id,undefined,{kind:'amend',task_id:parent.id,expected_revision:r.tasks.controlRevision(admin,parent.id)});
+ brief=r.tasks.requestBrief(actor,lease);
+ assert.ok(brief.administrator_replies.some(reply=>reply.body==='結末の構成も比較してください'));
+ const revision=brief.revision;
+ r.submit(admin,randomUUID(),room.id,'独立した別の仕事です',a.id,undefined,{kind:'new'});
+ const other=r.createAgent(aa,'別担当');r.submit(admin,randomUUID(),room.id,'別担当だけへの依頼',other.id);
+ const privateRoom=r.createRoom(admin,'個別の人工資料',[a.id]);r.submit(admin,randomUUID(),privateRoom.id,'個別の秘密',a.id);
+ assert.equal(r.tasks.requestBrief(actor,lease).revision,revision);
+ assert.throws(()=>r.tasks.steps(actor,parent.id),/Private memory/);
+});
+
+test('ordinary followups retain unique work context without amending it; explicit new work stays separate',t=>{
+ const {r,admin,a,aa,room}=fixture(t);
+ const original=r.submit(admin,randomUUID(),room.id,'人工の題材を調査',a.id).task!,lease=r.tasks.claim(admin)!;
+ const revision=r.tasks.controlRevision(admin,original.id);
+ const followup=r.submit(admin,randomUUID(),room.id,'題材の比較という意味です',a.id).task!;
+ assert.notEqual(followup.id,original.id);assert.equal(r.tasks.controlRevision(admin,original.id),revision);
+ r.respond(aa,lease,'人工の元作業の結果');
+ const next=r.tasks.claim(admin)!;assert.equal(next.task.id,followup.id);
+ const state=r.tasks.workState(aa,next);
+ assert.equal(state.request_context?.related_task_id,original.id);
+ assert.equal(state.request_brief.origin_request.prompt,original.prompt);
+ assert.equal(state.request_brief.origin_relation,'followup_context');
+ const separate=r.submit(admin,randomUUID(),room.id,'全く別の人工依頼',a.id,undefined,{kind:'new'}).task!;
+ r.respond(aa,next,'人工の追記への回答');
+ const separateLease=r.tasks.claim(admin)!;assert.equal(separateLease.task.id,separate.id);
+ assert.equal(r.tasks.workState(aa,separateLease).request_context?.related_task_id,null);
+ assert.equal(r.tasks.requestBrief(aa,separateLease).origin_request.task_id,separate.id);
+});
+
+test('multiple ongoing jobs do not cause an implicit followup to select a job',t=>{
+ const {r,admin,a,aa,room}=fixture(t);
+ r.submit(admin,randomUUID(),room.id,'人工依頼A',a.id);
+ r.submit(admin,randomUUID(),room.id,'人工依頼B',a.id,undefined,{kind:'new'});
+ const followup=r.submit(admin,randomUUID(),room.id,'補足です',a.id).task!;
+ r.respond(aa,r.tasks.claim(admin)!,'人工結果A');r.respond(aa,r.tasks.claim(admin)!,'人工結果B');
+ const lease=r.tasks.claim(admin)!;assert.equal(lease.task.id,followup.id);
+ assert.equal(r.tasks.workState(aa,lease).request_context?.related_task_id,null);
+});
+
+test('autonomous work and its delegates are excluded from implicit user followup context',t=>{
+ const {root,r,admin,a,aa,b,room}=fixture(t);
+ const autonomous=r.tasks.create(admin,a.id,room.id,'人工の自発活動');
+ const db=new DatabaseSync(join(root,'control.db'));
+ try{db.prepare('UPDATE tasks SET internal_autonomous=1 WHERE id=?').run(autonomous.id);}finally{db.close();}
+ r.tasks.delegate(aa,r.tasks.claim(admin)!,b.id,'人工の自発的な分担');
+ assert.equal(r.tasks.followupContext(admin,a.id,room.id),null);
+ assert.equal(r.tasks.followupContext(admin,b.id,room.id),null);
+ const manual=r.tasks.create(admin,b.id,room.id,'人工のユーザー依頼');
+ assert.equal(r.tasks.followupContext(admin,b.id,room.id),manual.id);
+});
+
+test('ordinary Bot conversation does not inherit the ancestor assignment as its goal',t=>{
+ const {r,admin,a,aa,b,room}=fixture(t);
+ r.submit(admin,randomUUID(),room.id,'人工の元依頼',a.id);
+ r.respond(aa,r.tasks.claim(admin)!,'この話についてどう思いますか',[b.id]);
+ const lease=r.tasks.claim(admin)!;assert.equal(lease.task.agent_id,b.id);
+ const brief=r.tasks.requestBrief(r.agentSession(b.id),lease);
+ assert.equal(brief.origin_relation,'current_request');assert.equal(brief.origin_request.task_id,lease.task.id);
+ assert.notEqual(brief.origin_request.prompt,'人工の元依頼');
+});
+
 test('status question reports running child of original work, with zero inquiry children and no model wait',t=>{
  const {r,admin,a,aa,b,room}=fixture(t);const parent=r.tasks.create(admin,a.id,room.id,'元の依頼');const lease=r.tasks.claim(admin)!;
  const child=r.tasks.delegate(aa,lease,b.id,'資料を照合');r.tasks.claim(admin)!;

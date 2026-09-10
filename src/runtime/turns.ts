@@ -1,6 +1,7 @@
 import {setupFailure} from '../providers/shared/setup-error.ts';
 import {retainCompleteExchanges} from './context/retention.ts';
 import {LEGACY_RULES as BASE_RULES} from './context/legacy-rules.ts';
+import {REQUEST_GUIDANCE} from './context/conversation.ts';
 import {structuredPrompt, scopedPromptTools, type PromptVersion} from './context/prompt.ts';
 import type { Runtime } from './runtime.ts';
 import type { Agent } from '../domain/types.ts';
@@ -47,17 +48,28 @@ export class TurnRunner {
     let freshSteps = 0;
     const startedAt = Date.now();
     let historyRevision: number | undefined;
+    let requestRevision: string | undefined;
     while (runtime.tasks.active(actor, lease) && !signal?.aborted) {
       // Keep the tool list and dispatch on one connector. Retired connectors reject new calls.
       const external={...this.#external};
       agent = runtime.agents(actor).find(item => item.id === lease.task.agent_id)!;
       const context = runtime.context(actor, lease.task.room_id);
       const rules = runtime.commonRules(actor);
-      if (historyRevision !== undefined && historyRevision !== context.revision) {
+      const briefRevision = runtime.tasks.requestBrief(actor, lease).revision;
+      const requestChanged = requestRevision !== undefined && requestRevision !== briefRevision;
+      const memoryChanged = historyRevision !== undefined && historyRevision !== context.revision;
+      if (requestChanged && pendingCompletion) {
+        runtime.tasks.discardStep(actor, lease, pendingCompletion.step);
+        pendingCompletion = undefined;
+      }
+      if (memoryChanged) {
         history.length = 0;
         pendingCompletion = undefined;
         position = 0;
-        // Provider-owned opaque continuation may also contain the superseded memory.
+      }
+      if (memoryChanged || requestChanged) {
+        // Provider-owned opaque continuation may contain superseded instructions.
+        // Completed tool exchanges remain available when only the request changes.
         try { adapter = await this.#resolve(agent, lease.task.id, signal); }
         catch (error) {
           if (!signal?.aborted && runtime.tasks.active(actor, lease)) runtime.tasks.providerFailure(actor,lease,setupFailure(error),'setup');
@@ -67,6 +79,7 @@ export class TurnRunner {
         if (!runtime.isContextCurrent(actor, context.revision)) continue;
       }
       historyRevision = context.revision;
+      requestRevision = briefRevision;
       let step: (typeof saved)[number] | undefined;
       if (pendingCompletion && !runtime.needsCompletionSummary(actor, lease)) { step = pendingCompletion; pendingCompletion = undefined; }
       else step = saved[position++];
@@ -88,6 +101,7 @@ export class TurnRunner {
           role: 'user', content: JSON.stringify({ message_id: message.id, author_id: message.author_id, text: message.body, ...(message.reply_to ? { reply_to: message.reply_to } : {}) }),
         }));
         const workState = runtime.tasks.workState(actor, lease);
+        requestRevision = workState.request_brief.revision;
         const reviewingMemory = base.length > 0 && !runtime.memoryReviewed(actor, lease) && !runtime.memoryReviewSkipped(actor,lease);
         const phaseTool = reviewingMemory ? 'memory_review' : pendingCompletion ? 'task_summary_save' : undefined;
         const phaseSchema = phaseTool === 'memory_review' ? memoryReviewSchema : summarySchema;
@@ -105,7 +119,7 @@ export class TurnRunner {
         const recentCalls = history.filter(message => message.role === 'assistant').slice(-3)
           .map(message => JSON.stringify(message.tool_calls?.map(call => ({ name: call.name, arguments: call.arguments }))));
         const repeating = observations.repeated_reads>=3 || recentCalls.length === 3 && recentCalls.every(calls => calls === recentCalls[0]);
-        const RULES = `${BASE_RULES}\n管理者が設定した共通の指示（権限と停止・予算の制約は引き続き守る）: ${rules.body}${repeating ? '\n操作の繰り返しや資料取得の失敗が続いています。直近の結果を確認し、新しい根拠がなければ別の方法か確認できた範囲の回答へ進んでください。' : ''}`;
+        const RULES = `${BASE_RULES}\n管理者が設定した共通の指示（権限と停止・予算の制約は引き続き守る）: ${rules.body}\n${REQUEST_GUIDANCE}${repeating ? '\n操作の繰り返しや資料取得の失敗が続いています。直近の結果を確認し、新しい根拠がなければ別の方法か確認できた範囲の回答へ進んでください。' : ''}`;
         const sharedRoom = runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared';
         let configuredTools = turnTools(agent.role === 'leader', external, sharedRoom, workState.autonomous || workState.task.conversation_reply === 1, !!this.#runtime.workareas.settings(actor).enabled).filter(tool=>tool.name!=='task_child_disposition'||workState.child_results.length>0);
         if(promptVersion==='structured-v5')configuredTools=scopedPromptTools(configuredTools,workState, runtime.initiatives.enabled());
@@ -175,6 +189,8 @@ export class TurnRunner {
           runtime.tasks.providerFailure(actor,lease,failure.error);
           return;
         }
+        // Rebuild for a user correction before committing any of the stale answer's calls.
+        if (runtime.tasks.requestBrief(actor, lease).revision !== requestRevision) continue;
         if(reportingReads&&events.some(event=>event.type==='tool_call'&&!['conversation_send','task_report'].includes(event.name))){
           runtime.tasks.waitForReadRecovery(actor,lease,observations.retry_at!);return;
         }

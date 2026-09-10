@@ -1,4 +1,5 @@
 import {NO_DEADLINE} from '../domain/deadline.ts';
+import {requestBrief} from './request-brief.ts';
 import {redactSecrets} from '../shared/redaction.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
@@ -336,6 +337,18 @@ export class Tasks {
     this.#owned(actor,lease);
     check(!this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id=? AND state NOT IN ('completed','failed','cancelled') AND id NOT IN(SELECT task_id FROM task_child_dependencies WHERE required=0)").get(lease.task.id),'conflict','Required children remain; wait for them or explicitly cancel/detach them before completion');
   }
+  followupContext(actor: Actor, agentId: string, roomId: string): string | null {
+    this.#access.room(actor, roomId);
+    const candidates = this.#db.prepare(`SELECT id FROM tasks WHERE agent_id=? AND room_id=?
+      AND conversation_reply=0 AND state NOT IN ('completed','failed','cancelled')`).all(agentId, roomId)
+      .filter(row => this.#autonomyLineage(String(row.id)).autonomous !== 1);
+    return candidates.length === 1 ? String(candidates[0]!.id) : null;
+  }
+  requestBrief(actor: Actor, lease: TaskLease) {
+    const task = this.#owned(actor, lease);
+    this.#access.room(actor, task.room_id);
+    return requestBrief(this.#db, task);
+  }
   workState(actor: Actor, lease: TaskLease) {
     const task = this.#owned(actor, lease);
     this.#access.room(actor, task.room_id);
@@ -344,6 +357,7 @@ export class Tasks {
     return {
       conversation_scope: this.conversationState(actor,task.room_id,task.id),
       request_context: this.#db.prepare('SELECT kind,related_task_id FROM task_context WHERE task_id=?').get(task.id)??null,
+      request_brief: this.requestBrief(actor, lease),
       observations: this.#db.prepare("SELECT operation_id,json_extract(output,'$.url') AS url,json_extract(output,'$.source_id') AS source_id FROM tool_receipts WHERE task_id=? AND (json_extract(output,'$.fetched_at') IS NOT NULL OR json_extract(output,'$.revision') IS NOT NULL)").all(task.id).map(row=>({...row,step:/^\d+:\d+$/.test(String(row.operation_id))?Number(String(row.operation_id).split(':')[0]):null})),
       initiative: this.#access.initiative(actor,task.id),
       quality_enabled: this.#db.prepare('SELECT enabled FROM quality_settings WHERE id=1').get()?.enabled===1,

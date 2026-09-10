@@ -37,6 +37,51 @@ function model(reply: (request: ModelRequest) => ModelEvent[] | Promise<ModelEve
     } };
 }
 
+for (const promptVersion of ['legacy-v4','structured-v5'] as const) test(`${promptVersion}: a correction during generation prevents stale tool execution`,async t=>{
+ const f=fixture(t);const original=f.runtime.submit(f.admin,randomUUID(),f.room.id,'人工の構成比較',f.leader.id).task!;
+ const lease=f.runtime.tasks.claim(f.admin)!;let calls=0,resolutions=0;
+ const runner=new TurnRunner(f.runtime,async()=>{resolutions++;return model(request=>{
+  const brief=JSON.parse(request.messages.at(-1)!.content!).work_state.request_brief;
+  assert.equal(brief.origin_request.task_id,original.id);
+  assert.ok(request.messages.some(message=>message.content===`現在の依頼: ${original.prompt}`));
+  if(++calls===1){
+   f.runtime.submit(f.admin,randomUUID(),f.room.id,'価格は対象外。構成だけを比較してください',f.leader.id);
+   return tool('conversation_send',{body:'訂正前の不要な価格回答',recipient_ids:[]});
+  }
+  assert.equal(calls,2);assert.ok(brief.administrator_messages.some((m:{body:string})=>m.body.includes('構成だけ')));
+  return tool('conversation_send',{body:'訂正を反映した人工の構成比較',recipient_ids:[]});
+ });},{}, {promptVersion});
+ await runner.run(lease);
+ assert.equal(resolutions,2,'Opaque provider continuation must be renewed after a correction');
+ const messages=f.runtime.messages(f.admin,f.room.id).filter(m=>m.author_id===f.leader.id);
+ assert.deepEqual(messages.map(m=>m.body),['訂正を反映した人工の構成比較']);
+ assert.equal(f.runtime.tasks.get(f.admin,original.id).state,'completed');
+ assert.equal(f.runtime.tasks.steps(f.actor,original.id).some(s=>JSON.stringify(s.events).includes('訂正前の不要な価格回答')),false);
+});
+
+test('a correction during completion summary discards the unsent draft and preserves completed reads',async t=>{
+ const f=fixture(t);const original=f.runtime.submit(f.admin,randomUUID(),f.room.id,'人工の構成比較',f.leader.id).task!;
+ const lease=f.runtime.tasks.claim(f.admin)!;
+ f.runtime.tasks.updatePlan(f.actor,lease,'plan',0,['構成を比較して返す']);
+ const receipt={text:'取得済みの人工資料',url:'https://example.test/source'};
+ await f.runtime.tasks.readOnce(f.actor,lease,'saved-read',{name:'web_read'},async()=>receipt);
+ let corrected=false,answers=0;
+ const base=model(()=>complete(++answers===1?'訂正前の下書き':'訂正後の構成比較'));
+ const adapter:ModelAdapter={...base,async *run(request,options){
+  if(request.tools.length===1&&request.tools[0]!.name==='task_summary_save'&&!corrected){
+   corrected=true;f.runtime.submit(f.admin,randomUUID(),f.room.id,'比較の対象を訂正します。構成だけです',f.leader.id);
+  }
+  yield* base.run(request,options);
+ }};
+ await new TurnRunner(f.runtime,async()=>adapter,{}, {promptVersion:'structured-v5'}).run(lease);
+ assert.equal(corrected,true);assert.equal(answers,2);
+ assert.deepEqual(f.runtime.messages(f.admin,f.room.id).filter(m=>m.author_id===f.leader.id).map(m=>m.body),['訂正後の構成比較']);
+ const step=f.runtime.tasks.steps(f.actor,original.id).find(s=>s.discarded);assert.ok(step);
+ // The source receipt remains usable after the new request; no read or external work is reissued.
+ const db=new DatabaseSync(join(f.root,'control.db'),{readOnly:true});
+ try{assert.deepEqual(JSON.parse(String(db.prepare('SELECT output FROM tool_receipts WHERE task_id=? AND operation_id=?').get(original.id,'saved-read')!.output)),receipt);}finally{db.close();}
+});
+
 test('failed read recovery returns a bounded report and resumes the waiting parent',async t=>{
  const f=fixture(t),child=f.runtime.createAgent(f.actor,'調査係');
  const parent=f.runtime.tasks.create(f.admin,f.leader.id,f.room.id,'根拠を調べる'),parentLease=f.runtime.tasks.claim(f.admin)!;
@@ -452,8 +497,11 @@ test('long room history is retained in storage and fitted automatically for know
   // Isolate history fitting from the configurable administrator policy size.
   f.runtime.updateCommonRules(f.admin, f.runtime.commonRules(f.admin).revision, '人工の短い共通指示');
   for (let n = 0; n < 5; n++) f.runtime.post(f.admin, f.room.id, '大'.repeat(10_000));
-  for (const capacity of [undefined, 20000]) {
-    const runner = new TurnRunner(f.runtime, async () => ({ ...model(request => { requests++; assert.match(JSON.stringify(request.messages), /大きな会話/); return complete('完了'); }),
+  // Leave room for the request provenance and tool schemas, while forcing the large archive out.
+  for (const capacity of [undefined, 22000]) {
+    const runner = new TurnRunner(f.runtime, async () => ({ ...model(request => { requests++; assert.match(JSON.stringify(request.messages), /大きな会話/);
+      assert.ok(request.messages.filter(message=>message.content?.includes('大'.repeat(10_000))).length<5);
+      return complete('完了'); }),
       ...(capacity === undefined ? {} : { context_window: capacity }) }));
     const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '大きな会話');
     await runner.run(f.runtime.tasks.claim(f.admin)!);

@@ -39,7 +39,9 @@ export function structuredPrompt(request:ModelRequest,input:{rules:{body:string;
  const system=[`Niwa prompt structured-v5\n${BASE}`,`管理者の共通指示（保存版 ${input.rules.revision}）:\n${input.rules.body}`,`自分のプロフィール（保存値）: ${JSON.stringify({id:input.agent.id,name:input.agent.name,role:input.agent.role,profile:input.profile})}`,`現在の実行環境: ${JSON.stringify({...environment,configured_tools_in_shared_room:shared,phase,tools_this_phase:request.tools.map(t=>t.name),model:{provider:input.agent.provider,model:input.agent.model,reasoning:input.agent.reasoning},workarea:state.workarea,boundary:state.independent_activity?'公開読取と新規テキスト成果物のみ':'現在のツールと認可された作業場所だけ。ホスト操作や任意mountは不可。環境と実行結果はツールで確認する。'})}`,`今の段階:\n${stage}\n${extras}`,`メンバー（配送用）: ${JSON.stringify(input.members)}`].join('\n\n');
  // Memory is scoped data, never a new system instruction. Keep original task and authoritative state intact.
  const {prompt:_duplicate,...task}=state.task;
- const messages=request.messages.map((m,index)=>index===request.messages.length-1?{...m,content:JSON.stringify({work_state:{...state,task}})}:m);
+ const {prompt:_originPrompt,...origin}=state.request_brief.origin_request;
+ const request_brief={...state.request_brief,origin_request:origin.task_id===task.id?{...origin,prompt_in_current_request:true}:state.request_brief.origin_request};
+ const messages=request.messages.map((m,index)=>index===request.messages.length-1?{...m,content:JSON.stringify({work_state:{...state,task,request_brief}})}:m);
  const memory={role:'user' as const,content:JSON.stringify({scoped_memories:{revision:input.memoryRevision,items:input.memories},untrusted:true})};
  return {...request,system_instructions:system+(!request.tools.length&&phase!=='work'?'\n返すJSON schema: '+JSON.stringify(phase==='memory_review'?memoryReviewSchema:summarySchema):''),messages:[memory,...messages]};
 }
