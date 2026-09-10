@@ -1,4 +1,5 @@
 import {RetrievalFailure} from '../tools/web/public-page.ts';
+import {mcpScope,mcpResourceUrl,type McpConnector} from '../tools/mcp/client.ts';
 import {qualityPlanSchema,qualityReviewSchema,type QualityReview} from './artifact-quality.ts';
 import {initiativeBodySchema} from './initiatives.ts';
 import {environmentDefinitionSchema} from '../tools/environments/registry.ts';
@@ -28,7 +29,7 @@ import type { FormLog } from '../tools/browser/form-log.ts';
 import { requestApprovalSchema } from '../tools/browser/pending-request.ts';
 import { coordinationUpdateSchema, type CoordinationUpdate } from '../domain/coordination.ts';
 
-export interface ExternalTools { workareas?: WorkareaTransport; readPage?: typeof readPublicPage; readFile?: typeof readPublicFile; search?: WebSearch; workspace?: WorkspaceRead; workspaceWrite?: WorkspaceWriter; program?: ProgramExecutor; browser?: BrowserExecutor;
+export interface ExternalTools { mcp?:McpConnector; workareas?: WorkareaTransport; readPage?: typeof readPublicPage; readFile?: typeof readPublicFile; search?: WebSearch; workspace?: WorkspaceRead; workspaceWrite?: WorkspaceWriter; program?: ProgramExecutor; browser?: BrowserExecutor;
   forms?: Pick<FormLog, 'execute'>; packages?: PackageExecutor; x?: { api: Pick<XApi, 'read' | 'mentions'>; posts: Pick<XPostLog, 'execute'> } }
 
 let activeFileTransfers = 0;
@@ -119,7 +120,7 @@ export function turnTools(isLeader: boolean, external: ExternalTools = {}, share
   return Object.entries(definitions).filter(([name]) => (name!=='artifact_download'||external.workareas) && (name !== 'web_download' || ((external.workspaceWrite && sharedRoom)||scoped)) && (!['browser_form_submit','browser_request_submit'].includes(name) || (external.forms && sharedRoom)) && (!name.startsWith('packages_') || (external.packages && sharedRoom)) && (!name.startsWith('x_') || external.x) && (name !== 'x_post' || sharedRoom) && (!name.startsWith('browser_') || external.browser) && (name !== 'program_run' || ((external.program && sharedRoom)||scoped)) && (name !== 'task_rest' || canRest) && (isLeader || !name.startsWith('agents_')) && (name !== 'web_search' || external.search) &&
     (!name.startsWith('environment_')&&!name.startsWith('execution_')||scoped) && (!['workspace_select','workspace_areas','workspace_share','workspace_download'].includes(name)||scoped) && (!name.startsWith('workspace_') || external.workspace||scoped) && (name !== 'workspace_write' || ((external.workspaceWrite && sharedRoom)||scoped))).map(([name, value]) => ({
     name, description: scoped&&['workspace_list','workspace_read','workspace_write','program_run','web_download'].includes(name) ? `選択中の作業場所に適用。個人・案件領域はworkspace_selectで選ぶ。未選択時だけ従来の全員共有の制限に従う。個人・案件なら私的会話でもその領域の読書き・隔離実行が可能。プログラムは競合検査して反映し、conflict時はcandidate版を保持する。以下の説明中の共有フォルダ・共有会話限定は未選択時を指す。${value.description}`:value.description, input_schema: JSON.parse(JSON.stringify(value.schema)) as JsonObject,
-  }));
+  })).concat(external.mcp?.tools(sharedRoom)??[]);
 }
 export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease, call: ModelToolCall, operationId: string): JsonObject {
   const definition: { description: string; schema: TSchema } | undefined = definitions[call.name as keyof typeof definitions];
@@ -234,6 +235,18 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
 
 async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease, call: ModelToolCall, operationId: string,
   signal?: AbortSignal, external: ExternalTools = {}): Promise<JsonObject> {
+  if(call.name.startsWith('mcp_')){
+    if(!external.mcp||!runtime.tasks.active(actor,lease)||runtime.tasks.independentActivity(actor,lease))return {error:'MCP unavailable'};
+    const room=runtime.rooms(actor).find(r=>r.id===lease.task.room_id);
+    const tool=room&&external.mcp.tool(call.name,room.visibility==='shared');if(!tool)return {error:'MCP tool not available in this conversation'};
+    const scope=mcpScope(runtime.workareas.epoch(),room!.id),deadline=Math.min(Date.now()+3600000,runtime.tasks.get(actor,lease.task.id).deadline_at);
+    const cancellation=AbortSignal.any([AbortSignal.timeout(Math.max(1,deadline-Date.now())),...(signal?[signal]:[])]);
+    const result=tool.readOnly?await external.mcp.call(call.name,call.arguments,{scope,deadline},cancellation)
+      :await runtime.tasks.externalOnce(actor,lease,operationId,{name:call.name,arguments:call.arguments,scope,signature:tool.signature},(id,firstAttempt)=>external.mcp!.call(call.name,call.arguments,{scope,deadline,execution_id:id,allow_start:firstAttempt},cancellation));
+    if(!runtime.tasks.active(actor,lease)||scope!==mcpScope(runtime.workareas.epoch(),room!.id))return {error:'Task scope changed'};
+    const links=Array.isArray(result.content)?result.content.filter((item:JsonObject)=>item.type==='resource_link'&&typeof item.uri==='string'&&item.uri.length<=2048).map((item:JsonObject)=>({name:item.name,url:mcpResourceUrl(tool.server.id,room!.id,item.uri as string)})):[];
+    return {...result,...(links.length?{downloads:links}:{})};
+  }
   if (runtime.tasks.active(actor,lease) && ['browser_request_submit','browser_form_submit','x_post','program_run','web_download','workspace_write','workspace_share','artifact_download','packages_install'].includes(call.name) && runtime.tasks.independentActivity(actor,lease)) return {error:'independent_activity_scope',message:'保留操作とは別の活動です。公開情報の読取と新規テキスト成果物で進め、実行・書込・送信は元の仕事で確認してください。'};
   if(call.name.startsWith('execution_')){
     const definition=definitions[call.name as keyof typeof definitions];

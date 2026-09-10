@@ -1,4 +1,5 @@
 import {workareaClient} from '../tools/workareas/client.ts';
+import {McpConnector} from '../tools/mcp/client.ts';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
@@ -49,6 +50,9 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
   })();
   try {
     const config = readInstallation(root);
+    const mcp=config.mcpServers?.length?await McpConnector.connect(config.mcpServers).catch(()=>{
+      process.stderr.write('MCP connection unavailable; configured MCP tools are disabled until the next service start.\n');return undefined;
+    }):undefined;
     const auth = new WebAuth(config.origin, adminKey(paths));
     runtime = new Runtime(paths.state);
     const admin = runtime.administrator(); runtime.bootstrap(admin); runtime.tasks.recover(admin); runtime.tasks.recoverProviderWaits(admin,true);
@@ -74,6 +78,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
         return {data: file.data as string, revision: file.revision as string};
       } : undefined)));
     scheduler = new Scheduler(runtime, new TurnRunner(runtime, resolve ?? models.resolve, {
+      ...(mcp?{mcp}:{}),
       ...(xApi && xPosts ? { x: { api: xApi, posts: xPosts } } : {}),
       ...(forms ? { forms } : {}),
       ...(workareas ? {workareas}:{}),
@@ -88,7 +93,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     },{promptVersion:config.promptVersion??'legacy-v4'}));
     server = createApiServer(runtime, auth, models, fileURLToPath(new URL('../client/', import.meta.url)), backups,
       config.workspaceExecutorUid ? { read: configuredWorkspaceReader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid),
-        download: configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid) } : undefined, xAuth, workareas);
+        download: configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid) } : undefined, xAuth, workareas, mcp);
     await new Promise<void>((done, reject) => {
       server!.once('error', reject);
       server!.listen(portOverride ?? config.port, '127.0.0.1', () => { server!.removeListener('error', reject); done(); });

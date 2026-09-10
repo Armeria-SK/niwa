@@ -161,6 +161,20 @@ sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
 
 保存・復元・サービス再起動を再検証する場合は `sudo sh /home/niwa/niwa/deploy/ubuntu/verify-continuity.sh --apply` を使います。復元試験は人工データの一時環境で行います。
 
+## ローカルMCP接続（任意）
+
+外部の機能を別サービスとして用意し、`config/niwa.json` の `mcpServers` に接続先と利用を許可するツールを登録できます。既存の設定項目は保持してください。
+
+```json
+{"mcpServers":[{"id":"local","socket":"/home/niwa/tool-service/runtime/mcp.sock","scope":"shared","tools":[{"name":"lookup","readOnly":true}]}]}
+```
+
+対応する通信方式は、Niwaと同じユーザー所有のprivate Unix socket上で、HTTP POST `/mcp` にMCP 2025-06-18のJSON応答を返すローカルプロファイルです。socketは0600、親ディレクトリは0700にします。通常のstdio・リモートHTTP・SSE・セッション付きサーバーへの直接接続は未対応です。Niwaは外部サーバーを起動せず、登録済みのツールだけを `mcp_<接続id>_<ツール名>` として公開します（全体64文字まで）。
+
+`scope: "shared"` は共有会話からだけ利用できます。会話ごとのデータ分離に対応したサーバーは `scope: "conversation"` を使えます。この場合は `niwaContextV1` capabilityと、Niwaが渡す会話識別子・実行ID・期限の検査が必要です。`readOnly` は管理者が操作内容を確認して指定します。書込操作は既存の実行記録を使い、照合に対応しないサーバーの結果不明操作は再送しません。
+
+接続はNiwaの起動時に行います。失敗時は本体を継続起動し、その回のMCPツールを無効にします。接続先を復旧してから本体を再起動してください。管理者認証後の `GET /api/mcp` で有効なツールを確認でき、返されたファイルの取得にも管理者ログインが必要です（最大64MiB）。外部サービスのファイルはNiwaの標準バックアップ対象外です。
+
 ## 困ったとき
 
 | 状況 | 確認すること |

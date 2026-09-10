@@ -5,8 +5,10 @@ import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { initializeProduct, productPaths, type ProductPaths } from './paths.ts';
 import { WebAuth } from '../web/auth.ts';
+import {mcpServerSchema} from '../tools/mcp/client.ts';
 
 const schema = Type.Object({ version: Type.Literal(1), origin: Type.String({ maxLength: 2048 }),
+  mcpServers:Type.Optional(Type.Array(mcpServerSchema,{maxItems:8})),
   reasoningSummary: Type.Optional(Type.Boolean()),
   promptVersion: Type.Optional(Type.Union([Type.Literal('legacy-v4'),Type.Literal('structured-v5')])),
   port: Type.Integer({ minimum: 1, maximum: 65535 }), workspaceExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
