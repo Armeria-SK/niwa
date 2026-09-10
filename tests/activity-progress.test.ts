@@ -7,6 +7,21 @@ import {MemoryCredentialStore} from '../src/auth/credential-store.ts';
 import {collectModelEvents} from '../src/providers/shared/adapter.ts';
 import {credential,profile,request,frame} from './fixtures/model.ts';
 function fixture(t:{after(fn:()=>void):void}){const root=mkdtempSync('/tmp/niwa-progress-'),r=new Runtime(root),admin=r.administrator(),a=r.bootstrap(admin),aa=r.agentSession(a.id),room=r.createRoom(admin,'人工の進捗');r.tasks.create(admin,a.id,room.id,'資料を確認して答える');const lease=r.tasks.claim(admin)!;t.after(()=>{r.close();rmSync(root,{recursive:true,force:true});});return {r,admin,a,aa,room,lease};}
+test('resumed and queued work exposes completed responses separately from actual provider failures',t=>{
+ const {r,admin,aa,room,lease}=fixture(t);
+ const prompt=r.tasks.recordPrompt(aa,lease,{version:'structured-v5',phase:'model',rules_revision:1,memory_revision:r.context(aa,room.id).revision,input_bytes:10,estimated_input_tokens:3,removed_messages:0});
+ r.tasks.finishPrompt(aa,lease,prompt,[{type:'completed',finish_reason:'tool_calls'}]);
+ let current=lease;
+ for(let i=0;i<3;i++){r.tasks.interrupt(admin,current);current=r.tasks.claim(admin)!;}
+ r.tasks.interrupt(admin,current);
+ const peer=r.tasks.conversationState(aa,room.id).tasks.find(t=>t.id===lease.task.id)!;
+ assert.equal(peer.state,'queued');assert.equal(peer.run_count,4);assert.equal('attempt' in peer,false);
+ assert.equal(peer.progress.model_responses_completed,1);assert.equal(peer.progress.provider_failures,0);
+ current=r.tasks.claim(admin)!;
+ r.tasks.providerFailure(aa,current,{code:'NETWORK_ERROR',message:'人工の切断',retryable:true});
+ const failed=r.tasks.progress(admin,lease.task.id);
+ assert.equal(failed.run_count,5);assert.equal(failed.provider_failures,1);assert.equal(failed.model_responses_completed,1);assert.equal(failed.kind,'network');
+});
 test('runtime facts appear without work_note; internal budget differs from connection wait',t=>{
  const {r,admin,aa,room,lease}=fixture(t);const rev=r.context(aa,room.id).revision;
  r.tasks.activity(aa,lease,'call','model');assert.equal(r.workNotes(admin,room.id).length,0);assert.equal(r.tasks.progress(admin,lease.task.id).label,'返答を考え中');

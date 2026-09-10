@@ -55,6 +55,28 @@ test('MCP ordinary servers are shared-only and cannot replay unrecorded writes',
  assert.equal((await mcp.call('mcp_local_write',{}, {scope:mcpScope('epoch','room'),deadline:Date.now()+10000,allow_start:false})).error,'outcome_unknown');assert.equal(f.calls.length,0);
  await assert.rejects(McpConnector.connect([{...f.config,scope:'conversation'}]));
 });
+test('MCP history retains write and read results with downloads after observation eviction; new reads refresh',async t=>{
+ const f=await fixture(t),mcp=await McpConnector.connect([f.config]);
+ const admin=f.runtime.administrator(),leader=f.runtime.bootstrap(admin),actor=f.runtime.agentSession(leader.id),room=f.runtime.createRoom(admin,'人工の会話');
+ f.runtime.tasks.create(admin,leader.id,room.id,'結果を再確認');const lease=f.runtime.tasks.claim(admin)!,revision=f.runtime.context(actor,room.id).revision;
+ for(const name of ['mcp_local_write','mcp_local_read']){
+  const call={type:'tool_call' as const,tool_call_id:name,name,arguments:{text:'fixture'}};
+  const step=f.runtime.tasks.saveStep(actor,lease,revision,[call,{type:'completed',finish_reason:'tool_calls'}]);
+  const before=f.calls.length;
+  const output=await executeAsyncTurnTool(f.runtime,actor,lease,call,`${step}:0`,undefined,{mcp});
+  assert.deepEqual(await executeAsyncTurnTool(f.runtime,actor,lease,call,`${step}:0`,undefined,{mcp}),output);
+  assert.equal(f.calls.length,before+1);
+  f.runtime.tasks.observe(actor,lease,`${step}:0`,name,call.arguments,output);
+  for(let i=0;i<33;i++)f.runtime.tasks.observe(actor,lease,`${step}:later:${i}`,'workspace_read',{path:String(i)},{content:'later'});
+  const history=JSON.parse(String(f.runtime.tasks.readStep(actor,lease,step).text));
+  assert.deepEqual(history.tool_results[0].result,output);
+  assert.match(JSON.stringify(history),/\/api\/mcp\/local\/resource/);
+  assert.equal(history.tool_results[0].result.untrusted,true);
+ }
+ const before=f.calls.length;
+ await executeAsyncTurnTool(f.runtime,actor,lease,{tool_call_id:'fresh',name:'mcp_local_read',arguments:{text:'fixture'}},'fresh:0',undefined,{mcp});
+ assert.equal(f.calls.length,before+1);
+});
 test('MCP rejects unprotected sockets, missing tools and duplicate registrations',async t=>{
  const f=await fixture(t);
  await assert.rejects(McpConnector.connect([{...f.config,tools:[{name:'absent',readOnly:true}]}]));

@@ -241,11 +241,17 @@ async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease
     const tool=room&&external.mcp.tool(call.name,room.visibility==='shared');if(!tool)return {error:'MCP tool not available in this conversation'};
     const scope=mcpScope(runtime.workareas.epoch(),room!.id),deadline=Math.min(Date.now()+3600000,runtime.tasks.get(actor,lease.task.id).deadline_at);
     const cancellation=AbortSignal.any([AbortSignal.timeout(Math.max(1,deadline-Date.now())),...(signal?[signal]:[])]);
-    const result=tool.readOnly?await external.mcp.call(call.name,call.arguments,{scope,deadline},cancellation)
+    const input={name:call.name,arguments:call.arguments};
+    const withDownloads=(result:JsonObject):JsonObject=>{
+      const links=Array.isArray(result.content)?result.content.filter((item:JsonObject)=>item.type==='resource_link'&&typeof item.uri==='string'&&item.uri.length<=2048).map((item:JsonObject)=>({name:item.name,url:mcpResourceUrl(tool.server.id,room!.id,item.uri as string)})):[];
+      return {...result,...(links.length?{downloads:links}:{})};
+    };
+    const result=tool.readOnly?await runtime.tasks.readOnce(actor,lease,operationId,input,async()=>withDownloads(await external.mcp!.call(call.name,call.arguments,{scope,deadline},cancellation)))
       :await runtime.tasks.externalOnce(actor,lease,operationId,{name:call.name,arguments:call.arguments,scope,signature:tool.signature},(id,firstAttempt)=>external.mcp!.call(call.name,call.arguments,{scope,deadline,execution_id:id,allow_start:firstAttempt},cancellation));
     if(!runtime.tasks.active(actor,lease)||scope!==mcpScope(runtime.workareas.epoch(),room!.id))return {error:'Task scope changed'};
-    const links=Array.isArray(result.content)?result.content.filter((item:JsonObject)=>item.type==='resource_link'&&typeof item.uri==='string'&&item.uri.length<=2048).map((item:JsonObject)=>({name:item.name,url:mcpResourceUrl(tool.server.id,room!.id,item.uri as string)})):[];
-    return {...result,...(links.length?{downloads:links}:{})};
+    // The outbox also binds endpoint/scope. Retain the model-call receipt separately
+    // so task_history_read can validate its original arguments after observations expire.
+    return tool.readOnly?result:runtime.tasks.once(actor,lease,operationId,input,()=>withDownloads(result));
   }
   if (runtime.tasks.active(actor,lease) && ['browser_request_submit','browser_form_submit','x_post','program_run','web_download','workspace_write','workspace_share','artifact_download','packages_install'].includes(call.name) && runtime.tasks.independentActivity(actor,lease)) return {error:'independent_activity_scope',message:'保留操作とは別の活動です。公開情報の読取と新規テキスト成果物で進め、実行・書込・送信は元の仕事で確認してください。'};
   if(call.name.startsWith('execution_')){

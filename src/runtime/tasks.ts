@@ -292,8 +292,8 @@ export class Tasks {
       FROM tasks t JOIN agents a ON a.id=t.agent_id WHERE t.room_id=? AND t.id<>?
       AND NOT EXISTS(SELECT 1 FROM task_context c WHERE c.task_id=t.id AND c.kind='status')
       ORDER BY CASE WHEN t.state IN ('completed','cancelled','failed') THEN 1 ELSE 0 END,t.updated_at DESC LIMIT 41`).all(roomId,exclude??'') as unknown as {id:string;parent_id:string|null;agent_id:string;name:string;prompt:string;state:string;paused:number;internal_autonomous:number;updated_at:number;attempt:number}[];
-    return {scope:'current_conversation',checked_at:Date.now(),truncated:rows.length>40,tasks:rows.slice(0,40).map(t=>({...t,control_revision:this.controlRevision(actor,t.id),
-      prompt:redactSecrets(String(t.prompt)).slice(0,240),progress:(({label,state,kind,waiting_for,retry_at,last_activity_at})=>({label,state,kind,waiting_for,retry_at,last_activity_at}))(this.progress(actor,String(t.id),true))}))};
+    return {scope:'current_conversation',checked_at:Date.now(),truncated:rows.length>40,tasks:rows.slice(0,40).map(({attempt,...t})=>({...t,run_count:attempt,control_revision:this.controlRevision(actor,t.id),
+      prompt:redactSecrets(String(t.prompt)).slice(0,240),progress:(({label,state,kind,waiting_for,retry_at,last_activity_at,model_responses_completed,provider_failures})=>({label,state,kind,waiting_for,retry_at,last_activity_at,model_responses_completed,provider_failures}))(this.progress(actor,String(t.id),true))}))};
   }
   linkMessage(actor:Actor,messageId:string,taskId:string,kind:string) {
     const task=this.get(actor,taskId);
@@ -553,7 +553,10 @@ export class Tasks {
     const waitingTasks=task.state==='waiting_child'?this.#db.prepare(`SELECT t.id,t.agent_id,a.name,t.prompt,t.state FROM tasks t JOIN agents a ON a.id=t.agent_id
       LEFT JOIN task_child_dependencies d ON d.task_id=t.id WHERE t.parent_id=? AND t.room_id=? AND t.state NOT IN ('completed','failed','cancelled') AND coalesce(d.required,1)=1`).all(id,task.room_id):[];
     const summary=this.#summaries.get(id);
+    const completed=Number(this.#db.prepare("SELECT count(*) AS count FROM prompt_runs WHERE task_id=? AND status='completed'").get(id)!.count);
+    const failures=Number(this.#db.prepare('SELECT attempts FROM provider_failures WHERE task_id=?').get(id)?.attempts??0);
     return {work_acknowledged:!!this.#db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='work_acknowledged'").get(id),task_id:id,agent_id:task.agent_id,state:task.state,kind,label:active?(phases[String(row.phase)]??'作業中'):(labels[kind]??'状態を確認中'),
+      run_count:task.attempt,model_responses_completed:completed,provider_failures:failures,
       phase:current?row?.phase:null,status:active?row.status:task.state,started_at:current?row?.started_at:null,last_activity_at:Math.max(task.updated_at, current?Number(row?.updated_at??0):0),
       retry_at:task.state==='waiting_provider'?task.provider_retry_at:null,
       summary:!factsOnly&&active&&summary&&summary.call===row.call_id&&summary.revision===revision?summary.text:null,
