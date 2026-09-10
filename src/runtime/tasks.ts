@@ -189,7 +189,9 @@ export class Tasks {
     transaction(this.#db, () => {
       const task = this.#owned(actor, lease); this.#access.room(actor, task.room_id);
       check(this.#autonomous(task.id), 'forbidden', 'Only autonomous work can choose rest');
+      this.assertCompletion(actor, lease);
       this.#change(task.id, 'completed', '今回は休息しました。', null, false);
+      this.#resumeParent(task.parent_id);
     });
   }
   acknowledgeWork(actor:Actor,lease:TaskLease) {
@@ -211,6 +213,7 @@ export class Tasks {
     transaction(this.#db, () => {
       const task = this.#owned(actor, lease);
       check(task.conversation_reply === 1, 'forbidden', 'Assigned work needs a result; acknowledgment cannot complete it');
+      this.assertCompletion(actor, lease);
       check(!this.#db.prepare('SELECT 1 FROM external_operations WHERE task_id=?').get(task.id) &&
         !this.#db.prepare('SELECT 1 FROM updates WHERE task_id=? AND artifact_id IS NOT NULL').get(task.id), 'conflict', 'Report the work result instead of acknowledgment');
       const message = task.source_message_id
@@ -725,16 +728,17 @@ export class Tasks {
       }
     });
   }
-  resume(actor: Actor, id: string, answer?: string): void {
+  resume(actor: Actor, id: string, answer?: string, { preservePause = false } = {}): void {
     this.#admin(actor);
     check(!this.#db.prepare("SELECT 1 FROM approval_requests WHERE task_id=? AND status='pending'").get(id), 'conflict', 'Decide the pending approval first');
     transaction(this.#db, () => {
       const task = this.get(actor, id);
       check(!this.#db.prepare('SELECT 1 FROM deleted_agents WHERE id=?').get(task.agent_id), 'not_found', 'Agent not found');
-      if (task.paused) {
+      // Receiving an answer/approval is separate from explicitly releasing a manual stop.
+      if (task.paused && !preservePause) {
         this.#db.prepare('UPDATE tasks SET paused=0,updated_at=? WHERE id=?').run(Date.now(), id);
         this.#event(id, 'resumed');
-        return;
+        if (answer === undefined) return;
       }
       check(task.state === 'waiting_user' || task.state === 'waiting_provider', 'conflict', 'Task cannot be resumed');
       if (answer !== undefined) {

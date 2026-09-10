@@ -565,8 +565,7 @@ export class Runtime {
       const request = this.#db.prepare("SELECT * FROM approval_requests WHERE task_id=? AND status='pending'").get(id);
       check(request && request.version === version && task.state === 'waiting_user', 'conflict', 'Approval is no longer pending');
       this.#db.prepare('UPDATE approval_requests SET status=? WHERE task_id=?').run(approved ? 'approved' : 'declined', id);
-      if (approved) this.#db.prepare('UPDATE tasks SET paused=0 WHERE id=?').run(id);
-      if (approved) this.tasks.resume(actor, id, `管理者が次の内容を承認しました：${request.title}\n${request.detail}`);
+      if (approved) this.tasks.resume(actor, id, `管理者が次の内容を承認しました：${request.title}\n${request.detail}`, { preservePause: true });
       else this.tasks.cancel(actor, id);
     });
   }
@@ -929,9 +928,11 @@ export class Runtime {
           this.tasks.completeInquiry(actor,inquiry.id,result);task??=this.tasks.get(actor,inquiry.id);continue;
         }
         const questions = this.tasks.list(actor).filter(task => task.agent_id === recipient && task.room_id === roomId && task.state === 'waiting_user');
-        if (kind!=='new' && questions.length === 1 && (!related || related.id===questions[0]!.id) && !this.#db.prepare("SELECT 1 FROM approval_requests WHERE task_id=? AND status='pending'").get(questions[0]!.id)) {
-          this.tasks.resume(actor, questions[0]!.id, body);
-          task ??= this.tasks.get(actor, questions[0]!.id);
+        const question = related ? questions.find(item => item.id === related.id) : questions.length === 1 ? questions[0] : undefined;
+        if (kind!=='new' && question && !this.#db.prepare("SELECT 1 FROM approval_requests WHERE task_id=? AND status='pending'").get(question.id)) {
+          this.tasks.resume(actor, question.id, body, { preservePause: true });
+          this.tasks.linkMessage(actor, message.id, question.id, 'followup');
+          task ??= this.tasks.get(actor, question.id);
         } else { const next = this.tasks.create(actor, recipient, roomId, body);this.#db.prepare('INSERT INTO task_context VALUES (?,?,?)').run(next.id,kind??'followup',related?.id??null);this.tasks.linkMessage(actor,message.id,next.id,'request'); task ??= next; }
       }
       this.#db.prepare('INSERT INTO submissions VALUES (?,?,?,?)').run(id, hash, message.id, task?.id ?? null);

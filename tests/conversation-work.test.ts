@@ -59,3 +59,64 @@ test('saved next action survives closing and reopening the artificial installati
  executeTurnTool(r,aa,lease,{name:'task_report',tool_call_id:'p',arguments:{body:'試作済み',next_action:'前回の試作を検査',expected_revision:0}},'p');r.close();
  const reopened=new Runtime(root);try{const admin2=reopened.administrator(),actor=reopened.agentSession(a.id),next=reopened.tasks.claim(admin2)!;assert.equal(next.task.id,task.id);assert.deepEqual(reopened.tasks.workState(actor,next).remaining_plan.remaining,['前回の試作を検査']);reopened.respond(actor,next,'検査済み',[]);assert.equal(reopened.tasks.get(admin2,task.id).state,'completed');}finally{reopened.close();}
 });
+
+test('answering a paused question retains the answer, message link and stop across restart',t=>{
+ const {root,r,admin,a,aa,room}=fixture(t);
+ const task=r.tasks.create(admin,a.id,room.id,'人工の制作'),lease=r.tasks.claim(admin)!;
+ r.tasks.wait(aa,lease,'waiting_user','人工の色指定');r.tasks.pause(admin,task.id);
+ const id=randomUUID(),answer=r.submit(admin,id,room.id,'青でお願いします',a.id);
+ assert.equal(answer.task!.id,task.id);assert.equal(answer.task!.paused,1);
+ assert.equal(answer.task!.state,'queued');assert.equal(r.tasks.claim(admin),undefined);
+ assert.equal(r.tasks.replies(admin,task.id)[0]?.body,'青でお願いします');
+ r.submit(admin,id,room.id,'青でお願いします',a.id);
+ assert.equal(r.tasks.replies(admin,task.id).length,1);assert.equal(r.tasks.list(admin).length,1);
+ r.close();const reopened=new Runtime(root);try{
+  const admin2=reopened.administrator();reopened.tasks.recover(admin2);
+  assert.equal(reopened.tasks.claim(admin2),undefined);assert.equal(reopened.tasks.replies(admin2,task.id).length,1);
+  // Replying to the saved answer must still select the original work.
+  reopened.submit(admin2,randomUUID(),room.id,'対象を変更します',a.id,answer.message.id,{kind:'amend',expected_revision:reopened.tasks.controlRevision(admin2,task.id)});
+  assert.equal(reopened.tasks.get(admin2,task.id).paused,1);
+  reopened.tasks.resume(admin2,task.id);assert.equal(reopened.tasks.claim(admin2)!.task.id,task.id);
+ }finally{reopened.close();}
+});
+
+test('an explicit reply selects its waiting question even when another question exists',t=>{
+ const {r,admin,a,aa,room}=fixture(t);
+ const one=r.submit(admin,randomUUID(),room.id,'人工依頼A',a.id);
+ r.tasks.wait(aa,r.tasks.claim(admin)!,'waiting_user','Aの入力');
+ const two=r.submit(admin,randomUUID(),room.id,'人工依頼B',a.id,undefined,{kind:'new'});
+ r.tasks.wait(aa,r.tasks.claim(admin)!,'waiting_user','Bの入力');
+ const answer=r.submit(admin,randomUUID(),room.id,'Aの値です',a.id,one.message.id);
+ assert.equal(answer.task!.id,one.task!.id);assert.equal(answer.task!.state,'queued');
+ assert.equal(r.tasks.get(admin,two.task!.id).state,'waiting_user');assert.equal(r.tasks.list(admin).length,2);
+ assert.equal(r.tasks.replies(admin,two.task!.id).length,0);
+});
+
+test('ambiguous replies and ordinary answers never choose or approve an unrelated wait',t=>{
+ const {r,admin,a,aa,room}=fixture(t);
+ const one=r.submit(admin,randomUUID(),room.id,'人工依頼A',a.id);
+ r.tasks.wait(aa,r.tasks.claim(admin)!,'waiting_user','Aの入力');
+ const two=r.submit(admin,randomUUID(),room.id,'人工依頼B',a.id,undefined,{kind:'new'});
+ r.requestApproval(aa,r.tasks.claim(admin)!,'人工操作の許可','実際の送信はしない');
+ const ambiguous=r.submit(admin,randomUUID(),room.id,'補足です',a.id);
+ assert.notEqual(ambiguous.task!.id,one.task!.id);assert.notEqual(ambiguous.task!.id,two.task!.id);
+ r.submit(admin,randomUUID(),room.id,'了解です',a.id,two.message.id);
+ assert.equal(r.tasks.get(admin,one.task!.id).state,'waiting_user');
+ assert.equal(r.tasks.get(admin,two.task!.id).state,'waiting_user');
+ assert.equal(r.tasks.replies(admin,one.task!.id).length,0);assert.equal(r.tasks.replies(admin,two.task!.id).length,0);
+ assert.equal(r.approvals(admin).length,1);
+});
+
+test('approving a paused operation records exact authorization without releasing its stop',t=>{
+ const {r,admin,a,aa,room}=fixture(t);const task=r.tasks.create(admin,a.id,room.id,'人工承認'),lease=r.tasks.claim(admin)!;
+ const action={destination:'synthetic',body:'artificial only'};
+ assert.equal(r.authorizeAction(aa,lease,'synthetic-operation','人工操作',action),false);
+ r.tasks.pause(admin,task.id);const version=String(r.approvals(admin)[0]!.version);
+ r.decideApproval(admin,task.id,true,version);
+ assert.equal(r.tasks.get(admin,task.id).paused,1);assert.equal(r.tasks.get(admin,task.id).state,'queued');
+ assert.equal(r.tasks.claim(admin),undefined);assert.equal(r.approvals(admin).length,0);
+ assert.equal(r.tasks.replies(admin,task.id).length,1);
+ r.tasks.resume(admin,task.id);const resumed=r.tasks.claim(admin)!;
+ assert.equal(resumed.task.id,task.id);assert.equal(r.authorizeAction(aa,resumed,'synthetic-operation','人工操作',action),true);
+ assert.equal(r.authorizeAction(aa,resumed,'synthetic-operation','変更した人工操作',{...action,body:'changed'}),false);
+});

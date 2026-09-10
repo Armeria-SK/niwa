@@ -38,6 +38,47 @@ function fixture(t: { after: (fn: () => void) => void }) {
   return { root, runtime, admin, leader, parentActor, child, childActor, room, tasks: runtime.tasks };
 }
 
+test('explicit resume with an answer saves it while plain unpause preserves unanswered waits', t => {
+  const f=fixture(t),task=f.tasks.create(f.admin,f.leader.id,f.room.id,'人工質問');
+  f.tasks.wait(f.parentActor,f.tasks.claim(f.admin)!,'waiting_user','入力が必要');
+  f.tasks.pause(f.admin,task.id);f.tasks.resume(f.admin,task.id);
+  assert.equal(f.tasks.get(f.admin,task.id).state,'waiting_user');
+  assert.equal(f.tasks.replies(f.admin,task.id).length,0);
+  f.tasks.pause(f.admin,task.id);f.tasks.resume(f.admin,task.id,'保存する人工回答');
+  assert.equal(f.tasks.replies(f.admin,task.id)[0]?.body,'保存する人工回答');
+  assert.equal(f.tasks.get(f.admin,task.id).paused,0);
+  assert.equal(f.tasks.claim(f.admin)!.task.id,task.id);
+});
+
+test('resting a conversational child releases its waiting parent without releasing a manual stop',t=>{
+ const f=fixture(t),other=f.runtime.createAgent(f.parentActor,'人工の別担当');
+ const parent=f.tasks.create(f.admin,f.leader.id,f.room.id,'人工の共同作業'),lease=f.tasks.claim(f.admin)!;
+ f.tasks.address(f.parentActor,lease,f.child.id,'相談');
+ const delegated=f.tasks.delegate(f.parentActor,lease,other.id,'確認');
+ const leases=[f.tasks.claim(f.admin)!,f.tasks.claim(f.admin)!];
+ const reply=leases.find(l=>l.task.agent_id===f.child.id)!,work=leases.find(l=>l.task.id===delegated.id)!;
+ f.tasks.finish(f.runtime.agentSession(other.id),work,'確認完了');
+ assert.equal(f.tasks.get(f.admin,parent.id).state,'waiting_child');
+ f.tasks.pause(f.admin,parent.id);f.tasks.rest(f.childActor,reply);
+ assert.equal(f.tasks.get(f.admin,parent.id).state,'queued');assert.equal(f.tasks.get(f.admin,parent.id).paused,1);
+ assert.equal(f.tasks.claim(f.admin),undefined);f.tasks.resume(f.admin,parent.id);
+ assert.equal(f.tasks.claim(f.admin)!.task.id,parent.id);
+});
+
+test('rest and acknowledgment cannot silently finish a reply with required child work',t=>{
+ const f=fixture(t),other=f.runtime.createAgent(f.parentActor,'人工の別担当');
+ f.tasks.create(f.admin,f.leader.id,f.room.id,'人工相談');const parent=f.tasks.claim(f.admin)!;
+ f.tasks.address(f.parentActor,parent,f.child.id,'相談');const reply=f.tasks.claim(f.admin)!;
+ f.tasks.address(f.childActor,reply,other.id,'必要な確認');
+ assert.throws(()=>f.tasks.rest(f.childActor,reply),/Required children/);
+ assert.throws(()=>f.tasks.acknowledge(f.childActor,reply),/Required children/);
+ assert.equal(f.tasks.get(f.admin,reply.task.id).state,'running');
+ const child=f.tasks.list(f.admin).find(t=>t.parent_id===reply.task.id)!;
+ f.tasks.childDisposition(f.childActor,reply,child.id,'independent',f.tasks.controlRevision(f.admin,child.id));
+ f.tasks.rest(f.childActor,reply);assert.equal(f.tasks.get(f.admin,reply.task.id).state,'completed');
+ assert.equal(f.tasks.get(f.admin,child.id).state,'queued');assert.equal(f.tasks.get(f.admin,child.id).parent_id,reply.task.id);
+});
+
 test('remaining plans survive restart, reject stale writes and disappear on memory correction or new instructions', t => {
   const f = fixture(t);
   const source = f.runtime.post(f.admin, f.room.id, '計画の出所');
