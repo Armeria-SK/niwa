@@ -814,3 +814,10 @@
 
 .member-list-row .status-copy { flex:1; min-width:0; }
 .member-list-row .status-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.memory-overview { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 0; font-size:13px; }
+.memory-modal { width:min(720px,calc(100vw - 36px)); }
+.memory-modal .memory-item p { overflow-wrap:anywhere; }
+
+.memory-modal .modal-top { position:sticky; top:-25px; z-index:1; background:var(--paper); padding-block:10px; }
+@media(max-width:600px) { .memory-modal .modal-top { top:-20px; } }
