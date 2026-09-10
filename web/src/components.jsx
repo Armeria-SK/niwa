@@ -40,22 +40,33 @@ export function EmptyState({ icon: Icon = InfoIcon, title, children, action }) {
   return <div className="empty-state"><Icon size={34} weight="light" /><h3>{title}</h3>{children ? <p>{children}</p> : null}{action}</div>;
 }
 
-export function AppearanceEditor({ member, onSave, onCancel }) {
-  const [version, setVersion] = useState(member.profile_version);
-  const [shape, setShape] = useState(member.shape);
-  const [motion, setMotion] = useState(member.motion || 'auto');
-  const [color, setColor] = useState(member.color);
-  const [hex, setHex] = useState(member.color.toUpperCase());
-  const valid = /^#[0-9a-f]{6}$/i.test(hex);
-  const chooseColor = next => { setColor(next); setHex(next.toUpperCase()); };
-  return <form className="appearance-editor" onSubmit={async e => { e.preventDefault(); if (valid) { const next = await onSave({ shape, color: hex, motion, profile_version: version }); if (next) setVersion(next); } }}>
-    <div className="avatar-preview"><Avatar shape={shape} color={color} motion={motion} size={88} /><div><strong>{member.name}</strong><span>あなたらしい、かたちと色。</span></div></div>
-    <fieldset><legend>かたち</legend><div className="shape-picker">{SHAPES.map(item => <button key={item.id} type="button" className={shape === item.id ? 'shape-option selected' : 'shape-option'} aria-label={item.name} aria-pressed={shape === item.id} onClick={() => setShape(item.id)}><Avatar shape={item.id} color={color} size={47} /><span>{item.name}</span></button>)}</div></fieldset>
-    <fieldset><legend>動き</legend><MotionPicker value={motion} onChange={setMotion} /></fieldset>
+export function AppearanceFields({ draft, onChange }) {
+  const { shape, motion = 'auto' } = draft;
+  const valid = /^#[0-9a-f]{6}$/i.test(draft.color);
+  const color = valid ? draft.color : '#61B8A5';
+  const chooseColor = value => onChange('color', value.toUpperCase());
+  return <div className="appearance-editor">
+    <div className="avatar-preview"><Avatar shape={shape} color={color} motion={motion} size={88} /><div><strong>{draft.name}</strong><span>あなたらしい、かたちと色。</span></div></div>
+    <fieldset><legend>かたち</legend><div className="shape-picker">{SHAPES.map(item => <button key={item.id} type="button" className={shape === item.id ? 'shape-option selected' : 'shape-option'} aria-label={item.name} aria-pressed={shape === item.id} onClick={() => onChange('shape', item.id)}><Avatar shape={item.id} color={color} size={47} /><span>{item.name}</span></button>)}</div></fieldset>
+    <fieldset><legend>動き</legend><MotionPicker value={motion} onChange={value => onChange('motion', value)} /></fieldset>
     <fieldset><legend>カラー</legend><div className="swatches">{PALETTE.map(item => <button key={item.color} type="button" title={item.name} aria-label={item.name} aria-pressed={color.toLowerCase() === item.color.toLowerCase()} className={color.toLowerCase() === item.color.toLowerCase() ? 'swatch selected' : 'swatch'} style={{ '--swatch': item.color }} onClick={() => chooseColor(item.color)}>{color.toLowerCase() === item.color.toLowerCase() ? <CheckIcon size={16} weight="bold" /> : null}</button>)}</div></fieldset>
-    <label className="field"><span>好きな色を指定</span><div className="color-custom"><input type="color" aria-label="カラーピッカー" value={color} onChange={e => chooseColor(e.target.value)} /><input aria-label="カラーコード" value={hex} maxLength={7} spellCheck="false" onChange={e => { setHex(e.target.value); if (/^#[0-9a-f]{6}$/i.test(e.target.value)) setColor(e.target.value); }} /></div>{!valid ? <small className="field-error">#と6桁の英数字で指定してください。</small> : null}</label>
+    <label className="field"><span>好きな色を指定</span><div className="color-custom"><input type="color" aria-label="カラーピッカー" value={color} onChange={e => chooseColor(e.target.value)} /><input aria-label="カラーコード" value={draft.color} maxLength={7} spellCheck="false" onChange={e => { onChange('color', e.target.value); }} /></div>{!valid ? <small className="field-error">#と6桁の英数字で指定してください。</small> : null}</label>
     <p className="field-hint">形・色・動きは、いつでも変更できます。端末で動きを減らす設定をしている場合は静止します。</p>
-    <div className="form-actions">{onCancel ? <button type="button" className="button subtle" onClick={onCancel}>キャンセル</button> : null}<button type="button" className="button subtle" onClick={() => { setShape(member.shape); setMotion(member.motion || 'auto'); chooseColor(member.color); setVersion(member.profile_version); }}>最新の内容を読み込む</button><button className="button primary" disabled={!valid}>保存</button></div>
+  </div>;
+}
+
+export function AppearanceEditor({ member, onSave, onCancel }) {
+  const [draft, setDraft] = useState(member);
+  const valid = /^#[0-9a-f]{6}$/i.test(draft.color);
+  return <form className="appearance-editor" onSubmit={async e => {
+    e.preventDefault();
+    if (valid) {
+      const version = await onSave({ shape: draft.shape, color: draft.color, motion: draft.motion || 'auto', profile_version: draft.profile_version });
+      if (version) setDraft(current => ({ ...current, profile_version: version }));
+    }
+  }}>
+    <AppearanceFields draft={draft} onChange={(key, value) => setDraft(current => ({ ...current, [key]: value }))} />
+    <div className="form-actions">{onCancel ? <button type="button" className="button subtle" onClick={onCancel}>キャンセル</button> : null}<button type="button" className="button subtle" onClick={() => setDraft(member)}>最新の内容を読み込む</button><button className="button primary" disabled={!valid}>保存</button></div>
   </form>;
 }
 

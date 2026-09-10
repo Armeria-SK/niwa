@@ -35,6 +35,7 @@ export interface Settings {
   concurrencyLimit: number | null;
   backupDays: number;
   backupTime: string;
+  backupEnabled: boolean;
 }
 export class DomainError extends Error {
   code: 'forbidden' | 'invalid' | 'not_found' | 'conflict' | 'limit';

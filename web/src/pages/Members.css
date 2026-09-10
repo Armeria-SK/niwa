@@ -1,0 +1,28 @@
+@layer responsive {
+  .member-detail { container-type: inline-size; }
+  .profile-form { max-width: 1060px; gap: 20px; }
+  .profile-layout { display: grid; gap: 24px; }
+  .profile-basics { min-width: 0; gap: 20px; }
+  .profile-basics .field-pair { gap: 14px; }
+  .profile-basics .inline-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+  .profile-basics .inline-actions .button { padding: 8px; font-size: 11px; }
+  .profile-appearance { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--paper); }
+  .profile-appearance h3 { margin-bottom: 16px; font-size: 13px; }
+  .profile-appearance .appearance-editor { gap: 18px; }
+  .profile-appearance .avatar-preview { gap: 12px; }
+  .profile-appearance .avatar-preview .bot-avatar { width: 52px !important; height: 52px !important; }
+  .profile-appearance .avatar-preview strong { font-size: 15px; overflow-wrap: anywhere; }
+  .profile-appearance .avatar-preview div span { font-size: 10px; }
+  .profile-appearance legend { margin-bottom: 8px; font-size: 12px; }
+  .profile-appearance .shape-picker { max-width: none; }
+  .profile-appearance .shape-option { padding-block: 6px; gap: 4px; }
+  .profile-appearance .shape-option .bot-avatar { width: 30px !important; height: 30px !important; }
+  .profile-appearance .swatches { gap: 12px; }
+  .profile-appearance .swatch { width: 26px; height: 26px; }
+  .profile-appearance .motion-picker { flex-wrap: wrap; }
+  .profile-appearance .motion-picker button { font-size: 10px; padding: 5px 7px; }
+  .profile-form > .form-actions { border-top: 1px solid var(--border); padding-block: 16px 8px; flex-wrap: wrap; }
+  @container (min-width: 740px) {
+    .profile-layout { grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
+  }
+}

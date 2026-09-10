@@ -106,7 +106,7 @@ export function App() {
       setPaused(state.settings.paused);
       setSchedules(savedSchedules);
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
-        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, autonomous: state.settings.autonomous, ollamaUrl: modelSettings.ollamaUrl || '', rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
+        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, ollamaUrl: modelSettings.ollamaUrl || '', rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
       setReady(true);
       setLoadError('');
     } catch (error) { if (version !== refreshVersion.current) return; if (error.status === 401) { setAuthenticated(false); setReady(false); } else { setLoadError('庭を読み込めませんでした。サーバーの接続とバージョンを確認してください。'); notify(error.message); } }
@@ -186,7 +186,7 @@ export function App() {
   }
   function saveSettings(next) { return mutate(async () => {
     if (next.rules !== settings.rules) await api('/common-rules', 'PUT', { revision: next.rulesRevision, body: next.rules });
-    await api('/settings', 'PATCH', { generatedLimit: Number(next.maxMembers), concurrencyLimit: next.unlimited ? null : Number(next.concurrent), backupDays: Number(next.backupDays), backupTime: next.backupTime, autonomous: next.autonomous });
+    await api('/settings', 'PATCH', { generatedLimit: Number(next.maxMembers), concurrencyLimit: next.unlimited ? null : Number(next.concurrent), backupDays: Number(next.backupDays), backupTime: next.backupTime, backupEnabled: next.backupEnabled, autonomous: next.autonomous });
     if (next.ollamaUrl !== settings.ollamaUrl) await api('/model-settings', 'PATCH', { ollamaUrl: next.ollamaUrl || null });
     setSettings(current => ({ ...current, theme: next.theme }));
   }); }

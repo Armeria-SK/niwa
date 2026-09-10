@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Avatar, Switch, Segmented } from '../components.jsx';
+import { Switch, Segmented } from '../components.jsx';
 import { THEMES } from '../data.js';
 import { AutonomyStatus } from '../AutonomyStatus.jsx';
 import { BackupStatus } from '../BackupStatus.jsx';
 import { SubscriptionConnection } from '../SubscriptionConnection.jsx';
 import { FallbackConnection } from '../FallbackConnection.jsx';
-import { ModelRoutes } from '../ModelRoutes.jsx';
 import { ModelDefaults } from '../ModelDefaults.jsx';
 import { XConnection } from '../XConnection.jsx';
 import { CheckIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
@@ -31,7 +30,6 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
         <p className="field-hint">Botごとの変更は、メンバーのプロフィールで行えます。</p>
         <div className="form-section-label">Ollamaへの自動切替</div><label className="field"><span>Ollamaの接続先URL</span><input type="url" value={draft.ollamaUrl} onChange={e => change('ollamaUrl', e.target.value)} placeholder="http://…:11434" /></label>
         <FallbackConnection key={settings.ollamaUrl} savedUrl={settings.ollamaUrl} />
-        <ModelRoutes />
         <XConnection />
       </section> : null}
       {tab === 'activity' ? <section className="settings-section"><h2>Botたちの活動</h2><p>人数と同時に活動できる数は、別々に設定できます。</p>
@@ -41,12 +39,11 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
         <label className="field narrow-field"><span>リーダーが生成できるBotの数</span><div className="input-with-unit"><input type="number" min="1" max="100" value={draft.maxMembers} onChange={e => change('maxMembers', e.target.value)} required /><span>体</span></div><small>休眠中も含みます。リーダーは別枠です。</small></label>
         <Switch checked={draft.unlimited} onChange={value => change('unlimited', value)} label="同時実行数を制限しない" description="接続先やマシンの実行上限には従います。" />
         {!draft.unlimited ? <label className="field narrow-field"><span>同時実行数</span><div className="input-with-unit"><input type="number" min="1" max="100" value={draft.concurrent} onChange={e => change('concurrent', e.target.value)} required /><span>件</span></div></label> : null}
-        <div className="form-section-label">現在のメンバー</div><div className="settings-member-list">{members.map(member => <div key={member.id}><Avatar member={member} size={34} /><span>{member.name}</span><span className="muted">{member.status === 'sleeping' ? '休眠中' : paused ? '一時停止中' : '活動中'}</span></div>)}</div>
       </section> : null}
-      {tab === 'backup' ? <section className="settings-section"><h2>大切な記憶を残す</h2><p>設定・人格・個別記憶・会話履歴を、毎日バックアップします。</p>
-        <Switch disabled checked={true} label="毎日のバックアップ" description="本体が起動している間、定期的に保存します。" />
+      {tab === 'backup' ? <section className="settings-section"><h2>大切な記憶を残す</h2><p>設定・人格・個別記憶・会話履歴のバックアップを設定します。</p>
+        <Switch checked={draft.backupEnabled} onChange={value => change('backupEnabled', value)} label="毎日のバックアップ" description="設定を保存すると反映されます。オフにしても、保存済みのバックアップは残ります。" />
         <div className="field-pair"><label className="field"><span>実行する時刻（日本時間）</span><input type="time" value={draft.backupTime} onChange={e => change('backupTime', e.target.value)} required /></label><label className="field"><span>保存する日数</span><div className="input-with-unit"><input type="number" min="1" max="365" value={draft.backupDays} onChange={e => change('backupDays', e.target.value)} required /><span>日</span></div></label></div>
-        <BackupStatus />
+        <BackupStatus enabled={settings.backupEnabled} />
       </section> : null}
       <div className="form-actions settings-save"><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />保存しました</> : null}</span><button type="button" className="button subtle" onClick={() => { setDraft(settings); setSaved(false); }}>変更を戻す</button><button className="button primary">設定を保存</button></div>
     </form>

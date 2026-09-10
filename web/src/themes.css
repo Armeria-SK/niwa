@@ -4,6 +4,7 @@
   .app-shell[data-theme='mist'] { --canvas: #edf3f6; --paper: #f8fcff; --rail: #e2ecf2; --surface: #dfeaf1; --border: #c1d3de; --text: #293f4c; --muted: #577181; --green: #3f6e87; --green-hover: #2e566e; --selected: #d4e3ec; --danger: #a74656; }
   .app-shell[data-theme='lilac'] { --canvas: #f3eef7; --paper: #fffbff; --rail: #ece3f2; --surface: #eae0f0; --border: #d5c5e0; --text: #45384f; --muted: #776582; --green: #79538a; --green-hover: #603d70; --selected: #e5d9ed; --danger: #a44263; }
   .app-shell[data-theme='night'] { color-scheme: dark; --canvas: #18242e; --paper: #20313e; --rail: #14202a; --surface: #293e4c; --border: #385161; --text: #e1eaf0; --muted: #a6bac7; --green: #94ccb8; --green-hover: #b0dfcf; --selected: #293e4c; --danger: #f0a39a; --on-accent: #152c26; }
+  .app-shell ::selection { background: var(--green); color: var(--on-accent); }
   .theme-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
   .theme-option { position: relative; display: flex; flex-direction: column; text-align: left; gap: 8px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--paper); color: var(--text); }
   .theme-option:hover { border-color: var(--green); }

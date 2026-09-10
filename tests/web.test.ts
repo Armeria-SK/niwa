@@ -41,6 +41,19 @@ test('backup API reports incomplete storage on its first authenticated listing a
  const next=await (await f.call('/api/backups')).json();assert.equal(next.items.length,1);assert.match(next.error,/確認できない/);
 });
 
+test('backup switch API requires authentication and saves a boolean without deleting snapshots', async t => {
+  const f = await fixture(t, true);
+  assert.equal((await f.call('/api/settings', 'PATCH', { backupEnabled: false })).status, 401);
+  await f.login();
+  assert.equal((await f.call('/api/settings', 'PATCH', { backupEnabled: 'false' })).status, 400);
+  assert.equal((await f.call('/api/backups', 'POST', {})).status, 200);
+  assert.equal((await f.call('/api/settings', 'PATCH', { backupEnabled: false })).status, 200);
+  assert.equal((await (await f.call('/api/state')).json()).settings.backupEnabled, false);
+  assert.equal((await (await f.call('/api/backups')).json()).items.length, 1);
+  assert.equal((await f.call('/api/settings', 'PATCH', { backupEnabled: true })).status, 200);
+  assert.equal(f.runtime.settings(f.admin).backupEnabled, true);
+});
+
 async function fixture(t: { after: (fn: () => Promise<void>) => void }, includeBackups=false) {
   const root = mkdtempSync(join(tmpdir(), 'niwa-web-'));
   const runtime = new Runtime(root); const admin = runtime.administrator(); const leader = runtime.bootstrap(admin);

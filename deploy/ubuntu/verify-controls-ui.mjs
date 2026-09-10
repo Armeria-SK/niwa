@@ -14,7 +14,10 @@ try {
  for(const [name,viewport] of [['desktop',{width:1440,height:960}],['mobile',{width:390,height:844}]]){
   const context=await browser.newContext({viewport}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});let writes=0;page.on('request',req=>{if(['POST','PATCH','DELETE','PUT'].includes(req.method()))writes++;});
   await context.request.post(origin+'/api/login',{headers:{origin},data:{key}});await page.goto(origin+'/#conversation');await page.locator('button.thread-item').filter({hasText:room.title}).click();
-  const handling=page.locator('.composer-context');await handling.waitFor();await page.screenshot({path:`/tmp/niwa-controls-${mode}-${name}-handling-closed.png`});await handling.locator('summary').click();await page.getByRole('combobox',{name:'送信の扱い',exact:true}).selectOption('status');await handling.locator('summary').click();if(mode==='after')await handling.locator('summary').getByText('担当・進捗の確認だけ',{exact:true}).waitFor();await handling.locator('summary').click();await page.screenshot({path:`/tmp/niwa-controls-${mode}-${name}-handling-open.png`});assert.equal(writes,0);
+  if(mode==='before'){
+   const handling=page.locator('.composer-context');await handling.waitFor();await page.screenshot({path:`/tmp/niwa-controls-before-${name}-handling-closed.png`});await handling.locator('summary').click();await page.getByRole('combobox',{name:'送信の扱い',exact:true}).selectOption('status');await page.screenshot({path:`/tmp/niwa-controls-before-${name}-handling-open.png`});
+  }else assert.equal(await page.getByText('送信の扱い',{exact:true}).count(),0);
+  assert.equal(writes,0);
   await page.getByRole('link',{name:'活動',exact:true}).click();await page.locator('.activity-tabs').getByRole('button',{name:/^仕事/}).click();await page.locator('.work-thread').first().waitFor();await page.screenshot({path:`/tmp/niwa-controls-${mode}-${name}-work-closed.png`});
   if(mode==='before'){await page.locator('.work-thread').first().locator(':scope > summary').click();await page.screenshot({path:`/tmp/niwa-controls-${mode}-${name}-work-open.png`});}
   else{

@@ -43,6 +43,7 @@ import { modelRouteSchema } from '../storage/model-route-schema.ts';
 import { providerRetrySchema } from '../storage/provider-retry-schema.ts';
 import { commonRulesSchema } from '../storage/common-rules-schema.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
+import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
 import { generatedModelSchema } from '../storage/generated-model-schema.ts';
 import { ProviderLimits } from './provider-limits.ts';
@@ -92,7 +93,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -427,15 +428,15 @@ export class Runtime {
   settings(actor: Actor): Settings {
     this.#principal(actor);
     const row = this.#db.prepare('SELECT * FROM settings WHERE id = 1').get() as {
-      paused: number; generated_limit: number; concurrency_limit: number | null; backup_days: number; autonomous: number; backup_time: string;
+      paused: number; generated_limit: number; concurrency_limit: number | null; backup_days: number; autonomous: number; backup_time: string; backup_enabled: number;
     };
     return { paused: row.paused === 1, generatedLimit: row.generated_limit,
-      concurrencyLimit: row.concurrency_limit, backupDays: row.backup_days, autonomous: row.autonomous === 1, backupTime: row.backup_time };
+      concurrencyLimit: row.concurrency_limit, backupDays: row.backup_days, autonomous: row.autonomous === 1, backupTime: row.backup_time, backupEnabled: row.backup_enabled === 1 };
   }
   updateSettings(actor: Actor, patch: Partial<Settings>): Settings {
     this.#admin(actor);
     check(patch && typeof patch === 'object' && !Array.isArray(patch), 'invalid', 'Expected settings');
-    const allowed = ['paused', 'generatedLimit', 'concurrencyLimit', 'backupDays', 'autonomous', 'backupTime'];
+    const allowed = ['paused', 'generatedLimit', 'concurrencyLimit', 'backupDays', 'autonomous', 'backupTime', 'backupEnabled'];
     check(Object.keys(patch).every(key => allowed.includes(key)), 'invalid', 'Unknown setting');
     return transaction(this.#db, () => {
       const next = { ...this.settings(actor), ...patch };
@@ -444,10 +445,11 @@ export class Runtime {
       check(Number.isSafeInteger(next.generatedLimit) && next.generatedLimit >= 0, 'invalid', 'Invalid agent limit');
       check(next.concurrencyLimit === null || (Number.isSafeInteger(next.concurrencyLimit) && next.concurrencyLimit > 0),
         'invalid', 'Invalid concurrency limit');
+      check(typeof next.backupEnabled === 'boolean', 'invalid', 'Expected backup boolean');
       check(Number.isSafeInteger(next.backupDays) && next.backupDays > 0, 'invalid', 'Invalid backup days');
       check(typeof next.backupTime === 'string' && /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(next.backupTime), 'invalid', 'Invalid backup time');
-      this.#db.prepare('UPDATE settings SET paused=?, generated_limit=?, concurrency_limit=?, backup_days=?,autonomous=?,backup_time=? WHERE id=1')
-        .run(Number(next.paused), next.generatedLimit, next.concurrencyLimit, next.backupDays, Number(next.autonomous), next.backupTime);
+      this.#db.prepare('UPDATE settings SET paused=?, generated_limit=?, concurrency_limit=?, backup_days=?,autonomous=?,backup_time=?,backup_enabled=? WHERE id=1')
+        .run(Number(next.paused), next.generatedLimit, next.concurrencyLimit, next.backupDays, Number(next.autonomous), next.backupTime, Number(next.backupEnabled));
       if (!next.autonomous) this.tasks.suspendAutonomous(actor);
       if (next.paused) this.#interruptTasks();
       return next;

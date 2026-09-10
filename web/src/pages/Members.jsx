@@ -5,7 +5,7 @@ import { api } from '../api.js';
 import { SHAPES } from '../data.js';
 import { MemoryHistory } from '../MemoryHistory.jsx';
 import { useMemoryPage } from '../useMemoryPage.js';
-import { Avatar, AppearanceEditor, MotionPicker, EmptyState, IconButton, Modal, Segmented, StatusLabel } from '../components.jsx';
+import { Avatar, AppearanceFields, MotionPicker, EmptyState, IconButton, Modal, Segmented, StatusLabel } from '../components.jsx';
 import { ChatIcon, ChevronRightIcon, EditIcon, LockIcon, MemoryIcon, SearchIcon, TrashIcon, CloseIcon, CheckIcon, PlusIcon } from '../icons.jsx';
 
 export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, onDeleteMemory, onDM, paused, onAdd, maxMembers, onDelete }) {
@@ -21,11 +21,10 @@ export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, o
     <div className="page-heading"><div><span className="eyebrow">それぞれの個性を、大切に。</span><h1>メンバー</h1><p>話し方、記憶、見た目。ひとりずつ、少しずつ。</p></div><div className="member-heading-actions"><span className="quiet-count">{members.length}人の仲間</span><button className="button primary" onClick={() => setAdding(true)}><PlusIcon size={17} />メンバー追加</button></div></div>
     <div className="members-layout"><MemberScroll>{members.map(item => <button key={item.id} className={`member-list-row ${item.id === member.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)} aria-pressed={item.id === member.id}><Avatar member={item} size={64} /><span><strong>{item.name}{item.authority === 'leader' ? <span className="role-label">リーダー</span> : null}</strong><small>{item.role}</small><StatusLabel member={item} paused={paused} showDescription={false} /></span><ChevronRightIcon size={17} /></button>)}</MemberScroll>
       <section className="member-detail" aria-label={`${member.name}の詳細`}><div className="member-detail-top"><Avatar member={member} size={76} /><div><h2>{member.name}</h2><span className="muted">{member.role}</span></div><button className="button secondary" onClick={() => onDM(member.id)}><ChatIcon size={18} />個別に話す</button></div>
-        <Segmented label="メンバーの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }, { value: 'appearance', label: '見た目' }]} value={memoryFor===member.id?'memory':tab} onChange={selectTab} />
+        <Segmented label="メンバーの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }]} value={memoryFor===member.id?'memory':tab} onChange={selectTab} />
         <div className="member-detail-scroll" key={`${member.id}-${tab}`}>
         {tab === 'profile' ? <Profile key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
         {memoryFor===member.id ? <MemoryList key={member.id} member={member} onClose={closeMemory} onSave={onSaveMemory} onDelete={onDeleteMemory} /> : null}
-        {tab === 'appearance' ? <AppearanceEditor key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
         {tab === 'profile' && member.authority !== 'leader' ? <button className="button subtle" onClick={() => setDeleting(member)}>このBotを削除</button> : null}
         </div>
       </section>
@@ -38,6 +37,8 @@ export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, o
 function Profile({ member, onSave }) {
   const [draft, setDraft] = useState(member);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const validColor = /^#[0-9a-f]{6}$/i.test(draft.color);
   const [models, setModels] = useState([]); const [modelError, setModelError] = useState('');
   const key = item => `${item.provider}:${item.model}`;
   const choices = [{ ...member, supported_efforts: [member.effort] }, ...models.filter(item => key(item) !== key(member))];
@@ -49,7 +50,9 @@ function Profile({ member, onSave }) {
     } catch (error) { setModelError(error.message); }
   }
   const change = (key, value) => { setDraft(current => ({ ...current, [key]: value })); setSaved(false); };
-  return <form className="profile-form form-stack" onSubmit={async e => { e.preventDefault(); if (draft.name.trim()) { const ok = await onSave({ profile_version: draft.profile_version, name: draft.name.trim(), role: draft.role.trim(), persona: draft.persona, model: draft.model, effort: draft.effort, provider: draft.provider }); setSaved(Boolean(ok)); if (ok) setDraft(current => ({ ...current, profile_version: ok })); } }}>
+  return <form className="profile-form form-stack" onSubmit={async e => { e.preventDefault(); if (!saving && draft.name.trim() && validColor) { setSaving(true); try { const ok = await onSave({ profile_version: draft.profile_version, name: draft.name.trim(), role: draft.role.trim(), persona: draft.persona, model: draft.model, effort: draft.effort, provider: draft.provider, shape: draft.shape, color: draft.color, motion: draft.motion || 'auto' }); setSaved(Boolean(ok)); if (ok) setDraft(current => ({ ...current, profile_version: ok })); } finally { setSaving(false); } } }}>
+    <fieldset className="profile-layout" disabled={saving}>
+    <section className="profile-basics form-stack" aria-label="プロフィールとモデル">
     <div className="field-pair"><label className="field"><span>名前</span><input value={draft.name} onChange={e => change('name', e.target.value)} maxLength={20} required /></label><label className="field"><span>役割</span><input value={draft.role} onChange={e => change('role', e.target.value)} maxLength={40} /></label></div>
     <label className="field"><span>性格と話し方</span><textarea rows={5} value={draft.persona} onChange={e => change('persona', e.target.value)} /></label>
     {member.interests.some(interest=>interest.trim())?<div className="interest-block"><span className="field-label">気になっていること</span><div className="interest-tags">{member.interests.map(interest => <span key={interest}>{interest}</span>)}</div></div>:null}
@@ -57,7 +60,10 @@ function Profile({ member, onSave }) {
     <div className="field-pair"><label className="field"><span>モデル</span><select aria-label="モデル" value={key(draft)} onChange={e => { const model = choices.find(item => key(item) === e.target.value); setDraft(current => ({ ...current, provider: model.provider, model: model.model, effort: model.provider === 'ollama' ? 'native' : model.default_effort || model.supported_efforts?.[0] || member.effort })); setSaved(false); }}>{choices.map(item => <option key={key(item)} value={key(item)}>{item.model} · {item.provider === 'ollama' ? 'Ollama' : 'Codex'}</option>)}</select></label><label className="field"><span>推論の強さ</span><select aria-label="推論の強さ" value={draft.effort} disabled={draft.provider === 'ollama'} onChange={e => change('effort', e.target.value)}>{efforts.map(value => <option key={value}>{value}</option>)}</select></label></div>
     <div className="inline-actions"><button type="button" className="button subtle" onClick={() => load('ollama')}>Ollamaのモデル一覧を取得</button><button type="button" className="button subtle" onClick={() => load('openai_subscription')}>Codexのモデル一覧を取得</button></div>{modelError ? <p role="alert">{modelError}</p> : null}
     <p className="field-hint">モデルを変えても、人格と記憶は引き継ぎます。</p>
-    <div className="form-actions"><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />保存しました</> : null}</span><button type="button" className="button subtle" onClick={() => { setDraft(member); setSaved(false); }}>最新の内容を読み込む</button><button className="button primary" disabled={!draft.name.trim()}>変更を保存</button></div>
+    </section>
+    <section className="profile-appearance" aria-label="見た目"><h3>見た目</h3><AppearanceFields draft={draft} onChange={change} /></section>
+    </fieldset>
+    <div className="form-actions"><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />保存しました</> : null}</span><button type="button" className="button subtle" disabled={saving} onClick={() => { setDraft(member); setSaved(false); }}>最新の内容を読み込む</button><button className="button primary" disabled={saving || !draft.name.trim() || !validColor}>{saving ? '保存中…' : '変更を保存'}</button></div>
   </form>;
 }
 

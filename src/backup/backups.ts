@@ -125,10 +125,13 @@ export class Backups {
     }).finally(() => { this.#checking = undefined; });
   }
   async #daily(): Promise<void> {
+    if (!this.#runtime.settings(this.#runtime.administrator()).backupEnabled) return;
     const items = await this.list();
     if (this.#stopped) return;
     const now = this.clock(); const day = Math.floor((now + 9 * 3600_000) / 86400_000) * 86400_000 - 9 * 3600_000;
-    const [hour, minute] = this.#runtime.settings(this.#runtime.administrator()).backupTime.split(':').map(Number);
+    const settings = this.#runtime.settings(this.#runtime.administrator());
+    if (!settings.backupEnabled) return;
+    const [hour, minute] = settings.backupTime.split(':').map(Number);
     const due = day + hour! * 3600_000 + minute! * 60_000;
     if (now >= due && Math.max(items[0]?.created_at ?? 0, this.#lastCompletedAt) < day) await this.create();
   }

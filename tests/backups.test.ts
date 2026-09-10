@@ -122,6 +122,48 @@ test('daily backups use the saved Japan time and avoid duplicates after restarts
   } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test('daily backup opt-out persists, preserves snapshots and manual saves, and rechecks a pending tick', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-backup-enabled-'));
+  const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
+  const paths = initializeInstallation(root, installation);
+  let runtime = new Runtime(paths.state);
+  let admin = runtime.administrator();
+  const leader = runtime.bootstrap(admin);
+  let now = Date.parse('2026-09-10T04:00:00+09:00');
+  let backups = new Backups(runtime, paths, installation, () => now);
+  try {
+    assert.equal(runtime.settings(admin).backupEnabled, true);
+    assert.throws(() => runtime.updateSettings(runtime.agentSession(leader.id), { backupEnabled: false }), /Administrator/);
+    assert.throws(() => runtime.updateSettings(admin, { backupEnabled: 'false' } as never), /Expected backup boolean/);
+    await backups.tick();
+    const initial = (await backups.list())[0]!;
+    runtime.updateSettings(admin, { backupEnabled: false });
+    now += 86400_000;
+    await backups.tick();
+    assert.deepEqual((await backups.list()).map(item => item.id), [initial.id]);
+    await backups.stop(); runtime.close();
+    runtime = new Runtime(paths.state); admin = runtime.administrator();
+    backups = new Backups(runtime, paths, installation, () => now);
+    assert.equal(runtime.settings(admin).backupEnabled, false);
+    await backups.tick(); assert.equal((await backups.list()).length, 1);
+    await backups.create(); assert.equal((await backups.list()).length, 2);
+    runtime.updateSettings(admin, { backupEnabled: true });
+    await backups.tick(); assert.equal((await backups.list()).length, 2);
+    now += 86400_000;
+    const list = backups.list.bind(backups);
+    let release!: () => void; let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    backups.list = async () => { const items = await list(); started(); await new Promise<void>(resolve => { release = resolve; }); return items; };
+    const pending = backups.tick(); await reading;
+    runtime.updateSettings(admin, { backupEnabled: false }); release(); await pending;
+    backups.list = list;
+    assert.equal((await backups.list()).length, 2);
+    runtime.updateSettings(admin, { backupEnabled: true });
+    await backups.tick(); assert.equal((await backups.list()).length, 3);
+    await backups.tick(); assert.equal((await backups.list()).length, 3);
+  } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test('backup captures a consistent set of databases, excludes secrets, and compresses after writes resume', async () => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-backup-'));
   const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };

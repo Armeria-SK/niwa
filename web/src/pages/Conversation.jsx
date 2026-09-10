@@ -1,7 +1,6 @@
-import {SettingDisclosure} from '../SettingDisclosure.jsx';
 import {memberWork,presenceCounts,shortWork,workLabel} from '../work-display.js';
 import {WorkFacts} from '../WorkFacts.jsx';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useId, useRef, useState } from 'react';
 import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
 import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon } from '../icons.jsx';
 import { uid } from '../data.js';
@@ -36,21 +35,21 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
   const deletedConversation = thread.scope === 'private' && thread.members.length > 0 && thread.members.every(id => memberMap[id]?.deleted);
   const readOnly = thread.archived || deletedConversation;
   const [draft, setDraft] = useState('');
-  const [requestKind,setRequestKind]=useState('auto');
-  const [targetId,setTargetId]=useState('');
-  const target=tasks.find(task=>task.id===targetId);
-  const changingWork=requestKind==='amend'||requestKind==='cancel';
   const [replyTo, setReplyTo] = useState(null);
   const [attachments, setAttachments] = useState([]);
   const [sending, setSending] = useState(false);
   const [recipients, setRecipients] = useState([]);
   const [caret, setCaret] = useState(0);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const mentionListId = useId();
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const fileRef = useRef(null);
   const mention = draft.slice(0, caret).match(/(?:^|\s)@([^@\n]*)$/);
   const candidates = mention ? Object.values(memberMap).filter(member => !member.deleted && (thread.scope === 'shared' || thread.members.includes(member.id)) && member.name.toLowerCase().includes(mention[1].toLowerCase())) : [];
+  const activeMentionIndex = candidates.length ? mentionIndex % candidates.length : 0;
+  const activeMentionId = candidates.length ? `${mentionListId}-${candidates[activeMentionIndex].id}` : undefined;
+  useEffect(() => { if (activeMentionId) document.getElementById(activeMentionId)?.scrollIntoView({ block: 'nearest' }); }, [activeMentionId]);
   function chooseRecipient(member) {
     const start = caret - mention[1].length - 1; const replacement = `@${member.name} `;
     setDraft(draft.slice(0, start) + replacement + draft.slice(caret)); setRecipients(current => [...current.filter(item => item.id !== member.id), { id: member.id, name: member.name }]); setCaret(0);
@@ -69,11 +68,9 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
   }
   async function submit(e) {
     e?.preventDefault(); if (readOnly || sending || (!draft.trim() && !attachments.length)) return;
-    if(changingWork&&!target)return;
     setSending(true);
-    const requestContext=requestKind==='auto'?undefined:{kind:requestKind,...(changingWork?{task_id:target.id,expected_revision:target.control_revision}:{})};
-    try { if (await onSend(draft.trim(), attachments.map(({ name, size }) => ({ name, size })), replyTo ? { id: replyTo.id, author: replyTo.author } : null, changingWork?[target.member]:recipients.map(item => item.id),requestContext)) {
-      setDraft(''); setRequestKind('auto');setTargetId(''); setAttachments([]); setReplyTo(null); setRecipients([]); setCaret(0); inputRef.current?.focus();
+    try { if (await onSend(draft.trim(), attachments.map(({ name, size }) => ({ name, size })), replyTo ? { id: replyTo.id, author: replyTo.author } : null, recipients.map(item => item.id))) {
+      setDraft(''); setAttachments([]); setReplyTo(null); setRecipients([]); setCaret(0); inputRef.current?.focus();
     } } finally { setSending(false); }
   }
   return <>
@@ -95,19 +92,19 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
       {replyTo ? <div className="reply-preview"><ReplyIcon size={16} /><div><strong>{memberMap[replyTo.author]?.name || 'あなた'}に返信</strong><span>{replyTo.text}</span></div><IconButton label="返信先を解除" onClick={() => setReplyTo(null)}><CloseIcon size={16} /></IconButton></div> : null}
       {attachments.length ? <div className="attachment-previews">{attachments.map(file => <span key={file.id}><PaperclipIcon size={15} />{file.name}<IconButton label={`${file.name}を外す`} onClick={() => setAttachments(current => current.filter(item => item.id !== file.id))}><CloseIcon size={13} /></IconButton></span>)}</div> : null}
       {recipients.length ? <div className="reply-preview mention-recipients">{recipients.map(recipient => <span key={recipient.id}>依頼先：{recipient.name}<IconButton label={`${recipient.name}の指定を解除`} onClick={() => setRecipients(current => current.filter(item => item.id !== recipient.id))}><CloseIcon size={14} /></IconButton></span>)}</div> : null}
-      {candidates.length ? <div className="mention-picker" role="listbox" aria-label="依頼するBot">{candidates.map((member, index) => <button type="button" role="option" aria-selected={index === mentionIndex} key={member.id} onClick={() => chooseRecipient(member)}>{member.name}<span className="muted">{member.role}</span></button>)}</div> : null}
-      <SettingDisclosure className="composer-context" title="送信の扱い" value={({auto:'通常の返信',status:'担当・進捗の確認だけ',new:'独立した新しい依頼',amend:'既存の仕事に追加条件',cancel:'既存の仕事を取り消す'})[requestKind]}><label className="field"><span>種類</span><select disabled={readOnly || sending} aria-label="送信の扱い" value={requestKind} onChange={e=>setRequestKind(e.target.value)}><option value="auto">通常の返信</option><option value="status">担当・進捗の確認だけ</option><option value="new">独立した新しい依頼</option><option value="amend">既存の仕事に追加条件</option><option value="cancel">既存の仕事を取り消す</option></select></label>{changingWork?<label className="field"><span>対象</span><select disabled={readOnly || sending} aria-label="対象の仕事" value={targetId} onChange={e=>setTargetId(e.target.value)}><option value="">仕事を選択してください</option>{tasks.filter(t=>!['done','canceled','failed'].includes(t.status)).map(t=><option key={t.id} value={t.id}>{memberMap[t.member]?.name}：{t.title}</option>)}</select></label>:null}</SettingDisclosure>
-      <form className="composer" onSubmit={submit}><textarea disabled={readOnly || sending} ref={inputRef} aria-label="このスレッドに返信" placeholder="このスレッドに返信…（@でBotを指定）" value={draft} rows={1} onChange={e => { setDraft(e.target.value); setCaret(e.target.selectionStart); setMentionIndex(0); setRecipients(current => current.filter(item => e.target.value.includes(`@${item.name}`))); }} onKeyDown={e => {
+      {candidates.length ? <div id={mentionListId} className="mention-picker" role="listbox" aria-label="依頼するBot">{candidates.map((member, index) => <button type="button" role="option" id={`${mentionListId}-${member.id}`} tabIndex={-1} aria-selected={index === activeMentionIndex} key={member.id} onMouseDown={e => e.preventDefault()} onMouseEnter={() => setMentionIndex(index)} onClick={() => chooseRecipient(member)}>{member.name}<span className="muted">{member.role}</span></button>)}</div> : null}
+      <form className="composer" onSubmit={submit}><textarea disabled={readOnly || sending} ref={inputRef} aria-controls={candidates.length ? mentionListId : undefined} aria-activedescendant={activeMentionId} aria-describedby={candidates.length ? `${mentionListId}-hint` : undefined} onBlur={() => setCaret(0)} aria-label="このスレッドに返信" placeholder="このスレッドに返信…（@でBotを指定）" value={draft} rows={1} onChange={e => { setDraft(e.target.value); setCaret(e.target.selectionStart); setMentionIndex(0); setRecipients(current => current.filter(item => e.target.value.includes(`@${item.name}`))); }} onKeyDown={e => {
         if (e.nativeEvent.isComposing) return;
-        if (candidates.length && ['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(e.key) && !e.ctrlKey && !e.metaKey) {
-          e.preventDefault(); if (e.key === 'Escape') setCaret(0); else if (e.key === 'Enter') chooseRecipient(candidates[mentionIndex % candidates.length]);
-          else setMentionIndex((mentionIndex + (e.key === 'ArrowDown' ? 1 : candidates.length - 1)) % candidates.length); return;
+        if (candidates.length && ['ArrowDown', 'ArrowUp', 'Tab', 'Enter', 'Escape'].includes(e.key) && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault(); if (e.key === 'Escape') setCaret(0); else if (e.key === 'Enter') chooseRecipient(candidates[activeMentionIndex]);
+          else setMentionIndex((activeMentionIndex + (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey) ? candidates.length - 1 : 1)) % candidates.length); return;
         }
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
       }} />
         <input className="visually-hidden" ref={fileRef} type="file" multiple aria-label="添付ファイル" onChange={e => { const next = Array.from(e.target.files || []).map(file => ({ id: uid('file'), name: file.name, size: file.size })); setAttachments(current => [...current, ...next]); e.target.value = ''; }} />
         <IconButton label="ファイルを添付" disabled={readOnly} className="attach-button" onClick={() => fileRef.current?.click()}><PlusIcon size={23} /></IconButton><button className="button primary send-button" disabled={readOnly || sending || (!draft.trim() && !attachments.length)}>送信</button>
       </form>
+      {candidates.length ? <span className="composer-hint" id={`${mentionListId}-hint`}>Tab / ↑↓ で候補を移動 · Enter で選択 · Esc で閉じる</span> : null}
       <span className="composer-hint">{thread.scope === 'private' ? 'この会話は、あなたと相手のBotだけに表示されます。' : 'メンバー全員が読んで参加できるスレッドです。'}<span>Ctrl / ⌘ + Enter で送信</span></span>
     </div>
   </>;
