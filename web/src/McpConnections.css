@@ -1,0 +1,16 @@
+.mcp-server { margin:18px 0; padding:16px; min-width:0; border:1px solid var(--border); border-radius:10px; }
+.mcp-server legend { padding:0 6px; font-size:13px; font-weight:600; overflow-wrap:anywhere; }
+.mcp-server > .field-pair,.mcp-server > .field,.mcp-server > .inline-actions { margin-top:16px; }
+.mcp-enabled { display:flex; align-items:center; gap:8px; }
+.mcp-settings input[type=checkbox] { width:16px; height:16px; flex-shrink:0; accent-color:var(--green); }
+.mcp-settings select { font:inherit; max-width:100%; }
+.mcp-empty { border:1px dashed var(--border); border-radius:10px; padding:22px 16px; margin:16px 0; color:var(--muted); font-size:13px; }
+.mcp-tools h3 { margin:16px 0 8px; font-size:13px; font-weight:600; }
+.mcp-tool { display:flex; gap:12px; align-items:start; padding:12px 0; border-top:1px solid var(--border); }
+.mcp-tool > label { display:flex; gap:9px; flex:1; min-width:0; align-items:start; }
+.mcp-tool > label > span { min-width:0; }
+.mcp-tool strong { font-size:12px; overflow-wrap:anywhere; }
+.mcp-tool small { display:block; margin-top:5px; color:var(--muted); font-size:11px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+.mcp-tool select { flex:0 0 auto; width:auto; max-width:180px; padding:7px; border:1px solid var(--border); border-radius:6px; background:var(--paper); color:var(--text); font-size:11px; }
+.mcp-settings .saved-inline { min-height:20px; white-space:normal; }
+@media(max-width:600px) { .mcp-server { padding:12px; }.mcp-tool { flex-direction:column; gap:8px; }.mcp-tool select { margin-left:25px; max-width:calc(100% - 25px); font-size:16px; }.mcp-settings .form-actions { flex-wrap:wrap; } }

@@ -1,5 +1,6 @@
 import type {SubmissionContext} from '../runtime/conversation-work.ts';
 import {mcpScope,type McpConnector} from '../tools/mcp/client.ts';
+import {mcpUpdateSchema,mcpProbeSchema,type McpSettings} from '../tools/mcp/settings.ts';
 import {qualityReviewSchema,type QualityReview} from '../runtime/artifact-quality.ts';
 import {environmentDefinitionSchema} from '../tools/environments/registry.ts';
 import {randomUUID} from 'node:crypto';
@@ -45,7 +46,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 
 /** This server exposes administrator routes only. Model tools use the separate actor-bound API. */
 export function createApiServer(runtime: Runtime, auth: WebAuth, models = new ModelGateway(runtime), webRoot?: string, backups?: Backups,
-  workspace?: { read: WorkspaceRead; download: WorkspaceDownload }, x?: XOAuth, workareas?:WorkareaTransport, mcp?:McpConnector) {
+  workspace?: { read: WorkspaceRead; download: WorkspaceDownload }, x?: XOAuth, workareas?:WorkareaTransport, mcp?:McpConnector, mcpSettings?:McpSettings) {
   const admin = runtime.administrator();
   type Route = { method: string; path: RegExp; schema?: TSchema; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL) => unknown };
   const scoped=(area:string,input:Parameters<Runtime['workareas']['execute']>[2])=>{
@@ -53,7 +54,11 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     return runtime.workareas.execute(admin,area,input,workareas);
   };
   const routes: Route[] = [
-    {method:'GET',path:/^\/api\/mcp$/,run:()=>({available:!!mcp,tools:mcp?.tools(true).map(tool=>({name:tool.name,description:tool.description}))??[]})},
+    {method:'GET',path:/^\/api\/mcp$/,run:()=>mcpSettings?.status()??({available:!!mcp,tools:mcp?.tools(true).map(tool=>({name:tool.name,description:tool.description}))??[]})},
+    {method:'POST',path:/^\/api\/mcp\/probe$/,schema:mcpProbeSchema,run:(_m,b)=>{
+      if(!mcpSettings)throw new DomainError('conflict','MCP configuration unavailable');return mcpSettings.probe(b as {socket:string});}},
+    {method:'PUT',path:/^\/api\/mcp$/,schema:mcpUpdateSchema,run:(_m,b)=>{
+      if(!mcpSettings)throw new DomainError('conflict','MCP configuration unavailable');return mcpSettings.save(b as unknown as Parameters<McpSettings['save']>[0]);}},
     {method:'GET',path:/^\/api\/workareas\/([0-9a-f-]{36})\/executions$/,run:m=>{
       if(!workareas)throw new DomainError('conflict','Executor unavailable');return runtime.workareas.execution(admin,m[1]!,{operation:'execution_list'},workareas);}},
     {method:'POST',path:/^\/api\/workareas\/([0-9a-f-]{36})\/executions\/([0-9a-f-]{36})\/stop$/,schema:object({}),run:m=>{
@@ -222,10 +227,11 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       if (req.method === 'GET' && url.pathname === '/api/session') { send(res, 200, { authenticated: auth.authenticated(req) }); return; }
       if (!auth.authenticated(req)) { send(res, 401, { error: 'authentication_required' }); return; }
       const resource=/^\/api\/mcp\/([a-z][a-z0-9_]{0,19})\/resource$/.exec(url.pathname);
-      if(req.method==='GET'&&resource&&mcp){
+      const resourceMcp=mcpSettings?.connector??mcp;
+      if(req.method==='GET'&&resource&&resourceMcp){
         const room=url.searchParams.get('room')??'';
         if(!runtime.rooms(admin).some(r=>r.id===room))throw new DomainError('not_found','Conversation not found');
-        const file=await mcp.resource(resource[1]!,url.searchParams.get('uri')??'',mcpScope(runtime.workareas.epoch(),room));
+        const file=await resourceMcp.resource(resource[1]!,url.searchParams.get('uri')??'',mcpScope(runtime.workareas.epoch(),room));
         res.writeHead(200,{'Content-Type':file.mime,'Content-Disposition':'attachment','Content-Length':file.data.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(file.data);return;
       }
       if (req.method === 'POST' && url.pathname === '/api/logout') { auth.logout(req, res); send(res, 200, { ok: true }); return; }

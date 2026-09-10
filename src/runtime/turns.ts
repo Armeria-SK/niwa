@@ -48,6 +48,8 @@ export class TurnRunner {
     const startedAt = Date.now();
     let historyRevision: number | undefined;
     while (runtime.tasks.active(actor, lease) && !signal?.aborted) {
+      // Keep the tool list and dispatch on one connector. Retired connectors reject new calls.
+      const external={...this.#external};
       agent = runtime.agents(actor).find(item => item.id === lease.task.agent_id)!;
       const context = runtime.context(actor, lease.task.room_id);
       const rules = runtime.commonRules(actor);
@@ -104,12 +106,12 @@ export class TurnRunner {
         const repeating = observations.repeated_reads>=3 || recentCalls.length === 3 && recentCalls.every(calls => calls === recentCalls[0]);
         const RULES = `${BASE_RULES}\n管理者が設定した共通の指示（権限と停止・予算の制約は引き続き守る）: ${rules.body}${repeating ? '\n同じ引数のツール操作が3回続いています。直近の結果を確認し、進展がなければ別の方法へ変更してください。' : ''}`;
         const sharedRoom = runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared';
-        let configuredTools = turnTools(agent.role === 'leader', this.#external, sharedRoom, workState.autonomous || workState.task.conversation_reply === 1, !!this.#runtime.workareas.settings(actor).enabled).filter(tool=>tool.name!=='task_child_disposition'||workState.child_results.length>0);
+        let configuredTools = turnTools(agent.role === 'leader', external, sharedRoom, workState.autonomous || workState.task.conversation_reply === 1, !!this.#runtime.workareas.settings(actor).enabled).filter(tool=>tool.name!=='task_child_disposition'||workState.child_results.length>0);
         if(promptVersion==='structured-v5')configuredTools=scopedPromptTools(configuredTools,workState, runtime.initiatives.enabled());
         const settings = runtime.settings(actor);
         const environment = { conversation: sharedRoom ? 'shared' : 'private', model_supports_tools: adapter.capabilities.supports_tool_calls,
           configured_tools_here: configuredTools.map(tool => tool.name),
-          configured_tools_in_shared_room: turnTools(agent.role === 'leader', this.#external, true).map(tool => tool.name),
+          configured_tools_in_shared_room: turnTools(agent.role === 'leader', external, true).map(tool => tool.name),
           autonomous_enabled: settings.autonomous, activity_paused: settings.paused, this_task_autonomous: workState.autonomous,
           omitted_room_messages:roomMessages.length-selectedMessages.length, archived_tool_messages:history.length-(promptVersion==='structured-v5'?retainCompleteExchanges(history,8).length:history.length),
           execution_boundary: (this.#runtime.workareas.settings(actor).enabled&&this.#external.workareas?'個人・案件の作業場所が有効。workspace_selectで現在のBot・会話に許可された作業場所を選ぶと、私的会話でもその領域の書込・隔離実行が可能。未選択時の境界は次の通り。':'')+'program_runは共有会話の隔離コンテナ内。共有workspaceのみ書込可能、外部通信・ホスト操作不可。workspace_writeとweb_downloadも共有会話限定。自律活動は設定・停止・予算・予定・権限に従う。' };
@@ -219,7 +221,7 @@ export class TurnRunner {
         const phase=/^(program_|environment_|execution_)/.test(call.name)?'execute':/(read|navigate|snapshot|search|list)$/.test(call.name)?'read':'tool';
         runtime.tasks.activity(actor,lease,`${step.step}:${index}`,phase);
         const output = mixedWait ? { error: 'task_delegate, ask_user, task_rest and conversation_send must be called alone.' }
-          : await executeAsyncTurnTool(runtime, actor, lease, call, `${step.step}:${index}`, signal, this.#external);
+          : await executeAsyncTurnTool(runtime, actor, lease, call, `${step.step}:${index}`, signal, external);
         if(runtime.tasks.active(actor,lease)&&runtime.isContextCurrent(actor,context.revision)){if(freshStep)runtime.tasks.observe(actor,lease,`${step.step}:${index}`,call.name,call.arguments,output);runtime.tasks.activity(actor,lease,`${step.step}:${index}`,phase,output.error?'failed':'completed');}
         history.push({ role: 'tool', name: call.name, tool_call_id: call.tool_call_id, content: JSON.stringify(output) });
         if (!runtime.tasks.active(actor, lease)) return;

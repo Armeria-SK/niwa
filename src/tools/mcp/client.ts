@@ -7,7 +7,7 @@ import {assertDirectoryPath} from '../../config/paths.ts';
 import type {JsonObject,ModelToolDefinition} from '../../contracts/model.ts';
 
 const name=Type.String({pattern:'^[a-z][a-z0-9_]{0,47}$'});
-export const mcpServerSchema=Type.Object({id:Type.String({pattern:'^[a-z][a-z0-9_]{0,19}$'}),socket:Type.String({pattern:'^/',maxLength:100}),scope:Type.Union([Type.Literal('shared'),Type.Literal('conversation')]),tools:Type.Array(Type.Object({name,readOnly:Type.Boolean()},{additionalProperties:false}),{minItems:1,maxItems:32})},{additionalProperties:false});
+export const mcpServerSchema=Type.Object({id:Type.String({pattern:'^[a-z][a-z0-9_]{0,19}$'}),socket:Type.String({pattern:'^/',maxLength:100}),scope:Type.Union([Type.Literal('shared'),Type.Literal('conversation')]),enabled:Type.Optional(Type.Boolean()),tools:Type.Array(Type.Object({name,readOnly:Type.Boolean()},{additionalProperties:false}),{maxItems:32})},{additionalProperties:false});
 export type McpServerConfig=Static<typeof mcpServerSchema>;
 export interface McpContext {scope:string;execution_id?:string;allow_start?:boolean;deadline:number}
 interface Registered {definition:ModelToolDefinition;server:McpServerConfig;remote:string;readOnly:boolean;replay:boolean;signature:string}
@@ -42,43 +42,59 @@ export class McpConnector{
  private registered=new Map<string,Registered>();
  private servers=new Map<string,McpServerConfig>();
  private downloads=0;
+ private retired=false;
  private constructor(){}
- static async connect(configs:McpServerConfig[]){
-  const connector=new McpConnector();
-  for(const config of configs){
-   if(connector.servers.has(config.id))throw Error('Duplicate MCP server');
-   const hello=await mcpRpc(config.socket,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'niwa',version:'0.1.0'}});
+ static async discover(socket:string,signal?:AbortSignal){
+   const hello=await mcpRpc(socket,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'niwa',version:'0.1.0'}},signal);
    if(hello.protocolVersion!=='2025-06-18')throw Error('Unsupported MCP protocol');
-   await mcpRpc(config.socket,'notifications/initialized');
-   const replay=(hello.capabilities as JsonObject|undefined)?.experimental as JsonObject|undefined;
-   if(config.scope==='conversation'&&replay?.niwaContextV1!==true)throw Error('MCP server must isolate conversation context');
-   const list=await mcpRpc(config.socket,'tools/list');
+   await mcpRpc(socket,'notifications/initialized',{},signal);
+   const capabilities=(hello.capabilities as JsonObject|undefined)?.experimental as JsonObject|undefined;
+   const list=await mcpRpc(socket,'tools/list',{},signal);
    if(!Array.isArray(list.tools)||list.tools.length>128||list.nextCursor)throw Error('Unsupported MCP tool listing');
-   for(const allowed of config.tools){
-    const matches=list.tools.filter((t:JsonObject)=>t.name===allowed.name);if(matches.length!==1)throw Error('Configured MCP tool missing');
-    const tool=matches[0] as JsonObject;
+   const names=new Set<string>();
+   const tools=list.tools.map((value:unknown)=>{
+    const tool=value as JsonObject|null;
+    if(!tool||typeof tool.name!=='string'||!/^[a-z][a-z0-9_]{0,47}$/.test(tool.name)||names.has(tool.name))throw Error('Invalid MCP tool name');
+    names.add(tool.name);
     if(!tool.inputSchema||typeof tool.inputSchema!=='object'||Array.isArray(tool.inputSchema)||(tool.inputSchema as JsonObject).type!=='object')throw Error('Invalid MCP tool schema');
+    return {name:tool.name,description:(typeof tool.description==='string'&&tool.description.trim()?tool.description:tool.name).slice(0,6000),inputSchema:tool.inputSchema as JsonObject,readOnlyHint:(tool.annotations as JsonObject|undefined)?.readOnlyHint===true};
+   });
+   return {conversationIsolation:capabilities?.niwaContextV1===true,tools};
+ }
+ static async connect(configs:McpServerConfig[],signal?:AbortSignal){
+  const connector=new McpConnector();
+  const ids=new Set<string>();
+  for(const config of configs){
+   if(ids.has(config.id))throw Error('Duplicate MCP server');ids.add(config.id);
+   if(config.enabled===false)continue;
+   if(!config.tools.length)throw Error('No MCP tools selected');
+   const list=await McpConnector.discover(config.socket,signal);
+   if(config.scope==='conversation'&&!list.conversationIsolation)throw Error('MCP server must isolate conversation context');
+   for(const allowed of config.tools){
+    const tool=list.tools.find(t=>t.name===allowed.name);if(!tool)throw Error('Configured MCP tool missing');
     const exposed=`mcp_${config.id}_${allowed.name}`;
     if(exposed.length>64)throw Error('MCP tool name exceeds model limit');
     if(connector.registered.has(exposed))throw Error('Duplicate MCP tool name');
-    const definition={name:exposed,description:(typeof tool.description==='string'&&tool.description.trim()?tool.description:allowed.name).slice(0,6000),input_schema:tool.inputSchema as JsonObject};
-    connector.registered.set(exposed,{definition,server:config,remote:allowed.name,readOnly:allowed.readOnly,replay:replay?.niwaContextV1===true,signature:createHash('sha256').update(JSON.stringify([config,definition])).digest('hex')});
+    const definition={name:exposed,description:tool.description,input_schema:tool.inputSchema};
+    connector.registered.set(exposed,{definition,server:config,remote:allowed.name,readOnly:allowed.readOnly,replay:list.conversationIsolation,signature:createHash('sha256').update(JSON.stringify([config,definition])).digest('hex')});
    }
    connector.servers.set(config.id,config);
   }
   return connector;
  }
- tools(sharedRoom:boolean){return [...this.registered.values()].filter(t=>sharedRoom||t.server.scope==='conversation').map(t=>t.definition);}
- tool(name:string,sharedRoom:boolean){const tool=this.registered.get(name);return tool&&(sharedRoom||tool.server.scope==='conversation')?tool:undefined;}
+ retire(){this.retired=true;}
+ connections(){return this.retired?[]:[...this.servers.keys()];}
+ tools(sharedRoom:boolean){return this.retired?[]:[...this.registered.values()].filter(t=>sharedRoom||t.server.scope==='conversation').map(t=>t.definition);}
+ tool(name:string,sharedRoom:boolean){const tool=this.registered.get(name);return !this.retired&&tool&&(sharedRoom||tool.server.scope==='conversation')?tool:undefined;}
  async call(name:string,args:JsonObject,context:McpContext,signal?:AbortSignal):Promise<JsonObject>{
-  const tool=this.registered.get(name);if(!tool)throw Error('MCP tool unavailable');
+  const tool=this.registered.get(name);if(this.retired||!tool)throw Error('MCP tool unavailable');
   if(!tool.readOnly&&context.allow_start===false&&!tool.replay)return {error:'outcome_unknown'};
   const result=await mcpRpc(tool.server.socket,'tools/call',{name:tool.remote,arguments:args,_meta:{'org.niwa/context':context}},signal);
   if(!Array.isArray(result.content)||result.content.length>100)throw Error('Invalid MCP result');
   return {...result,untrusted:true};
  }
  async resource(server:string,uri:string,scope:string){
-  const config=this.servers.get(server);if(!config||uri.length>2048||this.downloads>=2)throw Error('MCP resource unavailable');
+  const config=this.servers.get(server);if(this.retired||!config||uri.length>2048||this.downloads>=2)throw Error('MCP resource unavailable');
   this.downloads++;
   try{
    const result=await mcpRpc(config.socket,'resources/read',{uri,_meta:{'org.niwa/context':{scope,deadline:Date.now()+30000}}},undefined,90*1024*1024);

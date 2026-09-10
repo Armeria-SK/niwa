@@ -1,5 +1,5 @@
 import {workareaClient} from '../tools/workareas/client.ts';
-import {McpConnector} from '../tools/mcp/client.ts';
+import {McpSettings} from '../tools/mcp/settings.ts';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
@@ -38,11 +38,13 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
   let xPosts: XPostLog | undefined;
   let xAuth: XOAuth | undefined;
   let forms: FormLog | undefined;
+  let mcpSettings:McpSettings|undefined;
   let executionPoll:ReturnType<typeof setInterval>|undefined;let executionPending=Promise.resolve();
   let workareaCleanup:ReturnType<typeof setInterval>|undefined;
   let cleanupPending=Promise.resolve();
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {
+    mcpSettings?.close();
     clearInterval(workareaCleanup);clearInterval(executionPoll);await executionPending;await cleanupPending;
     const closed = server ? new Promise<void>(done => { server!.close(() => done()); server!.closeAllConnections(); }) : Promise.resolve();
     xAuth?.close(); await scheduler?.stop(); await forms?.close(); await xPosts?.close(); await subscription?.close(); await backups?.stop(); await closed;
@@ -50,9 +52,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
   })();
   try {
     const config = readInstallation(root);
-    const mcp=config.mcpServers?.length?await McpConnector.connect(config.mcpServers).catch(()=>{
-      process.stderr.write('MCP connection unavailable; configured MCP tools are disabled until the next service start.\n');return undefined;
-    }):undefined;
+    mcpSettings=await McpSettings.open(root,servers=>{config.mcpServers=servers;});
     const auth = new WebAuth(config.origin, adminKey(paths));
     runtime = new Runtime(paths.state);
     const admin = runtime.administrator(); runtime.bootstrap(admin); runtime.tasks.recover(admin); runtime.tasks.recoverProviderWaits(admin,true);
@@ -78,7 +78,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
         return {data: file.data as string, revision: file.revision as string};
       } : undefined)));
     scheduler = new Scheduler(runtime, new TurnRunner(runtime, resolve ?? models.resolve, {
-      ...(mcp?{mcp}:{}),
+      get mcp(){return mcpSettings!.connector;},
       ...(xApi && xPosts ? { x: { api: xApi, posts: xPosts } } : {}),
       ...(forms ? { forms } : {}),
       ...(workareas ? {workareas}:{}),
@@ -93,7 +93,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     },{promptVersion:config.promptVersion??'legacy-v4'}));
     server = createApiServer(runtime, auth, models, fileURLToPath(new URL('../client/', import.meta.url)), backups,
       config.workspaceExecutorUid ? { read: configuredWorkspaceReader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid),
-        download: configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid) } : undefined, xAuth, workareas, mcp);
+        download: configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid) } : undefined, xAuth, workareas, undefined, mcpSettings);
     await new Promise<void>((done, reject) => {
       server!.once('error', reject);
       server!.listen(portOverride ?? config.port, '127.0.0.1', () => { server!.removeListener('error', reject); done(); });
