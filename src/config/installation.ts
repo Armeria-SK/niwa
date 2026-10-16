@@ -5,7 +5,7 @@ import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { assertDirectoryPath, initializeProduct, productPaths, type ProductPaths } from './paths.ts';
 import { WebAuth } from '../web/auth.ts';
-import {mcpServerSchema,type McpServerConfig} from '../tools/mcp/client.ts';
+import {mcpServerSchema,mcpEndpointValid,type McpServerConfig} from '../tools/mcp/client.ts';
 import {DomainError} from '../domain/types.ts';
 
 const schema = Type.Object({ version: Type.Literal(1), origin: Type.String({ maxLength: 2048 }),
@@ -22,7 +22,7 @@ function validate(value: unknown, source = 'config/niwa.json'): Installation {
   const config = value as Installation;
   const ids=new Set<string>();
   for(const server of config.mcpServers??[]){
-    if(ids.has(server.id)||new Set(server.tools.map(t=>t.name)).size!==server.tools.length||server.tools.some(t=>`mcp_${server.id}_${t.name}`.length>64)||(server.enabled!==false&&!server.tools.length))throw new Error('Invalid MCP configuration');
+    if(ids.has(server.id)||!mcpEndpointValid(server)||new Set(server.tools.map(t=>t.name)).size!==server.tools.length||server.tools.some(t=>`mcp_${server.id}_${t.name}`.length>64)||(server.enabled!==false&&!server.tools.length))throw new Error('Invalid MCP configuration');
     ids.add(server.id);
   }
   if(config.workareasEnabled&&!config.programExecutorUid)throw new Error('Workareas require the program executor');

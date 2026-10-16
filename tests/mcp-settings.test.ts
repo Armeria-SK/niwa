@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,chmodSync,rmSync,statSync,readFileSync,writeFileSync,symlinkSync,linkSync,unlinkSync} from 'node:fs';
+import {mkdtempSync,chmodSync,rmSync,statSync,readFileSync,writeFileSync,symlinkSync,linkSync,unlinkSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer,request} from 'node:http';
@@ -205,4 +205,50 @@ test('invalid MCP state is named correctly and status keeps the last good state'
  writeFileSync(join(f.root,'config/niwa.json'),'{broken');
  status=f.manager.status();assert.equal(status.revision,good.revision);assert.match(String(status.error),/config\/niwa\.json/);
  assert.throws(()=>readInstallation(f.root),/Invalid config\/niwa\.json/);
+});
+async function remoteMini(t:{after:(fn:()=>Promise<void>)=>void},accepted:string[]){
+ const auths:(string|undefined)[]=[];
+ const server=createServer(async(req,res)=>{
+  const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));const msg=JSON.parse(Buffer.concat(chunks).toString());auths.push(req.headers.authorization);
+  if(!accepted.includes(req.headers.authorization??'')){res.writeHead(401);res.end();return;}
+  if(msg.id===undefined){res.writeHead(202);res.end();return;}
+  const result=msg.method==='initialize'?{protocolVersion:'2025-06-18',capabilities:{experimental:{niwaContextV1:true}}}:msg.method==='tools/list'?{tools:[{name:'read',description:'remote',inputSchema:{type:'object'}}]}:{};
+  res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:msg.id,result}));
+ });server.listen(0,'127.0.0.1');await once(server,'listening');
+ t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
+ return {url:`http://127.0.0.1:${(server.address() as {port:number}).port}/mcp`,auths};
+}
+test('MCP remote tokens are kept only in secrets, never returned, reused per origin and deleted with the server',async t=>{
+ const f=await fixture(t),first='artificial-token-first-0123456789',second='artificial-token-second-987654321';
+ const remote=await remoteMini(t,[`Bearer ${first}`,`Bearer ${second}`]),elsewhere=await remoteMini(t,[]);
+ const config={id:'remote',url:remote.url,scope:'conversation' as const,tools:[{name:'read',readOnly:true}]},secret=join(f.root,'secrets/mcp-token-remote');
+ assert.equal((await f.manager.save({revision:f.manager.status().revision,servers:[config]})).ok,false);assert.ok(!existsSync(secret));
+ const saved=await f.manager.save({revision:f.manager.status().revision,servers:[config],tokens:[{id:'remote',value:first}]});
+ assert.equal(saved.ok,true);assert.doesNotMatch(JSON.stringify(saved),new RegExp(first));
+ for(const file of ['state/mcp.json','config/niwa.json'])assert.doesNotMatch(readFileSync(join(f.root,file),'utf8'),new RegExp(first));
+ assert.equal(readFileSync(secret,'utf8'),first);assert.equal(statSync(secret).mode&0o777,0o600);
+ let status=f.manager.status();assert.deepEqual(status.tokens,['remote']);assert.deepEqual(status.connected,['remote']);assert.doesNotMatch(JSON.stringify(status),new RegExp(first));
+ // Unchanged settings keep the stored token; a new value replaces it.
+ assert.equal((await f.manager.save({revision:status.revision,servers:[{...config,enabled:false}]})).ok,true);assert.equal(readFileSync(secret,'utf8'),first);
+ assert.equal((await f.manager.save({revision:f.manager.status().revision,servers:[config],tokens:[{id:'remote',value:second}]})).ok,true);assert.equal(readFileSync(secret,'utf8'),second);
+ // Probing reuses the stored token only for the saved origin.
+ assert.equal((await f.manager.probe({url:remote.url,id:'remote'})).ok,true);assert.equal(remote.auths.at(-1),`Bearer ${second}`);
+ const probe=await f.manager.probe({url:elsewhere.url,id:'remote'});assert.equal(probe.ok,false);assert.ok('message' in probe&&/HTTP 401/.test(probe.message));assert.deepEqual(elsewhere.auths,[undefined]);
+ const reopened=await McpSettings.open(f.root);
+ try{assert.deepEqual(reopened.status().connected,['remote']);assert.equal(reopened.status().applied,true);}finally{reopened.close();}
+ // Moving the server to another origin without a new token drops the stored one.
+ status=f.manager.status();
+ assert.equal((await f.manager.save({revision:status.revision,servers:[{...config,url:elsewhere.url,enabled:false}]})).ok,true);assert.ok(!existsSync(secret));
+ assert.equal((await f.manager.save({revision:f.manager.status().revision,servers:[config],tokens:[{id:'remote',value:first}]})).ok,true);assert.ok(existsSync(secret));
+ assert.equal((await f.manager.save({revision:f.manager.status().revision,servers:[]})).ok,true);assert.ok(!existsSync(secret));assert.deepEqual(f.manager.status().tokens,[]);
+});
+test('MCP settings reject ambiguous or unsafe remote addresses and misplaced tokens',async t=>{
+ const f=await fixture(t),revision=f.manager.status().revision,base={id:'remote',scope:'conversation' as const,tools:[{name:'read',readOnly:true}]};
+ for(const servers of [[{...base,url:'https://example.com/mcp',socket:f.socket}],[base],[{...base,url:'http://example.com/mcp'}],[{...base,url:'https://user:pw@example.com/mcp'}],[{...base,url:'https://example.com/mcp#a'}]])
+  await assert.rejects(f.manager.save({revision,servers}),/Choose unique IDs and tools|Invalid MCP settings/);
+ await assert.rejects(f.manager.save({revision,servers:[f.config],tokens:[{id:'local',value:'artificial-token'}]}),/Tokens apply only to URL connections/);
+ await assert.rejects(f.manager.save({revision,servers:[{...base,url:'https://example.com/mcp'}],tokens:[{id:'remote',value:'bad\ntoken'}]}),/Invalid MCP settings/);
+ await assert.rejects(f.manager.probe({url:'http://example.com/mcp'}),/Invalid MCP address/);await assert.rejects(f.manager.probe({}),/Invalid MCP address/);
+ writeFileSync(join(f.root,'state/mcp.json'),JSON.stringify({version:1,servers:[{...base,url:'https://example.com/mcp',socket:f.socket}]}),{mode:0o600});
+ assert.throws(()=>readInstallation(f.root),/Invalid MCP configuration/);
 });

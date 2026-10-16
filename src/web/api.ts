@@ -62,7 +62,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
   const routes: Route[] = [
     {method:'GET',path:/^\/api\/mcp$/,run:()=>mcpSettings?.status()??({available:!!mcp,tools:mcp?.tools(true).map(tool=>({name:tool.name,description:tool.description}))??[]})},
     {method:'POST',path:/^\/api\/mcp\/probe$/,schema:mcpProbeSchema,run:(_m,b)=>{
-      if(!mcpSettings)throw new DomainError('conflict','MCP configuration unavailable');return mcpSettings.probe(b as {socket:string});}},
+      if(!mcpSettings)throw new DomainError('conflict','MCP configuration unavailable');return mcpSettings.probe(b as Parameters<McpSettings['probe']>[0]);}},
     {method:'PUT',path:/^\/api\/mcp$/,schema:mcpUpdateSchema,run:(_m,b)=>{
       if(!mcpSettings)throw new DomainError('conflict','MCP configuration unavailable');return mcpSettings.save(b as unknown as Parameters<McpSettings['save']>[0]);}},
     {method:'GET',path:/^\/api\/workareas\/([0-9a-f-]{36})\/executions$/,run:m=>{
