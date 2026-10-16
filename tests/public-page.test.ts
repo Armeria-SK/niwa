@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,copyFileSync,rmSync,writeFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
-import { publicIPv4, readPublicPage, readPublicResource, type PageNetwork } from '../src/tools/web/public-page.ts';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { networkFor, publicIPv4, readPublicPage, readPublicResource, type PageNetwork } from '../src/tools/web/public-page.ts';
 
 test('public page destination policy rejects private, reserved and alternate IP forms', async () => {
   for (const ip of ['0.1.2.3', '10.0.0.1', '100.64.0.1', '127.1.2.3', '169.254.169.254', '172.16.0.1',
@@ -116,4 +118,53 @@ test('the browser resource module works without the host-only HTML parser in its
   const result=await isolated.readPublicResource('https://example.com/',undefined,transport);
   assert.equal(Buffer.from(result.body_base64,'base64').toString(),raw);
  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('pages are decoded by Content-Type charset or an early meta declaration, falling back to UTF-8',async()=>{
+ const text='日本語の文章',sjis=Buffer.from('93fa967b','hex'),eucjp=Buffer.from('c6fccbdc','hex');
+ const read=async(contentType:string,body:Buffer)=>(await readPublicPage('https://example.com/',undefined,{resolve:async()=>['8.8.8.8'],get:async()=>({status:200,contentType,body})})).text;
+ assert.equal(await read('text/plain; charset=Shift_JIS',sjis),'日本');
+ assert.equal(await read('text/html',Buffer.concat([Buffer.from('<html><head><meta charset="Shift_JIS"></head><body><p>'),sjis,Buffer.from('</p>')])),'日本');
+ assert.equal(await read('text/html',Buffer.concat([Buffer.from('<meta http-equiv="Content-Type" content="text/html; charset=EUC-JP"><p>'),eucjp,Buffer.from('</p>')])),'日本');
+ assert.equal(await read('text/plain; charset=nonsense-label',Buffer.from(text)),text);
+ assert.equal(await read('text/html; charset=utf-8',Buffer.from(`<meta charset=shift_jis><p>${text}</p>`)),text);
+});
+
+test('code blocks keep their line breaks and indentation while prose whitespace still collapses',async()=>{
+ const html='<main><p>前置き   の\n文章</p><pre><code>def f():\n    return 1\n\n\nprint(f())\n</code></pre><p>次の   段落</p><ul><li>a <a href="/x">リ<pre>  q\n  r</pre>ンク</a></li></ul></main>';
+ const page=await readPublicPage('https://example.com/',undefined,{resolve:async()=>['8.8.8.8'],get:async()=>({status:200,contentType:'text/html',body:html})});
+ assert.match(page.text,/前置き の 文章\n/);
+ assert.ok(page.text.includes('def f():\n    return 1\n\n\nprint(f())\n\n次の 段落'),page.text);
+ assert.ok(page.links!.every(link=>!/[]/.test(link.text)));
+});
+
+test('large text pages are truncated at the byte cap with paging offsets instead of rejected',async()=>{
+ const server=createServer((request,response)=>{response.writeHead(200,{'content-type':'text/plain; charset=utf-8'});response.write('a'.repeat(200*1024));response.end('あ'.repeat(100*1024));});
+ server.listen(0,'127.0.0.1');await once(server,'listening');
+ try{
+  const port=(server.address() as {port:number}).port,transport=networkFor('text/plain',/^text\/plain/,256*1024,true);
+  const response=await transport.get(new URL(`http://page.example.com:${port}/`),'127.0.0.1',AbortSignal.timeout(5000));
+  assert.equal(response.truncated,true);assert.equal(Buffer.byteLength(response.body),256*1024);
+  await assert.rejects(networkFor('text/plain',/^text\/plain/,256*1024).get(new URL(`http://page.example.com:${port}/`),'127.0.0.1',AbortSignal.timeout(5000)),/exceeds/);
+  const page=await readPublicPage('https://example.com/',undefined,{resolve:async()=>['8.8.8.8'],get:async()=>response});
+  assert.equal(page.truncated,true);assert.equal(page.source_truncated,true);assert.equal(page.next_offset,20_000);assert.ok(!page.text.includes('�'));
+ }finally{server.closeAllConnections();server.close();}
+});
+
+test('offset continues a long page and the last page reports no further offset',async()=>{
+ const body=Array.from({length:30_000},(_,i)=>String.fromCharCode(97+i%26)).join('');
+ const transport:PageNetwork={resolve:async()=>['8.8.8.8'],get:async()=>({status:200,contentType:'text/plain',body})};
+ const first=await readPublicPage('https://example.com/',undefined,transport);
+ assert.equal(first.text,body.slice(0,20_000));assert.equal(first.truncated,true);assert.equal(first.next_offset,20_000);
+ const second=await readPublicPage('https://example.com/',undefined,transport,first.next_offset);
+ assert.equal(second.text,body.slice(20_000));assert.equal(second.truncated,false);assert.equal(second.offset,20_000);assert.equal('next_offset' in second,false);
+ assert.equal((await readPublicPage('https://example.com/',undefined,transport,99_999)).text,'');
+});
+
+test('feeds, XML, Markdown and CSV are readable as plain text',async()=>{
+ for(const contentType of ['application/rss+xml; charset=utf-8','application/atom+xml','application/xml','text/xml','text/markdown','text/csv']){
+  const body='<rss><item>1</item></rss>',transport:PageNetwork={resolve:async()=>['8.8.8.8'],get:async()=>({status:200,contentType,body})};
+  assert.equal((await readPublicPage('https://example.com/',undefined,transport)).text,body,contentType);
+ }
+ await assert.rejects(readPublicPage('https://example.com/',undefined,{resolve:async()=>['8.8.8.8'],get:async()=>({status:200,contentType:'application/zip',body:'x'})}));
 });

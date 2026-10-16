@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { normalizeForm, submitPublicForm, type FormResponse } from '../src/tools/browser/form.ts';
+import { PassThrough } from 'node:stream';
+import type { IncomingMessage } from 'node:http';
+import { formResponse, normalizeForm, submitPublicForm, type FormResponse } from '../src/tools/browser/form.ts';
 import { FormLog } from '../src/tools/browser/form-log.ts';
 import { Runtime } from '../src/runtime/runtime.ts';
 import { executeAsyncTurnTool } from '../src/runtime/turn-tools.ts';
@@ -110,4 +112,19 @@ test('multipart upload sends only approved shared bytes, rejects changed files a
     assert.deepEqual(await executeAsyncTurnTool(runtime, actor, lease, call, 'upload', undefined, external), response);
     assert.equal(sends, 2);
   } finally { await log.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('form redirects report only a validated Location without following it, and responses honour their charset', async () => {
+  const fake = (statusCode: number, headers: Record<string, string>, body?: Buffer) => {
+    const response = Object.assign(new PassThrough(), { statusCode, headers }); if (body) response.end(body); return response as unknown as IncomingMessage;
+  };
+  const run = (response: IncomingMessage) => new Promise<FormResponse>((resolve, reject) => formResponse(new URL(form.url), resolve, reject)(response));
+  const redirect = await run(fake(303, { location: '/done?id=1#frag' }));
+  assert.equal(redirect.status, 303); assert.equal(redirect.text, ''); assert.equal(redirect.location, 'https://forms.example.com/done?id=1');
+  assert.equal((await run(fake(302, { location: 'https://other.example.org/x' }))).location, 'https://other.example.org/x');
+  for (const location of ['http://localhost/admin', 'file:///etc/passwd', 'https://user:pw@example.com/', 'http://10.0.0.1:8080/'])
+    assert.equal('location' in await run(fake(302, { location })), false, location);
+  assert.equal('location' in await run(fake(302, {})), false);
+  const decoded = await run(fake(200, { 'content-type': 'text/html; charset=Shift_JIS' }, Buffer.from('93fa967b', 'hex')));
+  assert.equal(decoded.text, '日本');
 });

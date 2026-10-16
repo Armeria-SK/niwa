@@ -4,6 +4,7 @@ import { CdpPipe, type CdpEvent } from './cdp.ts';
 import { BrowserRequests, BrowserRequestBlocked } from './requests.ts';
 import { normalizeForm, type PublicForm } from './form.ts';
 import { pendingRequest } from './pending-request.ts';
+import { BrowserActionError, isActionCode } from './action-error.ts';
 
 export interface BrowserSnapshot {
   revision: string; url: string; title: string; text: string;
@@ -132,7 +133,11 @@ export class BrowserPage {
   }
   async #evaluate(expression: string, signal?: AbortSignal) {
     const result = await this.#send('Runtime.evaluate', { expression, contextId: this.#world, returnByValue: true, timeout: 5_000 }, signal);
-    if (result.exceptionDetails) throw new Error('Browser document changed; obtain a new snapshot');
+    if (result.exceptionDetails) {
+      // Our scripts throw `niwa:<code>`; page-controlled text never selects anything outside the fixed code list.
+      const code = /niwa:([a-z_]+)/.exec(String((result.exceptionDetails as { exception?: { description?: unknown } }).exception?.description ?? ''))?.[1];
+      throw new BrowserActionError(isActionCode(code) ? code : 'document_changed');
+    }
     return (result.result as { value: unknown }).value;
   }
   async snapshot(signal?: AbortSignal): Promise<BrowserSnapshot> {
@@ -161,11 +166,16 @@ export class BrowserPage {
         const text = root.nodeType === 9 ? root.body?.innerText : Array.from(root.children).filter(visible).map(el => el.innerText || '').join('\\n');
         texts.push((text || '').slice(0,20000));
       }
-      const elements = nodes.map((el, ref) => ({ref, role: el.getAttribute('role') || el.tagName.toLowerCase(),
-        name: (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || '').slice(0,200),
-        ...(el.tagName === 'A' ? {href: el.href} : {})}));
+      // Oversized hrefs (data: exports, huge query strings) are omitted so one link cannot invalidate the whole observation.
+      const elements = nodes.map((el, ref) => {
+        const long = el.tagName === 'A' && typeof el.href === 'string' && el.href.length > 4096;
+        const name = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || '').slice(0,200);
+        return {ref, role: (el.getAttribute('role') || el.tagName.toLowerCase()).slice(0,100),
+          name: long ? name.slice(0,170) + ' [link too long]' : name,
+          ...(el.tagName === 'A' && !long ? {href: el.href} : {})};
+      });
       globalThis.niwaObservation = {nodes, elements, revision: ${JSON.stringify(revision)}};
-      return {url: location.href, title: document.title.slice(0,500), text: texts.join('\\n').slice(0,20000), elements};
+      return {url: location.href.slice(0,4096), title: document.title.slice(0,500), text: texts.join('\\n').slice(0,20000), elements};
     })()`, signal) as Omit<BrowserSnapshot, 'revision' | 'blocked' | 'untrusted'>;
     this.#revision = revision;
     return { ...value, revision, blocked: [...this.#blocked], untrusted: true,
@@ -174,7 +184,7 @@ export class BrowserPage {
   /** Only the trusted runtime supplies a journaled JSON response after exact approval. */
   async completeRequest(input: {request_id: string; form: PublicForm; status: number; text: string}, signal?: AbortSignal) {
     const pending = this.#pending.get(input.request_id);
-    if (this.#busy || this.#closed || !pending || JSON.stringify(normalizeForm(input.form)) !== JSON.stringify(pending.form)) throw new Error('Pending request changed or expired');
+    if (this.#busy || this.#closed || !pending || JSON.stringify(normalizeForm(input.form)) !== JSON.stringify(pending.form)) throw new BrowserActionError('request_expired');
     if (input.status < 200 || input.status > 299 || input.text.length > 20000) throw new Error('Unsupported script response');
     JSON.parse(input.text);
     this.#busy = true; this.#pending.delete(input.request_id);
@@ -188,7 +198,7 @@ export class BrowserPage {
   /** Follow an observed hyperlink without running click handlers. Other controls require a classified action. */
   async follow(revision: string, ref: number, signal?: AbortSignal) {
     if (this.#busy || this.#closed || !revision || revision !== this.#revision || !Number.isSafeInteger(ref) || ref < 0 || ref >= 100)
-      throw new Error('Browser reference is stale or invalid');
+      throw new BrowserActionError('stale_reference');
     this.#busy = true;
     let href: unknown;
     try {
@@ -199,32 +209,32 @@ export class BrowserPage {
         return el.href;
       })()`, signal);
     } finally { this.#busy = false; }
-    if (typeof href !== 'string') throw new Error('Browser reference changed or action requires approval');
+    if (typeof href !== 'string') throw new BrowserActionError('link_changed');
     return this.navigate(href, signal);
   }
   /** Local DOM interaction only: the parent broker remains closed for every network request. */
   async interact(input: BrowserInteraction, signal?: AbortSignal): Promise<BrowserSnapshot> {
-    if (this.#busy || this.#closed || input.revision !== this.#revision) throw new Error('Browser reference is stale');
+    if (this.#busy || this.#closed || input.revision !== this.#revision) throw new BrowserActionError('stale_reference');
     this.#busy = true;
     const cancellation = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]);
     try {
       await this.#evaluate(`(() => {
         const action = ${JSON.stringify(input)}, s = globalThis.niwaObservation;
-        if (s?.revision !== action.revision) throw Error('Stale observation');
+        if (s?.revision !== action.revision) throw Error('niwa:stale_reference');
         if (action.action === 'scroll') { window.scrollBy(0, action.pixels); return; }
         const el = s.nodes[action.ref];
-        if (!el?.isConnected || !el.getClientRects().length || el.matches(':disabled')) throw Error('Unavailable control');
+        if (!el?.isConnected || !el.getClientRects().length || el.matches(':disabled')) throw Error('niwa:unavailable_control');
         if (action.action === 'fill') {
           if (!['INPUT','TEXTAREA','SELECT'].includes(el.tagName) ||
               (el.tagName === 'INPUT' && !['text','search','email','url','tel','number','date'].includes(el.type)) || el.readOnly || el.multiple)
-            throw Error('Credentials and files require a dedicated operation');
+            throw Error('niwa:dedicated_operation');
           el.value = action.value;
-          if (el.value !== action.value) throw Error('Invalid field value');
+          if (el.value !== action.value) throw Error('niwa:invalid_value');
           el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
         } else {
           if (!(el.matches('button[type="button"],input[type="button"],input[type="checkbox"],input[type="radio"],[role="button"]')) ||
               el.tagName === 'A' || el.type === 'submit' || el.type === 'image' || el.type === 'file')
-            throw Error('Use follow or prepare an approved form');
+            throw Error('niwa:use_follow_or_form');
           HTMLElement.prototype.click.call(el);
         }
       })()`, cancellation);
@@ -241,34 +251,35 @@ export class BrowserPage {
   async prepareForm(revision: string, ref: number, fields: { ref: number; value: string }[], signal?: AbortSignal): Promise<BrowserSnapshot> {
     if (this.#busy || this.#closed || revision !== this.#revision || !revision || !Number.isInteger(ref) || ref < 0 || ref >= 100 ||
       !Array.isArray(fields) || fields.length > 32 || new Set(fields.map(field => field.ref)).size !== fields.length ||
-      fields.some(field => !Number.isInteger(field.ref) || field.ref < 0 || field.ref >= 100 || typeof field.value !== 'string' || field.value.length > 1000)) throw new Error('Invalid form reference');
+      fields.some(field => !Number.isInteger(field.ref) || field.ref < 0 || field.ref >= 100 || typeof field.value !== 'string' || field.value.length > 1000)) throw new BrowserActionError('stale_reference');
     this.#busy = true;
     const cancellation = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]);
     try {
       const value = await this.#evaluate(`(() => {
         const s = globalThis.niwaObservation, submitter = s?.nodes[${ref}];
-        if (s?.revision !== ${JSON.stringify(revision)} || !submitter?.isConnected || submitter.type !== 'submit' || !submitter.form || submitter.disabled) throw Error('Select a current submit button');
+        if (s?.revision !== ${JSON.stringify(revision)} || !submitter?.isConnected || submitter.type !== 'submit' || !submitter.form || submitter.disabled) throw Error('niwa:select_submit');
         const form = submitter.form, changes = ${JSON.stringify(fields)}, saved = [];
-        if (Array.from(form.elements).some(el => el.name && !el.matches(':disabled') && ['file','password'].includes(el.type))) throw Error('Credentials and uploads require a dedicated connector');
+        if (Array.from(form.elements).some(el => el.name && !el.matches(':disabled') && ['file','password'].includes(el.type))) throw Error('niwa:form_unsupported');
         const method = (submitter.getAttribute('formmethod') || form.method || 'get').toUpperCase();
         const enctype = submitter.getAttribute('formenctype') || form.enctype;
-        if (!['GET','POST'].includes(method) || enctype !== 'application/x-www-form-urlencoded') throw Error('Unsupported form encoding');
+        if (!['GET','POST'].includes(method) || enctype !== 'application/x-www-form-urlencoded') throw Error('niwa:form_unsupported');
         const url = new URL(submitter.getAttribute('formaction') || form.getAttribute('action') || form.ownerDocument.URL, form.ownerDocument.baseURI).href;
         try {
           for (const change of changes) {
             const el = s.nodes[change.ref];
             if (!el?.isConnected || el.form !== form || !el.name || el.matches(':disabled') ||
-                !['INPUT','TEXTAREA','SELECT'].includes(el.tagName) || ['file','password','checkbox','radio','submit','button','reset','image'].includes(el.type) || el.multiple) throw Error('Unsupported field');
+                !['INPUT','TEXTAREA','SELECT'].includes(el.tagName) || ['file','password','checkbox','radio','submit','button','reset','image'].includes(el.type) || el.multiple) throw Error('niwa:form_unsupported');
             saved.push([el, el.value]); el.value = change.value;
-            if (el.value !== change.value) throw Error('Invalid field value');
+            if (el.value !== change.value) throw Error('niwa:invalid_value');
           }
           const fields = Array.from(new FormData(form, submitter), ([name,value]) => {
-            if (typeof value !== 'string') throw Error('File fields are unsupported'); return {name,value};
+            if (typeof value !== 'string') throw Error('niwa:form_unsupported'); return {name,value};
           });
           return {url,method,fields};
         } finally { for (const [el,value] of saved) el.value = value; }
       })()`, cancellation);
-      const form = normalizeForm(value);
+      let form: PublicForm;
+      try { form = normalizeForm(value); } catch { throw new BrowserActionError('form_unsupported'); }
       return { ...await this.#snapshot(cancellation), form };
     } finally { this.#busy = false; }
   }
