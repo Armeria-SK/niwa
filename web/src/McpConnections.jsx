@@ -1,15 +1,12 @@
 import {useEffect,useRef,useState} from 'react';
 import {api} from './api.js';
 import {origin,savedToken,tokenCleared,probeToken,tokenChanges} from './mcp-tokens.js';
+import {loginEntry,loggedIn,loginNote} from './mcp-login.js';
 import './McpConnections.css';
 
 const draftServer=(server,tokens)=>({...server,auth:server.oauth?'oauth':server.url!==undefined&&tokens?.includes(server.id)?'token':'none',savedOAuth:server.oauth===true,clientId:'',clientSecret:'',needClient:false,loginLink:'',transport:server.url!==undefined?'url':'socket',socket:server.socket??'',url:server.url??'',savedId:server.id,savedUrl:server.url,token:'',clearToken:false,enabled:server.enabled!==false,key:crypto.randomUUID(),catalog:server.tools.map(tool=>({...tool,selected:true,description:'保存済みのツール'})),checked:false});
 const address=server=>server.transport==='url'?/^https?:\/\/./.test(server.url):server.socket.startsWith('/');
-const hrefOf=value=>{try{return new URL(value).href;}catch{return '';}};
 const idValid=id=>/^[a-z][a-z0-9_]{0,19}$/.test(id);
-const loginEntry=(server,status)=>status?.oauth?.find(o=>o.id===server.id);
-/** Signed in for exactly this URL; the server applies the same rule when it uses the login. */
-const loggedIn=(server,status)=>{const entry=loginEntry(server,status);return !!entry&&entry.status==='signed_in'&&entry.resource===hrefOf(server.url);};
 const reasonText=reason=>reason==='login_required'?'ログインが必要です（「ログイン」を押してください）':reason;
 export function McpConnections(){
  const [status,setStatus]=useState(null),[servers,setServers]=useState([]),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[reload,setReload]=useState(0),[dirty,setDirty]=useState(()=>new Set()),[removed,setRemoved]=useState(false);
@@ -32,6 +29,10 @@ export function McpConnections(){
   const timer=setInterval(()=>{if(Date.now()>stop){clearInterval(timer);return;}api('/mcp').then(value=>setStatus(current=>current&&value.revision===current.revision?value:current)).catch(()=>{});},2000);
   return()=>clearInterval(timer);
  },[waiting]);
+ useEffect(()=>{
+  // The client secret is only needed while the login is open; it leaves the form once the login is complete.
+  if(servers.some(s=>s.clientSecret&&loggedIn(s,status)))setServers(current=>current.map(s=>s.clientSecret&&loggedIn(s,status)?{...s,clientSecret:''}:s));
+ },[status,servers]);
  const touch=key=>setDirty(current=>new Set(current).add(key));
  function change(key,patch){setServers(current=>current.map(s=>s.key===key?{...s,...patch}:s));touch(key);setNotice('');}
  const local=(key,patch)=>setServers(current=>current.map(s=>s.key===key?{...s,...patch}:s));
@@ -43,7 +44,7 @@ export function McpConnections(){
   const manual=server.needClient&&server.clientId?{client_id:server.clientId,...(server.clientSecret?{client_secret:server.clientSecret}:{})}:{};
   const result=await api('/mcp/oauth/start','POST',{id:server.id,url:server.url,...manual});
   if(!result.ok){if(result.code==='client_registration_required')local(server.key,{needClient:true});throw Error(result.message);}
-  local(server.key,{loginLink:result.url,clientSecret:''});
+  local(server.key,{loginLink:result.url});
   window.open(result.url,'_blank','noopener,noreferrer');
   const value=await api('/mcp');setStatus(current=>current&&value.revision===current.revision?value:current);
   setNotice('別のタブで開いたログイン画面で手続きを完了してください。完了するとここに「ログイン済み」と表示されます。');
@@ -95,7 +96,7 @@ export function McpConnections(){
      <label className="field"><span>認証トークン</span><input type="password" autoComplete="off" value={server.token} maxLength={4096} disabled={tokenCleared(server,status)} onChange={e=>change(server.key,{token:e.target.value})} placeholder={savedToken(server,status)?'設定済み（変更するときだけ入力）':'未設定'} spellCheck={false}/><small>トークンだけを入力すると「Bearer」を付けて送ります。保存したトークンは画面に表示しません。{server.savedUrl&&server.url&&origin(server.url)!==origin(server.savedUrl)&&status?.tokens?.includes(server.savedId)?' 接続先が変わったため、保存済みのトークンは使いません。':''}</small></label>
      {savedToken(server,status)?<label className="mcp-enabled"><input type="checkbox" checked={server.clearToken} onChange={e=>change(server.key,{clearToken:e.target.checked,token:''})}/>保存済みのトークンを削除する</label>:null}</>:null}
      {server.auth==='oauth'?<>
-      <p className="field-hint mcp-oauth-state" role="status">{loggedIn(server,status)?'ログイン済み':loginEntry(server,status)?.pending?'ログインを待っています':'ログインが必要です'}{(loginEntry(server,status)?.resource&&loginEntry(server,status).resource!==hrefOf(server.url))||(server.savedOAuth&&server.id!==server.savedId)?' · URLか接続IDを変えたため、もう一度ログインが必要です。':''}</p>
+      <p className="field-hint mcp-oauth-state" role="status">{loggedIn(server,status)?'ログイン済み':loginEntry(server,status)?.pending?'ログインを待っています':'ログインが必要です'}{!loggedIn(server,status)&&loginNote(server,status)?` · ${loginNote(server,status)}`:''}</p>
       {server.needClient?<><p className="field-hint">この接続先は、クライアントの自動登録に対応していません。提供元の開発者向けの画面でアプリを登録し、発行されたクライアントIDを入力してください。登録するリダイレクトURL（コールバックURL）は <code>{location.origin}/api/mcp/oauth/callback</code> です。</p>
        <div className="field-pair"><label className="field"><span>クライアントID</span><input value={server.clientId} maxLength={512} autoComplete="off" spellCheck={false} onChange={e=>local(server.key,{clientId:e.target.value.trim()})}/></label>
        <label className="field"><span>クライアントシークレット（任意）</span><input type="password" value={server.clientSecret} maxLength={4096} autoComplete="off" spellCheck={false} onChange={e=>local(server.key,{clientSecret:e.target.value.trim()})}/></label></div></>:null}

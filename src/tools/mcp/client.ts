@@ -14,9 +14,9 @@ export type McpServerConfig=Static<typeof mcpServerSchema>;
 /** Static credential for a remote server: printable ASCII header value, kept in secrets/ only. */
 export const mcpTokenSchema=Type.String({pattern:'^[\\x21-\\x7e](?:[\\x20-\\x7e]{0,4094}[\\x21-\\x7e])?$',maxLength:4096});
 /** OAuth access/refresh tokens: printable ASCII without quote or backslash, so a JSON-encoded copy still matches the plain value when redacting. */
-export const mcpOAuthTokenSchema=Type.String({pattern:'^[\\x21\\x23-\\x5b\\x5d-\\x7e]{8,4096}$',maxLength:4096});
+export const mcpOAuthTokenSchema=Type.String({pattern:'^[\\x21\\x23-\\x5b\\x5d-\\x7e]{8,16384}$',maxLength:16384});
 /** Supplies Bearer tokens for one OAuth connection; `refresh` renews after the server rejected `rejected`, `reject` marks the login unusable. */
-export interface McpOAuthSource{access(signal?:AbortSignal):Promise<string>;refresh(rejected:string,signal?:AbortSignal):Promise<string>;reject(token:string):void;secrets():string[]}
+export interface McpOAuthSource{access(signal?:AbortSignal):Promise<string>;refresh(rejected:string,signal?:AbortSignal):Promise<string>;reject(token:string):boolean;secrets():string[]}
 export type McpEndpoint={socket:string}|{url:string;token?:string|undefined;oauth?:McpOAuthSource|undefined};
 /** The login is missing, expired for good or refused: the administrator has to sign in again. */
 export class McpLoginRequired extends Error{constructor(){super('login_required');}}
@@ -43,7 +43,7 @@ export function mcpEndpoint(config:{socket?:string|undefined;url?:string|undefin
  if(config.oauth){if(!oauth)throw Error('MCP OAuth unavailable');return {url:config.url,oauth};}
  return {url:config.url,token};
 }
-const noOAuth:McpOAuthSource={access:()=>Promise.reject(new McpLoginRequired()),refresh:()=>Promise.reject(new McpLoginRequired()),reject:()=>{},secrets:()=>[]};
+const noOAuth:McpOAuthSource={access:()=>Promise.reject(new McpLoginRequired()),refresh:()=>Promise.reject(new McpLoginRequired()),reject:()=>false,secrets:()=>[]};
 export const mcpEndpointValid=(config:{socket?:string|undefined;url?:string|undefined;oauth?:true|undefined})=>{try{mcpEndpoint(config,undefined,noOAuth);return true;}catch{return false;}};
 export interface McpContext {scope:string;execution_id?:string;allow_start?:boolean;deadline:number}
 interface Registered {definition:ModelToolDefinition;server:McpServerConfig;remote:string;readOnly:boolean;approval:boolean;replay:boolean;signature:string}
@@ -101,12 +101,15 @@ export async function mcpRpc(target:string|McpEndpoint,method:string,params:Json
  const oauth=typeof target==='string'||!('url' in target)?undefined:target.oauth;
  if(!oauth)return mcpPost(target,undefined,method,params,signal,maxBytes,session,reinitialize);
  let bearer=await oauth.access(signal);
- try{return await mcpPost(target,bearer,method,params,signal,maxBytes,session,reinitialize);}
- catch(error){
-  if(!(error instanceof McpHttpError&&error.status===401))throw error;
-  const rejected=bearer;bearer=await oauth.refresh(rejected,signal);
+ for(let attempt=0;;attempt++){
   try{return await mcpPost(target,bearer,method,params,signal,maxBytes,session,reinitialize);}
-  catch(again){if(again instanceof McpHttpError&&again.status===401){oauth.reject(bearer);throw new McpLoginRequired();}throw again;}
+  catch(error){
+   if(!(error instanceof McpHttpError&&error.status===401))throw error;
+   if(attempt===0){bearer=await oauth.refresh(bearer,signal);continue;}
+   // Refused again with a renewed token: the login is over, unless it was replaced while this request ran. Then the new login gets one try.
+   if(oauth.reject(bearer)||attempt>=2)throw new McpLoginRequired();
+   bearer=await oauth.access(signal);
+  }
  }
 }
 async function mcpPost(target:string|McpEndpoint,bearer:string|undefined,method:string,params:JsonObject,signal:AbortSignal|undefined,maxBytes:number,session:McpSession|undefined,reinitialize:boolean):Promise<JsonObject>{

@@ -154,6 +154,7 @@ export class McpSettings{
    }
    this.connector.retire();this.connector=next;this.watch(next);this.adopt(servers);this.saved(servers);
    for(const key of dropped.keys())this.oauth.forget(key);
+   this.oauth.forgetExcept(new Set(logins.keys()));
    return {ok:true,...this.status(),busy:false};
   }finally{this.busy=false;}
  }
