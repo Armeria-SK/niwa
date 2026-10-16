@@ -64,13 +64,15 @@ export class Tasks {
     if(sharedRequest)root=ancestor(this.get(actor,String(sharedRequest.id)));
     return root.id;
   }
-  create(actor: Actor, agentId: string, roomId: string, prompt: string, deadlineAt = NO_DEADLINE): Task {
+  /** external is appended after deadline parsing, so untrusted text attached by a schedule cannot shorten the deadline. */
+  create(actor: Actor, agentId: string, roomId: string, prompt: string, deadlineAt = NO_DEADLINE, external = ''): Task {
     const principal = this.#access.principal(actor);
     this.#access.room(actor, roomId);
     check(this.#access.participant(agentId, roomId), 'forbidden', 'Recipient cannot access this conversation');
     text(prompt);
     const duration=prompt.match(/(?:制限時間|タイムボックス|期限)[:：\s]*(\d{1,4})\s*(秒|分|時間)/);
     if(duration) {const seconds=Number(duration[1])*({秒:1,分:60,時間:3600}[duration[2]!] ?? 0);if(seconds>0 && seconds<=86400) deadlineAt=Math.min(deadlineAt,Date.now()+seconds*1000);}
+    if(external) prompt=text(prompt+external);
     check(Number.isSafeInteger(deadlineAt) && deadlineAt > Date.now(), 'invalid', 'Task deadline must be in the future');
     return transaction(this.#db, () => {
       if (principal.kind === 'agent') check(!this.#paused(), 'forbidden', 'Runtime is paused');

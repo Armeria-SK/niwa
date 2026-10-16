@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './api.js';
+import { providerLabel as providerName } from './providers.js';
 
-const providerName = provider => provider === 'ollama' ? 'Ollama' : 'Codex';
 export function ModelRoutes() {
   const [routes, setRoutes] = useState([]);
   const [error, setError] = useState('');

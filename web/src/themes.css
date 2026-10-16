@@ -28,6 +28,8 @@
   .app-shell:not([data-theme='garden']) .button.subtle { background: transparent; }
   .app-shell:not([data-theme='garden']) .button.danger { background: var(--danger); color: var(--canvas); }
   .app-shell:not([data-theme='garden']) :is(.reply-preview, .attachment-previews > span, .delete-preview, button.file-link:hover) { background: var(--surface); color: var(--text); border-color: var(--border); }
+  .app-shell:not([data-theme='garden']) .attachment-errors { background: var(--surface); border: 1px solid var(--danger); }
+  .app-shell:not([data-theme='garden']) .attachment-errors p { color: var(--danger); }
   .app-shell:not([data-theme='garden']) .toast { background: var(--text); color: var(--canvas); border-color: var(--border); }
   .app-shell:not([data-theme='garden']) .toast .icon-button { color: var(--canvas); }
   .app-shell:not([data-theme='garden']) .button.primary:disabled { opacity: .5; }

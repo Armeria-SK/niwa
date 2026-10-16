@@ -6,8 +6,11 @@ export interface Agent {
   status: AgentStatus;
   model: string;
   reasoning: string;
-  provider: 'openai_subscription' | 'ollama';
+  provider: ModelProvider;
 }
+export const MODEL_PROVIDERS = ['openai_subscription', 'local_llm', 'openai_compatible', 'anthropic'] as const;
+export type ModelProvider = typeof MODEL_PROVIDERS[number];
+export type FallbackProvider = Exclude<ModelProvider, 'openai_subscription'>;
 export interface Room {
   id: string;
   title: string;

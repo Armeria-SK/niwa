@@ -6,14 +6,14 @@ import { setTimeout } from 'node:timers/promises';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { OllamaAdapter, type OllamaSlot } from '../src/providers/ollama/adapter.ts';
-import { OllamaLimiter } from '../src/providers/ollama/limiter.ts';
+import { LocalLlmAdapter, type LocalLlmSlot } from '../src/providers/local-llm/adapter.ts';
+import { LocalLlmLimiter } from '../src/providers/local-llm/limiter.ts';
 import { ModelGateway } from '../src/providers/gateway.ts';
 import { Runtime } from '../src/runtime/runtime.ts';
 import { collectModelEvents } from '../src/providers/shared/adapter.ts';
 import { request } from './fixtures/model.ts';
 
-async function slowOllama(handler: (index: number) => Promise<void>) {
+async function slowLocalLlm(handler: (index: number) => Promise<void>) {
   let started = 0; let inflight = 0; let peak = 0;
   const server = createServer(async (req, res) => {
     for await (const _chunk of req) { /* drain */ }
@@ -29,14 +29,14 @@ async function slowOllama(handler: (index: number) => Promise<void>) {
 }
 const { reasoning_effort: _unused, ...localRequest } = request;
 const local = { id: 'artificial', tools: false, thinking: false };
-const slotsOf = (limiter: OllamaLimiter, limit: number): OllamaSlot => signal => limiter.acquire('endpoint', () => limit, signal);
+const slotsOf = (limiter: LocalLlmLimiter, limit: number): LocalLlmSlot => signal => limiter.acquire('endpoint', () => limit, signal);
 const textOf = (events: readonly { type: string; text?: string }[]) => events.filter(e => e.type === 'text_delta').map(e => e.text).join('');
 
-test('Ollama requests on one endpoint run one at a time and the HTTP timeout excludes the queue wait', async () => {
-  const server = await slowOllama(async index => { await setTimeout(index === 1 ? 250 : 40); });
+test('Local LLM requests on one endpoint run one at a time and the HTTP timeout excludes the queue wait', async () => {
+  const server = await slowLocalLlm(async index => { await setTimeout(index === 1 ? 250 : 40); });
   try {
-    const slot = slotsOf(new OllamaLimiter(), 1);
-    const run = (timeout_ms: number) => collectModelEvents(new OllamaAdapter(server.url, local, fetch, slot).run(localRequest, { timeout_ms }));
+    const slot = slotsOf(new LocalLlmLimiter(), 1);
+    const run = (timeout_ms: number) => collectModelEvents(new LocalLlmAdapter(server.url, local, fetch, slot).run(localRequest, { timeout_ms }));
     // The second request waits ~250ms for the first, longer than its own 150ms timeout, yet still completes.
     const first = run(1000); await setTimeout(20);
     const second = run(150); await setTimeout(20);
@@ -48,22 +48,22 @@ test('Ollama requests on one endpoint run one at a time and the HTTP timeout exc
   } finally { await server.close(); }
 });
 
-test('Ollama limit of two allows two requests in flight', async () => {
-  const server = await slowOllama(async () => { await setTimeout(60); });
+test('Local LLM limit of two allows two requests in flight', async () => {
+  const server = await slowLocalLlm(async () => { await setTimeout(60); });
   try {
-    const slot = slotsOf(new OllamaLimiter(), 2);
-    const events = await Promise.all([1, 2, 3].map(() => collectModelEvents(new OllamaAdapter(server.url, local, fetch, slot).run(localRequest, { timeout_ms: 2000 }))));
+    const slot = slotsOf(new LocalLlmLimiter(), 2);
+    const events = await Promise.all([1, 2, 3].map(() => collectModelEvents(new LocalLlmAdapter(server.url, local, fetch, slot).run(localRequest, { timeout_ms: 2000 }))));
     assert.ok(events.every(e => e.at(-1)?.type === 'completed'));
     assert.equal(server.stats().peak, 2);
   } finally { await server.close(); }
 });
 
-test('an aborted Ollama waiter leaves the queue without consuming a slot', async () => {
+test('an aborted Local LLM waiter leaves the queue without consuming a slot', async () => {
   let open!: () => void; const gate = new Promise<void>(resolve => { open = resolve; });
-  const server = await slowOllama(async index => { if (index === 1) await gate; });
+  const server = await slowLocalLlm(async index => { if (index === 1) await gate; });
   try {
-    const slot = slotsOf(new OllamaLimiter(), 1);
-    const adapter = () => new OllamaAdapter(server.url, local, fetch, slot);
+    const slot = slotsOf(new LocalLlmLimiter(), 1);
+    const adapter = () => new LocalLlmAdapter(server.url, local, fetch, slot);
     const first = collectModelEvents(adapter().run(localRequest, { timeout_ms: 2000 }));
     await setTimeout(30);
     const abort = new AbortController();
@@ -81,14 +81,14 @@ test('an aborted Ollama waiter leaves the queue without consuming a slot', async
   } finally { open(); await server.close(); }
 });
 
-test('Ollama queue wait is bounded and a timed-out waiter sends nothing', async () => {
+test('Local LLM queue wait is bounded and a timed-out waiter sends nothing', async () => {
   let open!: () => void; const gate = new Promise<void>(resolve => { open = resolve; });
-  const server = await slowOllama(async () => { await gate; });
+  const server = await slowLocalLlm(async () => { await gate; });
   try {
-    const slot = slotsOf(new OllamaLimiter(), 1);
-    const first = collectModelEvents(new OllamaAdapter(server.url, local, fetch, slot).run(localRequest, { timeout_ms: 2000 }));
+    const slot = slotsOf(new LocalLlmLimiter(), 1);
+    const first = collectModelEvents(new LocalLlmAdapter(server.url, local, fetch, slot).run(localRequest, { timeout_ms: 2000 }));
     await setTimeout(30);
-    const waiting = await collectModelEvents(new OllamaAdapter(server.url, local, fetch, slot, 50).run(localRequest, { timeout_ms: 2000 }));
+    const waiting = await collectModelEvents(new LocalLlmAdapter(server.url, local, fetch, slot, 50).run(localRequest, { timeout_ms: 2000 }));
     const failure = waiting.find(e => e.type === 'failed');
     assert.equal(failure?.error.code, 'TIMED_OUT'); assert.equal(failure?.error.provider_request_sent, false);
     open(); assert.equal((await first).at(-1)?.type, 'completed');
@@ -97,13 +97,13 @@ test('Ollama queue wait is bounded and a timed-out waiter sends nothing', async 
 });
 
 test('the gateway reads the saved parallel limit and the setting persists', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'niwa-ollama-parallel-')); let runtime = new Runtime(root);
+  const root = mkdtempSync(join(tmpdir(), 'niwa-local-llm-parallel-')); let runtime = new Runtime(root);
   let admin = runtime.administrator(); const leader = runtime.bootstrap(admin);
   try {
     assert.equal(runtime.modelSettings(admin).maxParallel, 1);
-    for (const bad of [0, 9, 1.5, NaN]) assert.throws(() => runtime.configureOllamaParallel(admin, bad));
-    runtime.configureOllama(admin, 'http://127.0.0.1:11434');
-    runtime.setAgentModel(admin, leader.id, 'ollama', 'artificial', 'native');
+    for (const bad of [0, 9, 1.5, NaN]) assert.throws(() => runtime.configureLocalLlmParallel(admin, bad));
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434');
+    runtime.setAgentModel(admin, leader.id, 'local_llm', 'artificial', 'native');
     let inflight = 0; let peak = 0;
     const gateway = new ModelGateway(runtime, async url => {
       if (new URL(String(url)).pathname === '/api/show') return Response.json({ capabilities: ['completion'] });
@@ -116,7 +116,7 @@ test('the gateway reads the saved parallel limit and the setting persists', asyn
       return peak;
     };
     assert.equal(await burst(), 1);
-    runtime.configureOllamaParallel(admin, 2);
+    runtime.configureLocalLlmParallel(admin, 2);
     assert.equal(await burst(), 2);
     runtime.close(); runtime = new Runtime(root); admin = runtime.administrator();
     assert.equal(runtime.modelSettings(admin).maxParallel, 2);

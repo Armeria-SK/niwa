@@ -5,18 +5,27 @@ import type {
   ModelEvent,
   ModelEventLimitDimension,
   ModelFailureCode,
+  ModelOutputDelta,
   ModelRequest,
   ReasoningEffort,
 } from '../../contracts/index.ts';
-import { modelEventSchema } from '../../contracts/index.ts';
+import { modelEventSchema, modelOutputDeltaSchema } from '../../contracts/index.ts';
 import { Value } from '@sinclair/typebox/value';
 import { redactSecrets, redactDisplaySnapshot, sanitizeModelInputText } from '../../shared/redaction.ts';
 
-export type { ModelEvent } from '../../contracts/index.ts';
+export type { ModelEvent, ModelOutputDelta } from '../../contracts/index.ts';
 
 export interface ModelRunOptions {
   timeout_ms: number;
   signal?: AbortSignal;
+  /** Optional display-only partial output. Non-streaming adapters ignore it; results still come only from events. */
+  on_delta?: (delta: ModelOutputDelta) => void;
+}
+
+/** Deliver a partial output safely; a malformed delta or observer failure never alters the model call. */
+export function emitModelDelta(options: Pick<ModelRunOptions, 'on_delta'> | undefined, delta: ModelOutputDelta): void {
+  if (!options?.on_delta || !delta.delta || !Value.Check(modelOutputDeltaSchema, delta)) return;
+  try { options.on_delta(delta); } catch { /* display only */ }
 }
 
 /** Strict one-shot event stream. Providers expose an AsyncIterable only. */

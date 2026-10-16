@@ -13,6 +13,7 @@ import { Settings } from './pages/Settings.jsx';
 import { DeleteContentDialog } from './ContentActions.jsx';
 import { TrashIcon } from './icons.jsx';
 import { useRoomSearch } from './useRoomSearch.js';
+import { useLiveStream } from './useLiveStream.js';
 
 const navItems = [
   { id: 'conversation', label: '会話', icon: ChatIcon },
@@ -69,19 +70,34 @@ export function App() {
   useEffect(() => () => { clearTimeout(toastTimer.current); for (const timer of celebrationTimers.current.values()) clearTimeout(timer); }, []);
   useEffect(() => { try { sessionStorage.setItem('niwa-thread', selectedThread); } catch { /* Optional browser state. */ } }, [selectedThread]);
   useEffect(() => { api('/session').then(result => setAuthenticated(result.authenticated)).catch(() => setAuthenticated(false)); }, []);
+  const pushed = useRef({ busy: false, again: false, timer: null, last: 0 });
+  // Pushed hints are coalesced: one refresh at a time, at most about once per 0.8 seconds.
+  function requestRefresh() {
+    const state = pushed.current;
+    if (state.busy) { state.again = true; return; }
+    if (state.timer) return;
+    state.timer = setTimeout(async () => {
+      state.timer = null; state.busy = true; state.last = Date.now();
+      try { await refresh(); } finally { state.busy = false; if (state.again) { state.again = false; requestRefresh(); } }
+    }, Math.max(0, state.last + 800 - Date.now()));
+  }
+  const live = useLiveStream(!!authenticated && ready, requestRefresh);
+  const liveConnected = useRef(false); const pollNow = useRef(null);
+  useEffect(() => { const lost = liveConnected.current && !live.connected; liveConnected.current = live.connected; if (lost) pollNow.current?.(); }, [live.connected]);
   useEffect(() => {
     if (!authenticated) return;
     let stopped = false; let timer; let running = false; let failures = 0;
-    // Hidden tabs stop polling; failures back off from 2 s to 30 s.
+    // Hidden tabs stop polling; failures back off from 2 s to 30 s. While the stream is connected, polling is only a slow safety net.
     async function poll() {
       running = true; clearTimeout(timer);
       try { failures = await refresh() ? 0 : failures + 1; } finally { running = false; }
-      if (!stopped && !document.hidden) timer = setTimeout(poll, Math.min(30_000, 2000 * 2 ** failures));
+      if (!stopped && !document.hidden) timer = setTimeout(poll, liveConnected.current ? 30_000 : Math.min(30_000, 2000 * 2 ** failures));
     }
+    pollNow.current = () => { if (running || document.hidden) return; clearTimeout(timer); timer = setTimeout(poll, 2000); };
     const onVisibility = () => { if (document.hidden) clearTimeout(timer); else if (!running) void poll(); };
     document.addEventListener('visibilitychange', onVisibility);
     if (!document.hidden) void poll();
-    return () => { stopped = true; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibility); refreshVersion.current++; };
+    return () => { stopped = true; pollNow.current = null; clearTimeout(timer); clearTimeout(pushed.current.timer); pushed.current.timer = null; document.removeEventListener('visibilitychange', onVisibility); refreshVersion.current++; };
   }, [authenticated]);
 
   async function refresh() {
@@ -115,7 +131,7 @@ export function App() {
       setPaused(state.settings.paused);
       setSchedules(savedSchedules);
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
-        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, ollamaUrl: modelSettings.ollamaUrl || '', maxParallel: modelSettings.maxParallel ?? 1, rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
+        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, localLlmUrl: modelSettings.localLlmUrl || '', maxParallel: modelSettings.maxParallel ?? 1, rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
       setReady(true);
       setLoadError(''); setOffline(false);
       return true;
@@ -143,7 +159,7 @@ export function App() {
     const ok = await mutate(async () => {
       const changed = model && (model !== memberMap[id].model || provider !== memberMap[id].provider || effort !== memberMap[id].effort);
       ({ version } = await api(`/agents/${id}/profile`, 'PATCH', { patch: profile, version: profile_version,
-        ...(changed ? { selection: { provider, model, reasoning: provider === 'ollama' ? 'native' : effort } } : {}) }));
+        ...(changed ? { selection: { provider, model, reasoning: provider === 'local_llm' || provider === 'openai_compatible' ? 'native' : effort } } : {}) }));
     });
     return ok ? version : false;
   }
@@ -167,13 +183,12 @@ export function App() {
   function togglePause() { return mutate(() => api('/settings', 'PATCH', { paused: !paused }), paused ? '活動を再開しました' : '活動を一時停止しました'); }
   async function sendMessage(text, attachments = [], replyTo, selectedRecipients = [], requestContext) {
     if (selectedRecipients.some(id => memberMap[id]?.deleted)) { notify('指定したBotは削除されています。依頼先を選び直してください。'); return false; }
-    if (attachments.length) { notify('添付ファイルの保存はまだ利用できません。'); return false; }
-    const body = text;
+    const body = text, files = attachments.map(({ name, content }) => ({ name, content }));
     const fallback = replyTo && memberMap[replyTo.author] && !memberMap[replyTo.author].deleted ? replyTo.author : thread.scope === 'private' ? thread.members[0] : members.find(item => item.authority === 'leader')?.id;
     const recipients = [...new Set(selectedRecipients.length ? selectedRecipients : fallback ? [fallback] : [])].sort();
-    const key = JSON.stringify([thread.id, recipients, body, replyTo?.id,requestContext]);
+    const key = JSON.stringify([thread.id, recipients, body, replyTo?.id,requestContext,files]);
     if (submission.current?.key !== key) submission.current = { key, id: crypto.randomUUID() };
-    const ok = await mutate(() => api(`/rooms/${thread.id}/messages`, 'POST', { id: submission.current.id, body, ...(requestContext?{request_context:requestContext}:{}), ...(replyTo ? { reply_to: replyTo.id } : {}), ...(recipients.length ? { agent_ids: recipients } : {}) }), '送信しました');
+    const ok = await mutate(() => api(`/rooms/${thread.id}/messages`, 'POST', { id: submission.current.id, body, ...(files.length ? { attachments: files } : {}), ...(requestContext?{request_context:requestContext}:{}), ...(replyTo ? { reply_to: replyTo.id } : {}), ...(recipients.length ? { agent_ids: recipients } : {}) }), '送信しました');
     if (ok) submission.current = null;
     return ok;
   }
@@ -205,7 +220,7 @@ export function App() {
       ...(touched.has('backupDays') ? { backupDays: Number(next.backupDays) } : {}), ...(touched.has('backupTime') ? { backupTime: next.backupTime } : {}),
       ...(touched.has('backupEnabled') ? { backupEnabled: next.backupEnabled } : {}), ...(touched.has('autonomous') ? { autonomous: next.autonomous } : {}) };
     if (Object.keys(patch).length) await api('/settings', 'PATCH', patch);
-    const model = { ...(touched.has('ollamaUrl') ? { ollamaUrl: next.ollamaUrl || null } : {}), ...(touched.has('maxParallel') ? { maxParallel: Number(next.maxParallel) } : {}) };
+    const model = { ...(touched.has('localLlmUrl') ? { localLlmUrl: next.localLlmUrl || null } : {}), ...(touched.has('maxParallel') ? { maxParallel: Number(next.maxParallel) } : {}) };
     if (Object.keys(model).length) await api('/model-settings', 'PATCH', model);
     setSettings(current => ({ ...current, theme: next.theme }));
   }); }
@@ -230,9 +245,9 @@ export function App() {
       <div className="sidebar-bottom"><a href="#settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}><SettingsIcon size={23} /><span>設定</span></a><button className="preview-label" onClick={async () => { await api('/logout', 'POST', {}); setAuthenticated(false); setReady(false); }}><span className="preview-dot" />ログアウト<InfoIcon size={13} /></button></div>
     </aside>
     {page === 'conversation' && !thread ? <main className="conversation" id="main-content"><EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState></main> : null}
-    {page === 'conversation' && thread ? <Conversation onThreadAction={organizeThread} thread={thread} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => setMobileDetail(false)} onArtifact={openArtifact} /> : null}
+    {page === 'conversation' && thread ? <Conversation onThreadAction={organizeThread} drafts={Object.values(live.drafts).filter(draft => draft.room_id === thread.id)} thread={thread} artifacts={artifacts} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => setMobileDetail(false)} onArtifact={openArtifact} /> : null}
     {page === 'members' ? <Members onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), 'Botを削除しました。会話と成果物は残っています。')} onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={selectedMember} onSelect={setSelectedMember} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
-    {page === 'activity' ? <Activity onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '予定を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={activityFilter} onFilter={setActivityFilter} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(() => api(`/approvals/${id}`, 'POST', { approved, version }), approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
+    {page === 'activity' ? <Activity onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '予定を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} onScheduleToken={async id => { let issued = null; await mutate(async () => { issued = await api(`/schedules/${id}/token`, 'POST', {}); }, '受付用の鍵を発行しました'); return issued; }} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={activityFilter} onFilter={setActivityFilter} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(() => api(`/approvals/${id}`, 'POST', { approved, version }), approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
     {page === 'settings' ? <Settings onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} /> : null}
     <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined} onClick={() => { setPage(id); if (id === 'conversation') setMobileDetail(false); }}><Icon size={23} /><span>{label}</span>{id === 'activity' && pendingCount ? <span className="nav-notice" /> : null}</a>)}</nav>
     {modal?.type === 'appearance' ? <Modal title={`${memberMap[modal.member].name}のアイコン`} onClose={() => setModal(null)} className="appearance-modal"><AppearanceEditor member={memberMap[modal.member]} onCancel={() => setModal(null)} onSave={async patch => { if (await updateMember(modal.member, patch)) setModal(null); }} /></Modal> : null}

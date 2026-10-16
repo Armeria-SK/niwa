@@ -1,4 +1,6 @@
 import {agentAutonomySchema} from '../storage/agent-autonomy-schema.ts';
+import {attachmentSchema} from '../storage/attachment-schema.ts';
+import {decodeAttachments,excerptBudget,type AttachmentInfo} from '../domain/attachments.ts';
 import {responseProgressSchema} from '../storage/response-progress-schema.ts';
 import {isStatusInquiry,type SubmissionContext} from './conversation-work.ts';
 import {activitySchema} from '../storage/activity-schema.ts';
@@ -17,8 +19,12 @@ import { closeSync, mkdirSync, openSync, rmSync } from 'node:fs';
 import { agentDeletionSchema } from '../storage/agent-deletion-schema.ts';
 import { resolve, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { check, text, DomainError } from '../domain/types.ts';
-import type { Agent, Room, Message, Memory, Settings } from '../domain/types.ts';
+import { check, text, DomainError, MODEL_PROVIDERS } from '../domain/types.ts';
+import type { Agent, FallbackProvider, Room, Message, Memory, Settings } from '../domain/types.ts';
+import { normalizeCompatibleUrl } from '../providers/openai-compatible/url.ts';
+import { openaiCompatibleSchema } from '../storage/openai-compatible-schema.ts';
+import { anthropicSchema } from '../storage/anthropic-schema.ts';
+import { localLlmSchema } from '../storage/local-llm-schema.ts';
 import { openDatabase, transaction } from '../storage/database.ts';
 import { controlSchema, memoryMigrations } from '../storage/schema.ts';
 import { taskSchema } from '../storage/task-schema.ts';
@@ -37,6 +43,7 @@ import { scheduleSchema } from '../storage/schedule-schema.ts';
 import { scheduleBudgetSchema } from '../storage/schedule-budget-schema.ts';
 import { scheduleTriggerSchema } from '../storage/schedule-trigger-schema.ts';
 import { scheduleDeletionSchema } from '../storage/schedule-deletion-schema.ts';
+import { scheduleSourceSchema } from '../storage/schedule-source-schema.ts';
 import { autonomySchema } from '../storage/autonomy-schema.ts';
 import { providerLimitSchema } from '../storage/provider-limit-schema.ts';
 import { modelRouteSchema } from '../storage/model-route-schema.ts';
@@ -71,6 +78,7 @@ import type { JsonObject } from '../contracts/model.ts';
 import { contentManagementSchema } from '../storage/content-management-schema.ts';
 import { actionApprovalSchema } from '../storage/action-approval-schema.ts';
 import { memoryReviewSchema, type MemoryReview } from '../domain/memory-review.ts';
+import { LiveUpdates } from './live.ts';
 
 declare const identity: unique symbol;
 /** Opaque in-process capability; never construct this from HTTP or tool arguments. */
@@ -87,6 +95,8 @@ export class Runtime {
   readonly artifactVersions: ArtifactVersions;
   readonly schedules: Schedules;
   readonly providerLimits: ProviderLimits;
+  /** Memory-only drafts and viewer notifications; never persisted or given to models. */
+  readonly live = new LiveUpdates();
   #db: DatabaseSync;
   #root: string;
   #identities = new WeakMap<Actor, Principal>();
@@ -95,7 +105,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -153,6 +163,14 @@ export class Runtime {
   // Composition-root functions: future HTTP authentication / scheduler issues these.
   // These are NOT login endpoints; models never get to choose an execution identity.
   administrator(): Actor { return this.#issue({ kind: 'admin', id: 'administrator' }); }
+  /** Content-free counter of committed writes for live refresh hints; 0 after close. */
+  changeVersion(actor: Actor): number {
+    if (this.#closed) return 0;
+    this.#admin(actor);
+    let total = Number(this.#db.prepare('SELECT total_changes() AS n').get()!.n);
+    for (const db of this.#memories.values()) { try { total += Number(db.prepare('SELECT total_changes() AS n').get()!.n); } catch { /* closed memory */ } }
+    return total;
+  }
   agentSession(agentId: string): Actor {
     this.#agent(agentId);
     return this.#issue({ kind: 'agent', id: agentId });
@@ -273,7 +291,7 @@ export class Runtime {
     this.#admin(actor); this.#agent(agentId);
     check(Value.Check(profileSchema, patch), 'invalid', 'Invalid profile');
     if (selection) {
-      check(selection.provider === 'openai_subscription' || selection.provider === 'ollama', 'invalid', 'Invalid provider');
+      check(MODEL_PROVIDERS.includes(selection.provider), 'invalid', 'Invalid provider');
       text(selection.model, 256); text(selection.reasoning, 64);
     }
     this.#writeProfile(actor, agentId, patch, true, expected, selection);
@@ -358,7 +376,7 @@ export class Runtime {
   }
   configureGeneratedModel(actor: Actor, provider: Agent['provider'], model: string, reasoning: string): void {
     this.#admin(actor); text(model, 256); text(reasoning, 64);
-    check(provider === 'openai_subscription' || provider === 'ollama', 'invalid', 'Invalid provider');
+    check(MODEL_PROVIDERS.includes(provider), 'invalid', 'Invalid provider');
     this.#db.prepare('UPDATE generated_model SET provider=?,model=?,reasoning=? WHERE id=1').run(provider, model, reasoning);
   }
   commonRules(actor: Actor): { revision: number; body: string } {
@@ -384,47 +402,74 @@ export class Runtime {
   }
   recordModelRoute(actor: Actor, agentId: string, provider: Agent['provider'], model: string, reason: 'configured' | 'quota'): void {
     this.#admin(actor); this.#agent(agentId); text(model, 256);
-    check(provider === 'ollama' || provider === 'openai_subscription', 'invalid', 'Invalid provider');
+    check(MODEL_PROVIDERS.includes(provider), 'invalid', 'Invalid provider');
     check(reason === 'configured' || reason === 'quota', 'invalid', 'Invalid route reason');
     this.#db.prepare(`INSERT INTO model_routes(agent_id,provider,model,reason,attempted_at) VALUES(?,?,?,?,?)
       ON CONFLICT(agent_id) DO UPDATE SET provider=excluded.provider,model=excluded.model,reason=excluded.reason,attempted_at=excluded.attempted_at`)
       .run(agentId, provider, model, reason, Date.now());
   }
-  modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null; maxParallel: number } {
+  modelSettings(actor: Actor): { localLlmUrl: string | null; fallbackModel: string | null; maxParallel: number; fallbackProvider: FallbackProvider; compatibleUrl: string | null; compatibleParallel: number; anthropicParallel: number } {
     this.#admin(actor);
-    const row = this.#db.prepare('SELECT ollama_url,fallback_model,max_parallel FROM model_settings WHERE id=1').get()!;
-    return { ollamaUrl: row.ollama_url as string | null, fallbackModel: row.fallback_model as string | null, maxParallel: row.max_parallel as number };
+    const row = this.#db.prepare('SELECT local_llm_url,fallback_model,max_parallel,fallback_provider,compatible_url,compatible_parallel,anthropic_parallel FROM model_settings WHERE id=1').get()!;
+    return { localLlmUrl: row.local_llm_url as string | null, fallbackModel: row.fallback_model as string | null, maxParallel: row.max_parallel as number, fallbackProvider: row.fallback_provider as FallbackProvider,
+      compatibleUrl: row.compatible_url as string | null, compatibleParallel: Number(row.compatible_parallel), anthropicParallel: Number(row.anthropic_parallel) };
   }
-  /** Requests per Ollama endpoint that Niwa sends at once; match the server's OLLAMA_NUM_PARALLEL. Read per request, so no interruption is needed. */
-  configureOllamaParallel(actor: Actor, count: number): void {
+  /** Requests Niwa sends at once to the Claude API. Read per request, so running work keeps going. */
+  configureAnthropicParallel(actor: Actor, count: number): void {
+    this.#admin(actor);
+    check(Number.isInteger(count) && count >= 1 && count <= 8, 'invalid', 'Invalid parallel request count');
+    this.#db.prepare('UPDATE model_settings SET anthropic_parallel=? WHERE id=1').run(count);
+  }
+  /** Requests per Local LLM endpoint that Niwa sends at once; match the Ollama server's OLLAMA_NUM_PARALLEL. Read per request, so no interruption is needed. */
+  configureLocalLlmParallel(actor: Actor, count: number): void {
     this.#admin(actor);
     check(Number.isInteger(count) && count >= 1 && count <= 8, 'invalid', 'Invalid parallel request count');
     this.#db.prepare('UPDATE model_settings SET max_parallel=? WHERE id=1').run(count);
   }
-  /** Host must verify local model capabilities against this exact endpoint before saving. */
-  configureFallback(actor: Actor, url: string, model: string | null): void {
+  /** Host must verify model capabilities against this exact endpoint before saving. */
+  configureFallback(actor: Actor, url: string, model: string | null, provider: FallbackProvider = 'local_llm'): void {
     this.#admin(actor);
-    check(this.modelSettings(actor).ollamaUrl === url, 'conflict', 'Ollama configuration changed during discovery');
+    check(provider === 'local_llm' || provider === 'openai_compatible' || provider === 'anthropic', 'invalid', 'Invalid provider');
+    const settings = this.modelSettings(actor);
+    // Clearing needs no endpoint; a selection must match the endpoint it was verified against. The Claude API has one fixed endpoint.
+    check(model === null || provider === 'anthropic' || (provider === 'local_llm' ? settings.localLlmUrl : settings.compatibleUrl) === url, 'conflict', 'Model endpoint changed during discovery');
     if (model !== null) text(model, 256);
-    this.#db.prepare('UPDATE model_settings SET fallback_model=? WHERE id=1').run(model);
+    this.#db.prepare('UPDATE model_settings SET fallback_model=?,fallback_provider=? WHERE id=1').run(model, model === null ? settings.fallbackProvider : provider);
   }
-  configureOllama(actor: Actor, url: string | null): void {
+  /** Base URL of the OpenAI-compatible endpoint. The API key lives in the secrets directory, never in this database. */
+  configureCompatible(actor: Actor, url: string | null): void {
+    this.#admin(actor);
+    const normalized = url === null ? null : normalizeCompatibleUrl(url);
+    check(normalized !== undefined, 'invalid', 'Invalid OpenAI-compatible URL');
+    transaction(this.#db, () => {
+      if (this.modelSettings(actor).compatibleUrl === normalized) return;
+      this.#db.prepare("UPDATE model_settings SET fallback_model=CASE WHEN fallback_provider='openai_compatible' THEN NULL ELSE fallback_model END,compatible_url=? WHERE id=1").run(normalized);
+      this.#interruptTasks();
+    });
+  }
+  /** Requests Niwa sends at once to the OpenAI-compatible endpoint. Read per request, so running work keeps going. */
+  configureCompatibleParallel(actor: Actor, count: number): void {
+    this.#admin(actor);
+    check(Number.isInteger(count) && count >= 1 && count <= 8, 'invalid', 'Invalid parallel request count');
+    this.#db.prepare('UPDATE model_settings SET compatible_parallel=? WHERE id=1').run(count);
+  }
+  configureLocalLlm(actor: Actor, url: string | null): void {
     this.#admin(actor);
     if (url !== null) {
       text(url, 2048);
       let parsed: URL;
-      try { parsed = new URL(url); } catch { throw new DomainError('invalid', 'Invalid Ollama URL'); }
-      check(['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash, 'invalid', 'Invalid Ollama URL');
+      try { parsed = new URL(url); } catch { throw new DomainError('invalid', 'Invalid Local LLM URL'); }
+      check(['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash, 'invalid', 'Invalid Local LLM URL');
     }
     transaction(this.#db, () => {
-      this.#db.prepare('UPDATE model_settings SET fallback_model=CASE WHEN ollama_url IS ? THEN fallback_model ELSE NULL END,ollama_url=? WHERE id=1').run(url, url);
+      this.#db.prepare("UPDATE model_settings SET fallback_model=CASE WHEN local_llm_url IS ? OR fallback_provider<>'local_llm' THEN fallback_model ELSE NULL END,local_llm_url=? WHERE id=1").run(url, url);
       this.#interruptTasks();
     });
   }
   /** The host verifies selection capabilities before invoking this persistence operation. */
   setAgentModel(actor: Actor, agentId: string, provider: Agent['provider'], model: string, reasoning: string): Agent {
     this.#admin(actor); this.#agent(agentId);
-    check(provider === 'openai_subscription' || provider === 'ollama', 'invalid', 'Invalid provider');
+    check(MODEL_PROVIDERS.includes(provider), 'invalid', 'Invalid provider');
     text(model, 256); text(reasoning, 64);
     return transaction(this.#db, () => {
       this.#db.prepare('UPDATE agents SET provider=?,model=?,reasoning=? WHERE id=?').run(provider, model, reasoning, agentId);
@@ -620,6 +665,7 @@ export class Runtime {
           this.#db.prepare('DELETE FROM updates WHERE room_id=?').run(record.id);
           this.#db.prepare('DELETE FROM artifacts WHERE room_id=?').run(record.id);
           this.#db.prepare('DELETE FROM submissions WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)').run(record.id);
+          this.#db.prepare('DELETE FROM message_attachments WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)').run(record.id);
           this.#db.prepare('DELETE FROM messages WHERE room_id=?').run(record.id);
           this.#db.prepare('UPDATE workareas SET deleted=1 WHERE room_id=?').run(record.id);
           this.#db.prepare("UPDATE rooms SET title='' WHERE id=?").run(record.id);
@@ -800,10 +846,35 @@ export class Runtime {
     const rows = this.#db.prepare(`SELECT *,rowid AS sequence FROM messages WHERE room_id=? AND rowid>?
       AND (? IS NULL OR created_at<? OR (created_at=? AND rowid<?)) ORDER BY created_at DESC,rowid DESC LIMIT 51`)
       .all(roomId, first?.sequence ?? 0,cursor?.created_at??null,cursor?.created_at??null,cursor?.created_at??null,before) as unknown as (Message & { sequence: number })[];
-    return { first: first ?? null, items: rows.slice(0, 50).reverse().map(message=>{
+    const files=this.messageAttachments(actor,roomId,[...(first?[first.id]:[]),...rows.slice(0,50).map(row=>row.id)]);
+    const withFiles=<T extends Message>(message:T)=>({...message,attachments:files.filter(file=>file.message_id===message.id).map(({message_id:_m,...file})=>file)});
+    return { first: first ? withFiles(first) : null, items: rows.slice(0, 50).reverse().map(message=>{
       const target=message.reply_to?this.#db.prepare('SELECT id,author_id,body FROM messages WHERE id=? AND room_id=?').get(message.reply_to,roomId):null;
-      return {...message,replyTo:target?{id:target.id,author:target.author_id==='administrator'?'you':target.author_id,text:String(target.body).slice(0,240)}:null};
+      return {...withFiles(message),replyTo:target?{id:target.id,author:target.author_id==='administrator'?'you':target.author_id,text:String(target.body).slice(0,240)}:null};
     }), next: rows.length > 50 ? rows[49]!.sequence : null };
+  }
+  /** Names and sizes only; text is read separately with the same room check. */
+  messageAttachments(actor: Actor, roomId: string, messageIds?: string[]): AttachmentInfo[] {
+    this.#room(actor, roomId);
+    return this.#db.prepare(`SELECT a.id,a.message_id,a.name,a.size FROM message_attachments a JOIN messages m ON m.id=a.message_id
+      WHERE m.room_id=? AND (? IS NULL OR a.message_id IN (SELECT value FROM json_each(?))) ORDER BY m.rowid,a.position`)
+      .all(roomId, messageIds ? 1 : null, JSON.stringify(messageIds ?? [])) as unknown as AttachmentInfo[];
+  }
+  attachment(actor: Actor, id: string): AttachmentInfo & { room_id: string; sha256: string; body: string } {
+    const row = this.#db.prepare('SELECT a.id,a.message_id,a.name,a.size,a.sha256,a.body,m.room_id FROM message_attachments a JOIN messages m ON m.id=a.message_id WHERE a.id=?')
+      .get(text(id, 100)) as (AttachmentInfo & { room_id: string; sha256: string; body: string }) | undefined;
+    check(row, 'not_found', 'Attachment not found'); this.#room(actor, row.room_id);
+    return row;
+  }
+  /** Files on administrator messages that started or changed this task, inline within one bounded budget. */
+  taskAttachments(actor: Actor, lease: TaskLease) {
+    check(this.#bot(actor).id === lease.task.agent_id, 'forbidden', 'Task belongs to another agent'); this.#room(actor, lease.task.room_id);
+    const rows = this.#db.prepare(`SELECT a.id,a.message_id,a.name,a.size,a.body FROM message_attachments a JOIN messages m ON m.id=a.message_id
+      JOIN task_message_links l ON l.message_id=m.id WHERE l.task_id=? AND m.room_id=? AND m.author_id='administrator' ORDER BY m.rowid DESC,a.position LIMIT 25`)
+      .all(lease.task.id, lease.task.room_id) as unknown as (AttachmentInfo & { body: string })[];
+    const shares = excerptBudget(rows.map(row => row.body.length));
+    return rows.map((row, index) => ({ attachment_id: row.id, message_id: row.message_id, name: row.name, size_bytes: row.size, characters: row.body.length,
+      text: row.body.slice(0, shares[index]), truncated: shares[index]! < row.body.length, untrusted: true }));
   }
   searchRoomMessages(actor: Actor, query: string): string[] {
     check(typeof query === 'string' && query.length <= 200, 'invalid', 'Invalid conversation query');
@@ -892,13 +963,15 @@ export class Runtime {
     });
   }
   /** A browser retry must not post twice or start two jobs. Both records commit together. */
-  submit(actor: Actor, id: string, roomId: string, body: string, agentId?: string | string[], replyTo?: string, requestContext?: SubmissionContext): { message: Message; task: Task | null } {
+  submit(actor: Actor, id: string, roomId: string, body: string, agentId?: string | string[], replyTo?: string, requestContext?: SubmissionContext, attachments?: unknown): { message: Message; task: Task | null } {
     this.#admin(actor);
     check(typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id), 'invalid', 'Invalid submission id');
+    const files = decodeAttachments(attachments);
+    if (files.length && typeof body === 'string' && !body.trim()) body = `添付ファイル：${files.map(file => file.name).join('、')}`;
     text(body);
     const recipients = Array.isArray(agentId) ? [...new Set(agentId)].sort() : agentId ? [agentId] : [];
     check(!Array.isArray(agentId) || (agentId.length > 0 && agentId.length <= 100 && agentId.every(value => typeof value === 'string')), 'invalid', 'Invalid recipients');
-    const hash = createHash('sha256').update(JSON.stringify([roomId, body, Array.isArray(agentId) ? recipients : agentId ?? null, ...(replyTo === undefined ? [] : [replyTo]), ...(requestContext ? [requestContext] : [])])).digest('hex');
+    const hash = createHash('sha256').update(JSON.stringify([roomId, body, Array.isArray(agentId) ? recipients : agentId ?? null, ...(replyTo === undefined ? [] : [replyTo]), ...(requestContext ? [requestContext] : []), ...(files.length ? [{ attachments: files.map(file => [file.name, file.sha256]) }] : [])])).digest('hex');
     return transaction(this.#db, () => {
       const previous = this.#db.prepare('SELECT * FROM submissions WHERE id=?').get(id) as
         { input_hash: string; message_id: string; task_id: string | null } | undefined;
@@ -910,6 +983,7 @@ export class Runtime {
       check(!this.roomPreferences(actor, roomId).archived, 'conflict', 'Restore the archived room before replying');
       if (replyTo !== undefined) check(typeof replyTo === 'string' && !!this.#db.prepare('SELECT 1 FROM messages WHERE id=? AND room_id=?').get(replyTo, roomId), 'not_found', 'Reply target is no longer available in this conversation');
       const message = this.post(actor, roomId, body);
+      files.forEach((file, position) => this.#db.prepare('INSERT INTO message_attachments VALUES (?,?,?,?,?,?,?)').run(randomUUID(), message.id, position, file.name, file.size, file.sha256, file.body));
       if (replyTo !== undefined) {
         this.#db.prepare('UPDATE messages SET reply_to=? WHERE id=?').run(replyTo, message.id);
         message.reply_to = replyTo;
@@ -1187,6 +1261,9 @@ export class Runtime {
     const record = (kind === 'summary' ? this.#summary(actor, roomId, sourceId) : kind === 'memory'
       ? this.#memory(actor, principal.id).prepare('SELECT source_room_id AS room_id,body,revision FROM memories WHERE id=?').get(sourceId)
       : this.#db.prepare(queries[kind]!).get(sourceId)) as { room_id: string; body: string; revision?: number } | undefined;
+    // Attached text is part of the message source, so it pages and versions with the message.
+    if (kind === 'message' && record) for (const file of this.#db.prepare('SELECT name,size,body FROM message_attachments WHERE message_id=? ORDER BY position').all(sourceId))
+      record.body += `\n\n[添付ファイル: ${String(file.name)} (${Number(file.size)} bytes)・利用者が提供した資料]\n${String(file.body)}`;
     const allowed = this.rooms(actor).some(room => room.id === record?.room_id && (room.visibility === 'shared' || room.id === roomId));
     check(record && allowed, 'not_found', 'Source unavailable in this conversation');
     const current = createHash('sha256').update(JSON.stringify([kind, sourceId, record.room_id, record.body, record.revision ?? null])).digest('hex');

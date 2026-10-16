@@ -22,13 +22,13 @@ import { DatabaseSync } from 'node:sqlite';
 test('profile and model save together only after discovery and an unchanged edit version', async () => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-profile-model-')); const runtime = new Runtime(root);
   const admin = runtime.administrator(); const leader = runtime.bootstrap(admin);
-  runtime.configureOllama(admin, 'http://127.0.0.1:11434');
+  runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434');
   let duringDiscovery = () => {};
   const gateway = new ModelGateway(runtime, async url => {
     if (String(url).endsWith('/api/tags')) return Response.json({ models: [{ name: 'artificial-local' }] });
     duringDiscovery(); return Response.json({ capabilities: ['completion', 'tools'] });
   });
-  const selection = { provider: 'ollama' as const, model: 'artificial-local', reasoning: 'native' };
+  const selection = { provider: 'local_llm' as const, model: 'artificial-local', reasoning: 'native' };
   try {
     let version = runtime.profileVersion(admin, leader.id);
     await assert.rejects(gateway.updateProfile(leader.id, { persona: '保存しない' }, version, { ...selection, model: 'missing' }));
@@ -47,7 +47,7 @@ test('profile and model save together only after discovery and an unchanged edit
     assert.notEqual(saved.version, version);
     assert.equal(runtime.profile(admin, leader.id).persona, '新しい人格');
     assert.equal(runtime.agents(admin)[0]!.model, selection.model);
-    runtime.setAgentModel(admin, leader.id, 'ollama', 'external-change', 'native');
+    runtime.setAgentModel(admin, leader.id, 'local_llm', 'external-change', 'native');
     await assert.rejects(gateway.updateProfile(leader.id, { persona: '古いモデルの画面' }, saved.version), /Profile changed/);
   } finally { runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
@@ -75,11 +75,11 @@ test('quota switches to the configured local model and a later successful probe 
     let admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const room = runtime.createRoom(admin, '切替確認');
     assert.equal(runtime.modelRoutes(admin)[0]!.attempted_at, null);
     assert.throws(() => runtime.modelRoutes(runtime.agentSession(leader.id)), /Administrator/);
-    assert.throws(() => runtime.recordModelRoute(runtime.agentSession(leader.id), leader.id, 'ollama', 'forged', 'quota'), /Administrator/);
+    assert.throws(() => runtime.recordModelRoute(runtime.agentSession(leader.id), leader.id, 'local_llm', 'forged', 'quota'), /Administrator/);
     assert.equal(runtime.modelRoutes(admin)[0]!.attempted_at, null);
     assert.throws(() => runtime.modelRoutes(runtime.agentSession(leader.id)), /Administrator/);
-    assert.throws(() => runtime.recordModelRoute(runtime.agentSession(leader.id), leader.id, 'ollama', 'forged', 'quota'), /Administrator/);
-    runtime.configureOllama(admin, 'http://127.0.0.1:11434'); runtime.configureFallback(admin, 'http://127.0.0.1:11434', 'artificial-local');
+    assert.throws(() => runtime.recordModelRoute(runtime.agentSession(leader.id), leader.id, 'local_llm', 'forged', 'quota'), /Administrator/);
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434'); runtime.configureFallback(admin, 'http://127.0.0.1:11434', 'artificial-local');
     runtime.setAgentModel(admin, leader.id, 'openai_subscription', 'artificial-model', 'low');
     let gateway = new ModelGateway(runtime, transport, subscription);
     runtime.tasks.create(admin, leader.id, room.id, '回答してください');
@@ -121,7 +121,7 @@ test('ordinary 429 does not select fallback and quota without a selected fallbac
   try {
     const admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const room = runtime.createRoom(admin, '待機確認');
     runtime.setAgentModel(admin, leader.id, 'openai_subscription', 'artificial-model', 'low');
-    runtime.configureOllama(admin, 'http://127.0.0.1:11434'); runtime.configureFallback(admin, 'http://127.0.0.1:11434', 'artificial-local');
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434'); runtime.configureFallback(admin, 'http://127.0.0.1:11434', 'artificial-local');
     const gateway = new ModelGateway(runtime, transport, subscription);
     runtime.tasks.create(admin, leader.id, room.id, '通信制限');
     await new TurnRunner(runtime, gateway.resolve).run(runtime.tasks.claim(admin)!);
@@ -149,7 +149,7 @@ test('scheduler continues quota-waiting work after fallback setup without probin
   try {
     let admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const room = runtime.createRoom(admin, '自動再開');
     runtime.setAgentModel(admin, leader.id, 'openai_subscription', 'artificial-model', 'low');
-    runtime.configureOllama(admin, 'http://127.0.0.1:11434');
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434');
     const task = runtime.tasks.create(admin, leader.id, room.id, '設定後に同じ仕事を続ける');
     await new TurnRunner(runtime, new ModelGateway(runtime, transport, subscription).resolve).run(runtime.tasks.claim(admin)!);
     assert.equal(runtime.tasks.get(admin, task.id).state, 'waiting_provider');
@@ -172,11 +172,11 @@ test('fallback selection persists independently and rejects remote, incapable an
   const root = mkdtempSync(join(tmpdir(), 'niwa-fallback-')); let runtime = new Runtime(root);
   try {
     let admin = runtime.administrator(); const leader = runtime.bootstrap(admin);
-    runtime.configureOllama(admin, 'http://127.0.0.1:11434');
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434');
     let tools = false; let remote = false; let change = false;
     const gateway = new ModelGateway(runtime, async url => {
       if (String(url).endsWith('/tags')) return Response.json({ models: [{ name: 'artificial-local' }] });
-      if (change) runtime.configureOllama(admin, 'http://127.0.0.1:11435');
+      if (change) runtime.configureLocalLlm(admin, 'http://127.0.0.1:11435');
       return Response.json({ capabilities: ['completion', ...(tools ? ['tools'] : [])], ...(remote ? { remote_host: 'cloud' } : {}) });
     });
     await assert.rejects(gateway.selectFallback('missing'), /not installed/);
@@ -191,12 +191,12 @@ test('fallback selection persists independently and rejects remote, incapable an
     assert.throws(() => runtime.configureFallback(runtime.agentSession(leader.id), 'http://127.0.0.1:11435', null));
     runtime.close(); runtime = new Runtime(root); admin = runtime.administrator();
     assert.equal(runtime.modelSettings(admin).fallbackModel, 'artificial-local');
-    runtime.configureOllama(admin, 'http://127.0.0.1:11435');
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11435');
     assert.equal(runtime.modelSettings(admin).fallbackModel, 'artificial-local');
     await new ModelGateway(runtime).selectFallback(null);
     assert.equal(runtime.modelSettings(admin).fallbackModel, null);
     runtime.configureFallback(admin, 'http://127.0.0.1:11435', 'artificial-local');
-    runtime.configureOllama(admin, 'http://127.0.0.1:11436');
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11436');
     assert.equal(runtime.modelSettings(admin).fallbackModel, null);
   } finally { runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
@@ -208,7 +208,7 @@ test('verified generated models persist, apply only to new bots, and cannot be c
   const transport: typeof fetch = async url => {
     if (String(url).includes('/models')) return Response.json({ models: [{ slug: 'artificial-sub', visibility: 'list', supported_reasoning_levels: [{ effort: 'low' }] }] });
     if (String(url).endsWith('/tags')) return Response.json({ models: [{ name: 'artificial-local' }] });
-    if (changed) runtime.configureOllama(runtime.administrator(), 'http://127.0.0.1:11435');
+    if (changed) runtime.configureLocalLlm(runtime.administrator(), 'http://127.0.0.1:11435');
     return Response.json({ capabilities: ['completion', 'tools'] });
   };
   const subscription = new Subscription(store, () => {}, { fetch: transport });
@@ -216,17 +216,17 @@ test('verified generated models persist, apply only to new bots, and cannot be c
     let admin = runtime.administrator(); const leader = runtime.bootstrap(admin); let actor = runtime.agentSession(leader.id);
     const existing = runtime.createAgent(actor, '既存Bot');
     assert.equal(existing.model, 'gpt-5.6-luna'); assert.equal(existing.reasoning, 'max');
-    assert.throws(() => runtime.configureGeneratedModel(actor, 'ollama', 'forged', 'native'), /Administrator/);
-    runtime.configureOllama(admin, 'http://127.0.0.1:11434'); const gateway = new ModelGateway(runtime, transport, subscription);
-    await assert.rejects(gateway.selectGenerated('ollama', 'missing', 'native'), /not installed/);
-    await assert.rejects(gateway.selectGenerated('ollama', 'artificial-local', 'max'), /Invalid/);
-    changed = true; await assert.rejects(gateway.selectGenerated('ollama', 'artificial-local', 'native'), /changed/); changed = false;
+    assert.throws(() => runtime.configureGeneratedModel(actor, 'local_llm', 'forged', 'native'), /Administrator/);
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434'); const gateway = new ModelGateway(runtime, transport, subscription);
+    await assert.rejects(gateway.selectGenerated('local_llm', 'missing', 'native'), /not installed/);
+    await assert.rejects(gateway.selectGenerated('local_llm', 'artificial-local', 'max'), /Invalid/);
+    changed = true; await assert.rejects(gateway.selectGenerated('local_llm', 'artificial-local', 'native'), /changed/); changed = false;
     assert.equal(runtime.generatedModel(admin).model, existing.model);
-    await gateway.selectGenerated('ollama', 'artificial-local', 'native');
-    const local = runtime.createAgent(actor, 'ローカルBot'); assert.equal(local.provider, 'ollama'); assert.equal(local.model, 'artificial-local');
+    await gateway.selectGenerated('local_llm', 'artificial-local', 'native');
+    const local = runtime.createAgent(actor, 'ローカルBot'); assert.equal(local.provider, 'local_llm'); assert.equal(local.model, 'artificial-local');
     assert.equal(runtime.agents(admin).find(agent => agent.id === existing.id)!.model, existing.model);
     await assert.rejects(gateway.selectGenerated('openai_subscription', 'artificial-sub', 'max'), /unavailable/);
-    assert.equal(runtime.generatedModel(admin).provider, 'ollama');
+    assert.equal(runtime.generatedModel(admin).provider, 'local_llm');
     await gateway.selectGenerated('openai_subscription', 'artificial-sub', 'low');
     runtime.close(); runtime = new Runtime(root); admin = runtime.administrator(); actor = runtime.agentSession(leader.id);
     const next = runtime.createAgent(actor, '再起動後のBot');
@@ -239,11 +239,11 @@ test('gateway rejects absent and remote models and configuration changes during 
   const root = mkdtempSync(join(tmpdir(), 'niwa-gateway-')); const runtime = new Runtime(root);
   try {
     const admin = runtime.administrator(); const leader = runtime.bootstrap(admin);
-    runtime.configureOllama(admin, 'http://127.0.0.1:11434');
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434');
     let remote = true; let change = false;
     const gateway = new ModelGateway(runtime, async url => {
       if (String(url).endsWith('/tags')) return Response.json({ models: [{ name: 'artificial' }] });
-      if (change) runtime.configureOllama(admin, 'http://127.0.0.1:11435');
+      if (change) runtime.configureLocalLlm(admin, 'http://127.0.0.1:11435');
       return Response.json({ capabilities: ['completion', 'tools'], ...(remote ? { remote_host: 'artificial-cloud' } : {}) });
     });
     await assert.rejects(gateway.select(leader.id, 'not-installed'), /not installed/);
@@ -254,8 +254,8 @@ test('gateway rejects absent and remote models and configuration changes during 
     assert.equal(runtime.agents(admin)[0]?.provider, 'openai_subscription');
     change = false;
     const selected = await gateway.select(leader.id, 'artificial');
-    assert.equal(selected.provider, 'ollama'); assert.equal(selected.reasoning, 'native');
-    assert.throws(() => runtime.configureOllama(admin, 'file:///private'), /Invalid/);
+    assert.equal(selected.provider, 'local_llm'); assert.equal(selected.reasoning, 'native');
+    assert.throws(() => runtime.configureLocalLlm(admin, 'file:///private'), /Invalid/);
   } finally { runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -279,8 +279,8 @@ test('subscription gateway validates catalog selection, runs a response and inva
   } finally { await subscription.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
-test('default service resolver uses the saved Ollama endpoint and runs its model tool loop', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'niwa-ollama-service-'));
+test('default service resolver uses the saved Local LLM endpoint and runs its model tool loop', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-local-llm-service-'));
   const requests: string[] = [];
   const provider = createServer(async (req, res) => {
     requests.push(req.url!); res.setHeader('content-type', 'application/json');
@@ -301,7 +301,7 @@ test('default service resolver uses the saved Ollama endpoint and runs its model
   let service = await startService(root, undefined, 0);
   try {
     const admin = service.runtime.administrator(); const leader = service.runtime.agents(admin)[0]!;
-    service.runtime.configureOllama(admin, url);
+    service.runtime.configureLocalLlm(admin, url);
     await new ModelGateway(service.runtime).select(leader.id, 'artificial');
     const room = service.runtime.createRoom(admin, '庭');
     const task = service.runtime.tasks.create(admin, leader.id, room.id, '回答してください');
@@ -311,7 +311,7 @@ test('default service resolver uses the saved Ollama endpoint and runs its model
     assert.equal(requests.filter(path => path === '/api/chat').length, 2);
     await service.close(); service = await startService(root, undefined, 0);
     const nextAdmin = service.runtime.administrator();
-    assert.equal(service.runtime.modelSettings(nextAdmin).ollamaUrl, url);
+    assert.equal(service.runtime.modelSettings(nextAdmin).localLlmUrl, url);
     assert.equal(service.runtime.agents(nextAdmin)[0]?.model, 'artificial');
   } finally {
     await service.close(); await new Promise<void>(resolve => { provider.close(() => resolve()); provider.closeAllConnections(); });

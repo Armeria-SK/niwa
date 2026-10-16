@@ -1,7 +1,7 @@
 interface Lane { active: number; waiters: Array<() => void> }
 
 /** Per-endpoint concurrency gate. Ollama queues excess requests itself, which would make the wait count against our timeouts. */
-export class OllamaLimiter {
+export class LocalLlmLimiter {
   #lanes = new Map<string, Lane>();
 
   /** Resolves with a one-shot release. An aborted waiter leaves the queue without taking a slot. */

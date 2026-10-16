@@ -214,3 +214,14 @@ export const modelEventSchema = Type.Union([
   ),
 ]);
 export type ModelEvent = Static<typeof modelEventSchema>;
+
+/**
+ * Optional display-only partial output, delivered through `ModelRunOptions.on_delta` beside the event stream.
+ * Adapters may never call it. It is not a ModelEvent: never a result, a stored step, or model input.
+ */
+export const modelOutputDeltaSchema = Type.Union([
+  Type.Object({ channel: Type.Literal('text'), delta: Type.String({ maxLength: 65_536 }) }, { additionalProperties: false }),
+  Type.Object({ channel: Type.Literal('tool_arguments'), call_id: Type.String({ minLength: 1, maxLength: 256 }),
+    name: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })), delta: Type.String({ maxLength: 65_536 }) }, { additionalProperties: false }),
+]);
+export type ModelOutputDelta = Static<typeof modelOutputDeltaSchema>;

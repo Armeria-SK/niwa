@@ -2,14 +2,15 @@ import {memberWork,presenceCounts,shortWork,workLabel} from '../work-display.js'
 import {WorkFacts} from '../WorkFacts.jsx';
 import { useEffect, useLayoutEffect, useId, useRef, useState } from 'react';
 import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
-import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon } from '../icons.jsx';
-import { uid } from '../data.js';
+import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon, DownloadIcon } from '../icons.jsx';
+import { ATTACHMENT_LIMITS, formatSize, readTextAttachments } from '../attachments.js';
+import { documentName } from '../artifact-display.js';
 import { Markdown } from '../Markdown.jsx';
 import { useConversationMessages } from '../useConversationMessages.js';
 import './Conversation.css';
 import {CoordinationBoard} from '../CoordinationBoard.jsx';
 
-export function Conversation({ thread, tasks, onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
+export function Conversation({ thread, tasks, artifacts = [], drafts = [], onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
   const [showPresence, setShowPresence] = useState(false);
   const [showWork, setShowWork] = useState(false);
   const visibleMembers = thread.scope === 'private' ? members.filter(item => thread.members.includes(item.id)) : members;
@@ -21,7 +22,7 @@ export function Conversation({ thread, tasks, onNewSession, members, memberMap, 
   return <>
     <main className="conversation" id="main-content" tabIndex={-1} aria-label={thread.title}>
       <div className="conversation-mobile-tools"><button className="text-button" onClick={onBack}><BackIcon size={20} />スレッド</button><IconButton label="メンバーの様子" onClick={() => setShowPresence(true)}><UsersIcon size={22} /></IconButton></div>
-      <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
+      <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} artifacts={artifacts} drafts={drafts} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
     </main>
     {showWork ? <CoordinationBoard roomId={thread.id} members={memberMap} onClose={() => setShowWork(false)} onArtifact={onArtifact}/> : null}
     <aside className="presence-rail" aria-label="メンバーの様子"><Presence {...presenceProps} /></aside>
@@ -29,7 +30,7 @@ export function Conversation({ thread, tasks, onNewSession, members, memberMap, 
   </>;
 }
 
-function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
+function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
   const history = useConversationMessages(thread);
   const followBottom=useRef(true);
   const deletedConversation = thread.scope === 'private' && thread.members.length > 0 && thread.members.every(id => memberMap[id]?.deleted);
@@ -37,6 +38,8 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState(null);
   const [attachments, setAttachments] = useState([]);
+  const [attachmentErrors, setAttachmentErrors] = useState([]);
+  const [openFile, setOpenFile] = useState(null);
   const [sending, setSending] = useState(false);
   const [recipients, setRecipients] = useState([]);
   const [caret, setCaret] = useState(0);
@@ -58,6 +61,10 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
   const previousLast = useRef(null); const prependPosition = useRef(null);
   const lastId = history.items.at(-1)?.id || history.first?.id;
   useEffect(() => { if (lastId && lastId !== previousLast.current && followBottom.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: previousLast.current ? 'smooth' : 'instant' }); previousLast.current = lastId; }, [lastId]);
+  // A posted reply from the same Bot after the draft started replaces the draft bubble.
+  const liveDrafts = drafts.filter(item => item.text && !history.items.some(message => message.author_id === item.agent_id && Date.parse(message.created_at) >= item.started_at));
+  const draftLength = liveDrafts.reduce((sum, item) => sum + item.text.length, 0);
+  useEffect(() => { if (draftLength && followBottom.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); }, [draftLength]);
   useLayoutEffect(() => {
     if (prependPosition.current && listRef.current) listRef.current.scrollTop = prependPosition.current.top + listRef.current.scrollHeight - prependPosition.current.height;
     prependPosition.current = null;
@@ -69,8 +76,8 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
   async function submit(e) {
     e?.preventDefault(); if (readOnly || sending || (!draft.trim() && !attachments.length)) return;
     setSending(true);
-    try { if (await onSend(draft.trim(), attachments.map(({ name, size }) => ({ name, size })), replyTo ? { id: replyTo.id, author: replyTo.author } : null, recipients.map(item => item.id))) {
-      setDraft(''); setAttachments([]); setReplyTo(null); setRecipients([]); setCaret(0); inputRef.current?.focus();
+    try { if (await onSend(draft.trim(), attachments.map(({ name, content }) => ({ name, content })), replyTo ? { id: replyTo.id, author: replyTo.author } : null, recipients.map(item => item.id))) {
+      setDraft(''); setAttachments([]); setAttachmentErrors([]); setReplyTo(null); setRecipients([]); setCaret(0); inputRef.current?.focus();
     } } finally { setSending(false); }
   }
   return <>
@@ -78,19 +85,20 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
       <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" onClick={onShowWork}>共同作業</button><button className="text-button" disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={15} />新規セッション</button><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : 'アーカイブ'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
     </header>
     <div className="message-scroll conversation-replies" ref={listRef} onScroll={()=>{const node=listRef.current;followBottom.current=node.scrollHeight-node.scrollTop-node.clientHeight<80;}}>
-      <Message acknowledgments={thread.acknowledgments} message={history.first} isRoot title={thread.title} memberMap={memberMap} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
+      <Message acknowledgments={thread.acknowledgments} message={history.first} isRoot title={thread.title} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
       <div className="reply-divider"><span>{Math.max(0, thread.message_count - 1)}件の返信</span><span /></div>
       {history.loading ? <p role="status">発言を読み込み中…</p> : null}
       {history.error ? <p role="alert">{history.error}<button className="text-button" onClick={history.reload}>再読み込み</button></p> : null}
       {history.next !== null ? <button className="text-button" disabled={history.loading} onClick={loadEarlier}>以前の返信を50件読み込む</button> : null}
-      <div className="replies">{history.items.map(message=><Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} onMember={onMember} onReply={message=>{setReplyTo(message);inputRef.current?.focus();}} onArtifact={onArtifact}/>)}</div>
+      <div className="replies">{history.items.map(message=><Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message=>{setReplyTo(message);inputRef.current?.focus();}} onArtifact={onArtifact}/>)}{liveDrafts.map(item => <DraftMessage key={item.task_id} draft={item} member={memberMap[item.agent_id]} />)}</div>
       {thread.message_count === 1 && !tasks.some(task => !['done', 'canceled'].includes(task.status)) ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
     </div>
     <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。返信するには「保管から戻す」を選んでください。</p> : null}
       {deletedConversation ? <p className="archive-note" role="status">相手のBotは削除されています。この会話は履歴として読むことができます。</p> : null}
       {paused && !readOnly ? <div className="pause-notice"><PauseIcon size={14} />Botの活動は一時停止中です。返信は残せます。</div> : null}
       {replyTo ? <div className="reply-preview"><ReplyIcon size={16} /><div><strong>{memberMap[replyTo.author]?.name || 'あなた'}に返信</strong><span>{replyTo.text}</span></div><IconButton label="返信先を解除" onClick={() => setReplyTo(null)}><CloseIcon size={16} /></IconButton></div> : null}
-      {attachments.length ? <div className="attachment-previews">{attachments.map(file => <span key={file.id}><PaperclipIcon size={15} />{file.name}<IconButton label={`${file.name}を外す`} onClick={() => setAttachments(current => current.filter(item => item.id !== file.id))}><CloseIcon size={13} /></IconButton></span>)}</div> : null}
+      {attachmentErrors.length ? <div className="attachment-errors" role="alert"><div>{attachmentErrors.map((error, index) => <p key={index}>{error}</p>)}</div><IconButton label="エラーを閉じる" onClick={() => setAttachmentErrors([])}><CloseIcon size={13} /></IconButton></div> : null}
+      {attachments.length ? <div className="attachment-previews">{attachments.map(file => <span key={file.id}><PaperclipIcon size={15} />{file.name}<small>{formatSize(file.size)}</small><IconButton label={`${file.name}を外す`} onClick={() => setAttachments(current => current.filter(item => item.id !== file.id))}><CloseIcon size={13} /></IconButton></span>)}</div> : null}
       {recipients.length ? <div className="reply-preview mention-recipients">{recipients.map(recipient => <span key={recipient.id}>依頼先：{recipient.name}<IconButton label={`${recipient.name}の指定を解除`} onClick={() => setRecipients(current => current.filter(item => item.id !== recipient.id))}><CloseIcon size={14} /></IconButton></span>)}</div> : null}
       {candidates.length ? <div id={mentionListId} className="mention-picker" role="listbox" aria-label="依頼するBot">{candidates.map((member, index) => <button type="button" role="option" id={`${mentionListId}-${member.id}`} tabIndex={-1} aria-selected={index === activeMentionIndex} key={member.id} onMouseDown={e => e.preventDefault()} onMouseEnter={() => setMentionIndex(index)} onClick={() => chooseRecipient(member)}>{member.name}<span className="muted">{member.role}</span></button>)}</div> : null}
       <form className="composer" onSubmit={submit}><textarea disabled={readOnly || sending} ref={inputRef} aria-controls={candidates.length ? mentionListId : undefined} aria-activedescendant={activeMentionId} aria-describedby={candidates.length ? `${mentionListId}-hint` : undefined} onBlur={() => setCaret(0)} aria-label="このスレッドに返信" placeholder="このスレッドに返信…（@でBotを指定）" value={draft} rows={1} onChange={e => { setDraft(e.target.value); setCaret(e.target.selectionStart); setMentionIndex(0); setRecipients(current => current.filter(item => e.target.value.includes(`@${item.name}`))); }} onKeyDown={e => {
@@ -101,16 +109,17 @@ function ThreadBody({ onShowWork, thread, tasks, onNewSession, memberMap, paused
         }
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
       }} />
-        <input className="visually-hidden" ref={fileRef} type="file" multiple aria-label="添付ファイル" onChange={e => { const next = Array.from(e.target.files || []).map(file => ({ id: uid('file'), name: file.name, size: file.size })); setAttachments(current => [...current, ...next]); e.target.value = ''; }} />
-        <IconButton label="ファイルを添付" disabled={readOnly} className="attach-button" onClick={() => fileRef.current?.click()}><PlusIcon size={23} /></IconButton><button className="button primary send-button" disabled={readOnly || sending || (!draft.trim() && !attachments.length)}>送信</button>
+        <input className="visually-hidden" ref={fileRef} type="file" multiple aria-label="添付ファイル（テキストのみ）" onChange={async e => { const files = Array.from(e.target.files || []); e.target.value = ''; const { accepted, errors } = await readTextAttachments(files, attachments.length); setAttachments(current => [...current, ...accepted].slice(0, ATTACHMENT_LIMITS.count)); setAttachmentErrors(errors); }} />
+        <IconButton label="テキストファイルを添付（5件・各256KBまで）" disabled={readOnly || sending || attachments.length >= ATTACHMENT_LIMITS.count} className="attach-button" onClick={() => fileRef.current?.click()}><PlusIcon size={23} /></IconButton><button className="button primary send-button" disabled={readOnly || sending || (!draft.trim() && !attachments.length)}>送信</button>
       </form>
       {candidates.length ? <span className="composer-hint" id={`${mentionListId}-hint`}>Tab / ↑↓ で候補を移動 · Enter で選択 · Esc で閉じる</span> : null}
+      {openFile ? <AttachmentPreview file={openFile} onClose={() => setOpenFile(null)} /> : null}
       <span className="composer-hint">{thread.scope === 'private' ? 'この会話は、あなたと相手のBotだけに表示されます。' : 'メンバー全員が読んで参加できるスレッドです。'}<span>Ctrl / ⌘ + Enter で送信</span></span>
     </div>
   </>;
 }
 
-function Message({ acknowledgments = [], message, isRoot = false, title, memberMap, onMember, onReply, onArtifact }) {
+function Message({ acknowledgments = [], message, isRoot = false, title, memberMap, artifacts = [], onAttachment, onMember, onReply, onArtifact }) {
   if (!message) return <h1>{title}</h1>;
   const member = memberMap[message.author];
   return <article data-message-id={message.id} className={`message ${isRoot ? 'root-message' : ''}`}>
@@ -121,10 +130,44 @@ function Message({ acknowledgments = [], message, isRoot = false, title, memberM
       {message.reply_to ? <span className="message-reply-label"><ReplyIcon size={13} />返信</span> : null}
       {message.replyTo ? <blockquote><span>{memberMap[message.replyTo.author]?.name || 'あなた'}</span>{message.replyTo.text}</blockquote> : null}
       {message.text ? <Markdown text={message.text} members={memberMap} /> : null}
-      {message.artifact ? <button className="file-link" onClick={onArtifact}><FileIcon size={19} />雨音の調査メモ.md</button> : null}
-      {message.attachments?.map((file, index) => <span className="file-link local-attachment" key={`${file.name}-${index}`}><FileIcon size={18} />{file.name}<small>{Math.max(1, Math.round(file.size / 1024))} KB · 添付の表示例</small></span>)}
+      {message.artifact ? <ArtifactLink artifact={message.artifact} artifacts={artifacts} onArtifact={onArtifact} /> : null}
+      {message.attachments?.length ? <div className="message-attachments">{message.attachments.map(file => <button type="button" className="file-link message-attachment" key={file.id} aria-label={`添付ファイル ${file.name}（${formatSize(file.size)}）を開く`} onClick={() => onAttachment(file)}><PaperclipIcon size={17} />{file.name}<small>{formatSize(file.size)}</small></button>)}</div> : null}
       </div> : null}
       {acknowledgments.some(item => item.message_id === message.id) ? <p className="message-acknowledgments">受領済み：{acknowledgments.filter(item => item.message_id === message.id).map(item => memberMap[item.agent_id]?.name || '削除したBot').join('・')}</p> : null}
+    </div>
+  </article>;
+}
+
+// message.artifact is an artifact id (or a loaded artifact); the title comes from the loaded list.
+function ArtifactLink({ artifact, artifacts, onArtifact }) {
+  const id = typeof artifact === 'string' ? artifact : artifact.id;
+  const name = (typeof artifact === 'object' && artifact.name) || artifacts.find(item => item.id === id)?.name;
+  return <button className="file-link" onClick={() => onArtifact(id)}><FileIcon size={19} />{name ? documentName(name) : '成果物'}</button>;
+}
+
+function AttachmentPreview({ file, onClose }) {
+  const [state, setState] = useState({ loading: true, text: '', error: '' });
+  const href = `/api/attachments/${file.id}`;
+  useEffect(() => {
+    let active = true;
+    fetch(href, { credentials: 'same-origin', cache: 'no-store' }).then(async response => {
+      if (!response.ok) throw new Error(response.status === 404 ? 'この添付ファイルは削除されたか、見つかりません。' : '添付ファイルを読み込めませんでした。');
+      const text = await response.text(); if (active) setState({ loading: false, text, error: '' });
+    }).catch(error => { if (active) setState({ loading: false, text: '', error: error.message }); });
+    return () => { active = false; };
+  }, [href]);
+  return <Modal title={file.name} onClose={onClose} className="artifact-modal"><div className="modal-body">
+    <p className="muted">添付ファイル · {formatSize(file.size)} · テキストとして表示しています</p>
+    {state.loading ? <p role="status">読み込み中…</p> : state.error ? <p role="alert">{state.error}</p> : <pre className="artifact-document attachment-document">{state.text}</pre>}
+  </div><div className="form-actions"><a className="button primary" href={href} download={file.name}><DownloadIcon size={17} />ダウンロード</a></div></Modal>;
+}
+
+function DraftMessage({ draft, member }) {
+  const label = draft.state === 'sending' ? '送信しています' : '返答を書いています';
+  return <article className="message draft-message" aria-busy="true" aria-label={`${member?.name || 'Bot'}が${label}`}>
+    {member ? <Avatar member={member} size={60} /> : <Avatar size={60} />}
+    <div className="message-content"><div className="message-meta"><strong>{member?.name || '削除したBot'}</strong><span className="draft-status"><span className="typing-dots" aria-hidden="true"><span /><span /><span /></span>{label}</span></div>
+      <div className="message-bubble draft-bubble"><p className="draft-text">{draft.text}{draft.truncated ? '…' : ''}</p></div>
     </div>
   </article>;
 }

@@ -8,7 +8,7 @@ import {request} from 'node:http';
 import {once} from 'node:events';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {McpConnector,mcpRpc,mcpScope,mcpResourceUrl} from '../src/tools/mcp/client.ts';
+import {McpConnector,mcpRpc,mcpScope,mcpResourceUrl,mcpUrl,mcpEndpointValid} from '../src/tools/mcp/client.ts';
 import {Runtime} from '../src/runtime/runtime.ts';
 import {turnTools,executeAsyncTurnTool} from '../src/runtime/turn-tools.ts';
 import type {JsonObject} from '../src/contracts/model.ts';
@@ -34,15 +34,18 @@ async function fixture(t:{after:(fn:()=>Promise<void>)=>void},scope:'conversatio
  });server.listen(socket);await once(server,'listening');chmodSync(socket,0o600);
  mkdirSync(join(root,'state'));const runtime=new Runtime(join(root,'state'));
  t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));runtime.close();rmSync(root,{recursive:true,force:true});});
- const config={id:'local',socket,scope,tools:[{name:'write',readOnly:false},{name:'read',readOnly:true}]};
+ const config={id:'local',socket,scope,tools:[{name:'write',readOnly:false,approval:true as const},{name:'read',readOnly:true}]};
  return {root,socket,runtime,calls,effects,config};
 }
 test('MCP discovers only configured tools and pins caller context and write receipts',async t=>{
  const f=await fixture(t),mcp=await McpConnector.connect([f.config]);
  assert.deepEqual(mcp.tools(false).map(t=>t.name),['mcp_local_write','mcp_local_read']);assert.equal(turnTools(true).some(t=>t.name.startsWith('mcp_')),false);
  const admin=f.runtime.administrator(),leader=f.runtime.bootstrap(admin),actor=f.runtime.agentSession(leader.id),room=f.runtime.createRoom(admin,'人工の会話');
- f.runtime.tasks.create(admin,leader.id,room.id,'人工検証');const lease=f.runtime.tasks.claim(admin)!;
+ f.runtime.tasks.create(admin,leader.id,room.id,'人工検証');let lease=f.runtime.tasks.claim(admin)!;
  const call={tool_call_id:'artificial',name:'mcp_local_write',arguments:{text:'fixture'}};
+ assert.deepEqual(await executeAsyncTurnTool(f.runtime,actor,lease,call,'0:0',undefined,{mcp}),{waiting_for_approval:true});assert.equal(f.calls.length,0);
+ const pending=f.runtime.approvals(admin)[0]!;assert.deepEqual(JSON.parse(String(pending.detail)),{tool:'mcp_local_write',arguments:{text:'fixture'}});
+ f.runtime.decideApproval(admin,lease.task.id,true,String(pending.version));lease=f.runtime.tasks.claim(admin)!;
  const result=await executeAsyncTurnTool(f.runtime,actor,lease,call,'0:0',undefined,{mcp});
  await executeAsyncTurnTool(f.runtime,actor,lease,call,'0:0',undefined,{mcp});
  assert.equal(f.calls.length,1);assert.equal(f.effects.size,1);
@@ -50,6 +53,13 @@ test('MCP discovers only configured tools and pins caller context and write rece
  assert.equal(meta.scope,mcpScope(f.runtime.workareas.epoch(),room.id));assert.equal(meta.allow_start,true);assert.match(JSON.stringify(result),/\/api\/mcp\/local\/resource/);
  f.runtime.tasks.cancel(admin,lease.task.id);assert.ok((await executeAsyncTurnTool(f.runtime,actor,lease,call,'0:1',undefined,{mcp})).error);assert.equal(f.calls.length,1);
  const resource=await mcp.resource('local','fixture://document',String(meta.scope));assert.equal(resource.data.toString(),'人工のファイル');
+});
+test('MCP writes run without approval unless the administrator marked the tool for review',async t=>{
+ const f=await fixture(t),mcp=await McpConnector.connect([{...f.config,tools:[{name:'write',readOnly:false}]}]);
+ const admin=f.runtime.administrator(),leader=f.runtime.bootstrap(admin),actor=f.runtime.agentSession(leader.id),room=f.runtime.createRoom(admin,'人工の会話');
+ f.runtime.tasks.create(admin,leader.id,room.id,'人工検証');const lease=f.runtime.tasks.claim(admin)!;
+ const result=await executeAsyncTurnTool(f.runtime,actor,lease,{tool_call_id:'free',name:'mcp_local_write',arguments:{text:'fixture'}},'0:0',undefined,{mcp});
+ assert.equal(result.waiting_for_approval,undefined);assert.equal(f.calls.length,1);assert.equal(f.runtime.approvals(admin).length,0);
 });
 test('MCP ordinary servers are shared-only and cannot replay unrecorded writes',async t=>{
  const f=await fixture(t,'shared',false),mcp=await McpConnector.connect([f.config]);
@@ -60,10 +70,14 @@ test('MCP ordinary servers are shared-only and cannot replay unrecorded writes',
 test('MCP history retains write and read results with downloads after observation eviction; new reads refresh',async t=>{
  const f=await fixture(t),mcp=await McpConnector.connect([f.config]);
  const admin=f.runtime.administrator(),leader=f.runtime.bootstrap(admin),actor=f.runtime.agentSession(leader.id),room=f.runtime.createRoom(admin,'人工の会話');
- f.runtime.tasks.create(admin,leader.id,room.id,'結果を再確認');const lease=f.runtime.tasks.claim(admin)!,revision=f.runtime.context(actor,room.id).revision;
+ f.runtime.tasks.create(admin,leader.id,room.id,'結果を再確認');let lease=f.runtime.tasks.claim(admin)!;const revision=f.runtime.context(actor,room.id).revision;
  for(const name of ['mcp_local_write','mcp_local_read']){
   const call={type:'tool_call' as const,tool_call_id:name,name,arguments:{text:'fixture'}};
   const step=f.runtime.tasks.saveStep(actor,lease,revision,[call,{type:'completed',finish_reason:'tool_calls'}]);
+  if(name==='mcp_local_write'){
+   assert.deepEqual(await executeAsyncTurnTool(f.runtime,actor,lease,call,`${step}:0`,undefined,{mcp}),{waiting_for_approval:true});
+   const pending=f.runtime.approvals(admin)[0]!;f.runtime.decideApproval(admin,lease.task.id,true,String(pending.version));lease=f.runtime.tasks.claim(admin)!;
+  }
   const before=f.calls.length;
   const output=await executeAsyncTurnTool(f.runtime,actor,lease,call,`${step}:0`,undefined,{mcp});
   assert.deepEqual(await executeAsyncTurnTool(f.runtime,actor,lease,call,`${step}:0`,undefined,{mcp}),output);
@@ -157,4 +171,57 @@ test('markdown links allow only http(s) and MCP resource downloads',async()=>{
  const url=mcpResourceUrl('local','room-1','file:///a b?x=1&y=日本');
  assert.equal(safeUrl(url),url);assert.equal(safeUrl('https://example.com/a'),'https://example.com/a');
  for(const bad of ['/api/mcp/local/resource','/api/mcp/Local/resource?room=1','/api/mcp/local/resource?room=1//evil','/api/mcp/local/resource?room=\\evil','//evil.example/api/mcp/local/resource?x=1','/api/other/resource?x=1','/api/mcp/local/resource?a=1\nb','/api/mcp/local/resource/../x?a=1','javascript:alert(1)','/api/mcp/local/resource?room=1#//'])assert.equal(safeUrl(bad),'',bad);
+});
+test('MCP URLs must be canonical https (http only on loopback) without credentials or fragments',()=>{
+ for(const good of ['https://mcp.example.com/mcp','https://mcp.example.com','https://mcp.example.com:8443/v1/mcp?team=a','http://127.0.0.1:8080/mcp','http://localhost/mcp','http://[::1]:9/mcp'])assert.ok(mcpUrl(good),good);
+ for(const bad of ['http://mcp.example.com/mcp','ftp://example.com/','https://user:pass@example.com/mcp','https://token@example.com/mcp','https://example.com/mcp#x','https://example.com/mcp#','https://EXAMPLE.com/mcp','https://example.com:443/mcp','https://example.com/a/../mcp','https://example.com/ mcp','https:example.com/mcp','https://0x7f.1/mcp','http://127.0.0.2/mcp','https://例え.jp/mcp',`https://example.com/${'a'.repeat(500)}`,'https://example.com/mcp\n'])assert.equal(mcpUrl(bad),undefined,bad);
+ assert.equal(mcpEndpointValid({url:'https://example.com/mcp'}),true);assert.equal(mcpEndpointValid({socket:'/run/mcp.sock'}),true);
+ assert.equal(mcpEndpointValid({}),false);assert.equal(mcpEndpointValid({socket:'/run/mcp.sock',url:'https://example.com/mcp'}),false);assert.equal(mcpEndpointValid({url:'http://example.com/mcp'}),false);
+});
+async function remoteServer(t:{after:(fn:()=>Promise<void>)=>void},handle:(message:JsonObject,req:import('node:http').IncomingMessage,res:import('node:http').ServerResponse)=>void){
+ const seen:{method:string;path:string|undefined;auth:string|undefined;session:string|undefined}[]=[];
+ const server=createServer(async(req,res)=>{
+  const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));const message=JSON.parse(Buffer.concat(chunks).toString());
+  seen.push({method:message.method,path:req.url,auth:req.headers.authorization,session:req.headers['mcp-session-id'] as string|undefined});handle(message,req,res);
+ });server.listen(0,'127.0.0.1');await once(server,'listening');
+ t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
+ return {url:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1/mcp`,seen};
+}
+test('MCP remote Streamable HTTP endpoints initialize, list and call tools with a bearer token, session and SSE replies',async t=>{
+ const token='artificial-remote-token-0123456789';let issued=0;
+ const f=await remoteServer(t,(message,req,res)=>{
+  if(req.headers.authorization!==`Bearer ${token}`||req.url!=='/v1/mcp'||req.headers['mcp-protocol-version']!=='2025-06-18'){res.writeHead(401);res.end();return;}
+  if(message.method==='initialize'){res.writeHead(200,{'Content-Type':'application/json','Mcp-Session-Id':`remote-${++issued}`});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{protocolVersion:'2025-06-18',capabilities:{experimental:{niwaContextV1:true}}}}));return;}
+  if(req.headers['mcp-session-id']!==`remote-${issued}`){res.writeHead(404);res.end();return;}
+  if(message.id===undefined){res.writeHead(202);res.end();return;}
+  if(message.method==='tools/list'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{tools:[{name:'mail_search',description:'人工のメール検索',inputSchema:{type:'object'}},{name:'mail_send',inputSchema:{type:'object'}}]}}));return;}
+  if(message.method==='tools/call'){res.writeHead(200,{'Content-Type':'text/event-stream'});res.write(`event: message\ndata: ${JSON.stringify({jsonrpc:'2.0',method:'notifications/progress',params:{}})}\n\n`);res.end(`data: ${JSON.stringify({jsonrpc:'2.0',id:message.id,result:{content:[{type:'text',text:`人工の結果 ${(message.params as JsonObject).name} ${token}`}]}})}\n\n`);return;}
+  res.writeHead(400);res.end();
+ });
+ const config={id:'remote',url:f.url,scope:'conversation' as const,tools:[{name:'mail_search',readOnly:true}]};
+ await assert.rejects(McpConnector.connect([config]),/transport failed/);
+ const mcp=await McpConnector.connect([config],undefined,false,{remote:token});
+ assert.deepEqual(mcp.tools(false).map(t=>t.name),['mcp_remote_mail_search']);
+ const result=await mcp.call('mcp_remote_mail_search',{q:'人工'},{scope:mcpScope('epoch','room'),deadline:Date.now()+10000});
+ assert.equal(result.untrusted,true);assert.match(JSON.stringify(result),/人工の結果 mail_search \[REDACTED\]/);assert.doesNotMatch(JSON.stringify(result),new RegExp(token));
+ assert.deepEqual(f.seen.slice(0,4).map(s=>[s.method,s.session]),[['initialize',undefined],['initialize',undefined],['notifications/initialized','remote-1'],['tools/list','remote-1']]);
+ // An expired remote session is re-initialized once, exactly as for local sockets.
+ issued++;f.seen.length=0;await mcp.call('mcp_remote_mail_search',{},{scope:mcpScope('epoch','room'),deadline:Date.now()+10000});
+ assert.deepEqual(f.seen.map(s=>s.method),['tools/call','initialize','notifications/initialized','tools/call']);
+ assert.ok(f.seen.every(s=>s.auth===`Bearer ${token}`&&s.path==='/v1/mcp'));
+ const listed=await McpConnector.discover({url:f.url,token});assert.deepEqual(listed.tools.map(t=>t.name),['mail_search','mail_send']);
+});
+test('MCP remote endpoints never follow redirects, keep size limits and redact echoed tokens from errors',async t=>{
+ const token='artificial-echoed-token-abcdefgh';
+ const target=await remoteServer(t,(message,_req,res)=>{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{protocolVersion:'2025-06-18',capabilities:{}}}));});
+ const redirect=await remoteServer(t,(_message,_req,res)=>{res.writeHead(307,{Location:target.url});res.end();});
+ await assert.rejects(McpConnector.discover({url:redirect.url,token}),/transport failed/);
+ assert.equal(redirect.seen.length,1);assert.equal(target.seen.length,0);
+ const big=await remoteServer(t,(message,_req,res)=>{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{pad:'x'.repeat(4000)}}));});
+ await assert.rejects(mcpRpc({url:big.url},'tools/list',{},undefined,1000),/too large/);
+ const echo=await remoteServer(t,(message,req,res)=>{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,error:{code:-32001,message:`rejected ${req.headers.authorization}`}}));});
+ const error=await mcpRpc({url:echo.url,token},'tools/list',{}).then(()=>undefined,e=>e as Error);
+ assert.ok(error);assert.match(error.message,/^MCP error -32001: rejected/);assert.doesNotMatch(error.message,new RegExp(token));
+ await assert.rejects(mcpRpc({url:'http://example.com/mcp'},'tools/list',{}),/Invalid MCP URL/);
+ await assert.rejects(mcpRpc({url:echo.url,token:'bad\ntoken'},'tools/list',{}),/Invalid MCP credential/);
 });
