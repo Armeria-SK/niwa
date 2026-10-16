@@ -826,7 +826,7 @@ test('operation replay does not create duplicate bots or resurrect a deleted mem
   assert.equal(f.runtime.agents(f.admin).length, 2);
   assert.deepEqual(f.runtime.profile(f.admin, first.id as string), profile);
   assert.equal(f.runtime.agents(f.admin).find(agent => agent.id === first.id)!.role, 'member');
-  const forged = { ...call, arguments: { name: '権限変更', profile: { ...profile, provider: 'ollama' } } };
+  const forged = { ...call, arguments: { name: '権限変更', profile: { ...profile, provider: 'local_llm' } } };
   assert.ok(executeTurnTool(f.runtime, f.actor, lease, forged, '0:1').error);
   assert.equal(f.runtime.agents(f.admin).length, 2);
   const source = f.runtime.post(f.admin, f.room.id, '人工の出所');

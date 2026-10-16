@@ -24,6 +24,7 @@ import type { Agent, FallbackProvider, Room, Message, Memory, Settings } from '.
 import { normalizeCompatibleUrl } from '../providers/openai-compatible/url.ts';
 import { openaiCompatibleSchema } from '../storage/openai-compatible-schema.ts';
 import { anthropicSchema } from '../storage/anthropic-schema.ts';
+import { localLlmSchema } from '../storage/local-llm-schema.ts';
 import { openDatabase, transaction } from '../storage/database.ts';
 import { controlSchema, memoryMigrations } from '../storage/schema.ts';
 import { taskSchema } from '../storage/task-schema.ts';
@@ -104,7 +105,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -407,10 +408,10 @@ export class Runtime {
       ON CONFLICT(agent_id) DO UPDATE SET provider=excluded.provider,model=excluded.model,reason=excluded.reason,attempted_at=excluded.attempted_at`)
       .run(agentId, provider, model, reason, Date.now());
   }
-  modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null; maxParallel: number; fallbackProvider: FallbackProvider; compatibleUrl: string | null; compatibleParallel: number; anthropicParallel: number } {
+  modelSettings(actor: Actor): { localLlmUrl: string | null; fallbackModel: string | null; maxParallel: number; fallbackProvider: FallbackProvider; compatibleUrl: string | null; compatibleParallel: number; anthropicParallel: number } {
     this.#admin(actor);
-    const row = this.#db.prepare('SELECT ollama_url,fallback_model,max_parallel,fallback_provider,compatible_url,compatible_parallel,anthropic_parallel FROM model_settings WHERE id=1').get()!;
-    return { ollamaUrl: row.ollama_url as string | null, fallbackModel: row.fallback_model as string | null, maxParallel: row.max_parallel as number, fallbackProvider: row.fallback_provider as FallbackProvider,
+    const row = this.#db.prepare('SELECT local_llm_url,fallback_model,max_parallel,fallback_provider,compatible_url,compatible_parallel,anthropic_parallel FROM model_settings WHERE id=1').get()!;
+    return { localLlmUrl: row.local_llm_url as string | null, fallbackModel: row.fallback_model as string | null, maxParallel: row.max_parallel as number, fallbackProvider: row.fallback_provider as FallbackProvider,
       compatibleUrl: row.compatible_url as string | null, compatibleParallel: Number(row.compatible_parallel), anthropicParallel: Number(row.anthropic_parallel) };
   }
   /** Requests Niwa sends at once to the Claude API. Read per request, so running work keeps going. */
@@ -419,19 +420,19 @@ export class Runtime {
     check(Number.isInteger(count) && count >= 1 && count <= 8, 'invalid', 'Invalid parallel request count');
     this.#db.prepare('UPDATE model_settings SET anthropic_parallel=? WHERE id=1').run(count);
   }
-  /** Requests per Ollama endpoint that Niwa sends at once; match the server's OLLAMA_NUM_PARALLEL. Read per request, so no interruption is needed. */
-  configureOllamaParallel(actor: Actor, count: number): void {
+  /** Requests per Local LLM endpoint that Niwa sends at once; match the Ollama server's OLLAMA_NUM_PARALLEL. Read per request, so no interruption is needed. */
+  configureLocalLlmParallel(actor: Actor, count: number): void {
     this.#admin(actor);
     check(Number.isInteger(count) && count >= 1 && count <= 8, 'invalid', 'Invalid parallel request count');
     this.#db.prepare('UPDATE model_settings SET max_parallel=? WHERE id=1').run(count);
   }
   /** Host must verify model capabilities against this exact endpoint before saving. */
-  configureFallback(actor: Actor, url: string, model: string | null, provider: FallbackProvider = 'ollama'): void {
+  configureFallback(actor: Actor, url: string, model: string | null, provider: FallbackProvider = 'local_llm'): void {
     this.#admin(actor);
-    check(provider === 'ollama' || provider === 'openai_compatible' || provider === 'anthropic', 'invalid', 'Invalid provider');
+    check(provider === 'local_llm' || provider === 'openai_compatible' || provider === 'anthropic', 'invalid', 'Invalid provider');
     const settings = this.modelSettings(actor);
     // Clearing needs no endpoint; a selection must match the endpoint it was verified against. The Claude API has one fixed endpoint.
-    check(model === null || provider === 'anthropic' || (provider === 'ollama' ? settings.ollamaUrl : settings.compatibleUrl) === url, 'conflict', 'Model endpoint changed during discovery');
+    check(model === null || provider === 'anthropic' || (provider === 'local_llm' ? settings.localLlmUrl : settings.compatibleUrl) === url, 'conflict', 'Model endpoint changed during discovery');
     if (model !== null) text(model, 256);
     this.#db.prepare('UPDATE model_settings SET fallback_model=?,fallback_provider=? WHERE id=1').run(model, model === null ? settings.fallbackProvider : provider);
   }
@@ -452,16 +453,16 @@ export class Runtime {
     check(Number.isInteger(count) && count >= 1 && count <= 8, 'invalid', 'Invalid parallel request count');
     this.#db.prepare('UPDATE model_settings SET compatible_parallel=? WHERE id=1').run(count);
   }
-  configureOllama(actor: Actor, url: string | null): void {
+  configureLocalLlm(actor: Actor, url: string | null): void {
     this.#admin(actor);
     if (url !== null) {
       text(url, 2048);
       let parsed: URL;
-      try { parsed = new URL(url); } catch { throw new DomainError('invalid', 'Invalid Ollama URL'); }
-      check(['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash, 'invalid', 'Invalid Ollama URL');
+      try { parsed = new URL(url); } catch { throw new DomainError('invalid', 'Invalid Local LLM URL'); }
+      check(['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash, 'invalid', 'Invalid Local LLM URL');
     }
     transaction(this.#db, () => {
-      this.#db.prepare("UPDATE model_settings SET fallback_model=CASE WHEN ollama_url IS ? OR fallback_provider<>'ollama' THEN fallback_model ELSE NULL END,ollama_url=? WHERE id=1").run(url, url);
+      this.#db.prepare("UPDATE model_settings SET fallback_model=CASE WHEN local_llm_url IS ? OR fallback_provider<>'local_llm' THEN fallback_model ELSE NULL END,local_llm_url=? WHERE id=1").run(url, url);
       this.#interruptTasks();
     });
   }

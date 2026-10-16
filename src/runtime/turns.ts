@@ -19,7 +19,7 @@ import { summarySchema } from '../domain/summary.ts';
 
 /** Return a fresh adapter each time; calls after memory corrections must discard opaque continuation. */
 /** Adapters the gateway substitutes for a subscription at its usage limit. */
-const FALLBACK_ADAPTERS: readonly string[] = ['ollama', 'openai-compatible', 'anthropic'];
+const FALLBACK_ADAPTERS: readonly string[] = ['local-llm', 'openai-compatible', 'anthropic'];
 /** Adapters that take the bot's reasoning effort; the Claude adapter maps it to output_config.effort. */
 const EFFORT_ADAPTERS: readonly string[] = ['openai-subscription', 'anthropic'];
 export type ResolveAdapter = (agent: Agent, taskId: string, signal?: AbortSignal) => Promise<ModelAdapter>;

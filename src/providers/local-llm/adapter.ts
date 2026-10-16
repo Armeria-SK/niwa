@@ -6,13 +6,13 @@ import type { ModelAdapter, ModelRunOptions } from '../shared/adapter.ts';
 import { sanitizeModelRequestTextFields, containsSensitiveJsonKey } from '../shared/input-safety.ts';
 import { httpJson, HttpError } from '../../shared/http-json.ts';
 
-export function ollamaUrl(baseUrl: string, endpoint: 'chat' | 'tags' | 'show'): URL {
+export function localLlmUrl(baseUrl: string, endpoint: 'chat' | 'tags' | 'show'): URL {
   const url = new URL(baseUrl);
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Invalid Ollama URL');
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Invalid Local LLM URL');
   if (!url.pathname.endsWith('/')) url.pathname += '/';
   return new URL(`api/${endpoint}`, url);
 }
-export interface OllamaModel {
+export interface LocalLlmModel {
   id: string;
   tools: boolean;
   thinking: boolean;
@@ -25,32 +25,32 @@ const modelName = (value: unknown): string => {
   if (typeof value !== 'string' || !value.trim() || value.length > 256 || /[\x00-\x1f\x7f]/u.test(value)) throw new HttpError('invalid');
   return value;
 };
-export async function listOllamaModels(baseUrl: string, fetchImpl?: typeof fetch): Promise<string[]> {
-  const data = record(await httpJson(ollamaUrl(baseUrl, 'tags'), { ...(fetchImpl ? { fetch: fetchImpl } : {}) }));
+export async function listLocalLlmModels(baseUrl: string, fetchImpl?: typeof fetch): Promise<string[]> {
+  const data = record(await httpJson(localLlmUrl(baseUrl, 'tags'), { ...(fetchImpl ? { fetch: fetchImpl } : {}) }));
   if (!Array.isArray(data.models) || data.models.length > 512) throw new HttpError('invalid');
   return [...new Set(data.models.map(value => modelName(record(value).name)))];
 }
-export async function inspectOllamaModel(baseUrl: string, model: string, fetchImpl?: typeof fetch): Promise<OllamaModel> {
-  const data = record(await httpJson(ollamaUrl(baseUrl, 'show'), { body: { model: modelName(model), verbose: false }, ...(fetchImpl ? { fetch: fetchImpl } : {}) }));
+export async function inspectLocalLlmModel(baseUrl: string, model: string, fetchImpl?: typeof fetch): Promise<LocalLlmModel> {
+  const data = record(await httpJson(localLlmUrl(baseUrl, 'show'), { body: { model: modelName(model), verbose: false }, ...(fetchImpl ? { fetch: fetchImpl } : {}) }));
   if (!Array.isArray(data.capabilities) || data.capabilities.some(value => typeof value !== 'string')) throw new HttpError('invalid');
-  if (!data.capabilities.includes('completion')) throw new Error('This Ollama model cannot chat');
-  if (data.remote_host || data.remote_model) throw new Error('Niwa requires a local Ollama model');
+  if (!data.capabilities.includes('completion')) throw new Error('This Local LLM model cannot chat');
+  if (data.remote_host || data.remote_model) throw new Error('Niwa requires a local model, not a remote one');
   return { id: model, tools: data.capabilities.includes('tools'), thinking: data.capabilities.includes('thinking') };
 }
 /** Acquires a request slot for one endpoint; the returned function releases it. */
-export type OllamaSlot = (signal: AbortSignal) => Promise<() => void>;
-export class OllamaAdapter implements ModelAdapter {
-  readonly adapter_id = 'ollama';
+export type LocalLlmSlot = (signal: AbortSignal) => Promise<() => void>;
+export class LocalLlmAdapter implements ModelAdapter {
+  readonly adapter_id = 'local-llm';
   readonly capabilities: ModelAdapterCapabilities;
-  readonly #model: OllamaModel;
+  readonly #model: LocalLlmModel;
   readonly #url: URL;
   readonly #fetch: typeof fetch;
-  readonly #slot: OllamaSlot | undefined;
+  readonly #slot: LocalLlmSlot | undefined;
   readonly #queueMs: number;
   /** `slot` limits concurrent requests per endpoint; waiting for it ends at the caller's abort or `queueMs` (before the turn collector gives up). */
-  constructor(baseUrl: string, model: OllamaModel, fetchImpl = fetch, slot?: OllamaSlot, queueMs = 600_000) {
+  constructor(baseUrl: string, model: LocalLlmModel, fetchImpl = fetch, slot?: LocalLlmSlot, queueMs = 600_000) {
     this.#model = Object.freeze({ ...model, id: modelName(model.id) });
-    this.#url = ollamaUrl(baseUrl, 'chat'); this.#fetch = fetchImpl; this.#slot = slot; this.#queueMs = queueMs;
+    this.#url = localLlmUrl(baseUrl, 'chat'); this.#fetch = fetchImpl; this.#slot = slot; this.#queueMs = queueMs;
     this.capabilities = Object.freeze({
       execution_mode: 'model_api', auth_mode: 'none', billing_mode: 'none', owns_agent_loop: false,
       supports_niwa_tool_loop: model.tools, supports_tool_calls: model.tools, supports_structured_output: false,
@@ -63,7 +63,7 @@ export class OllamaAdapter implements ModelAdapter {
       if (!Value.Check(modelRequestSchema, request) || !isPlainJsonValue(request, { max_depth: 32, max_nodes: 10_000, max_bytes: 4 * 1024 * 1024 })) throw new HttpError('invalid');
       // Codex efforts are never forwarded to local models. Use the model's native thinking defaults.
       if (request.reasoning_effort !== undefined || request.response_contract.type !== 'text' || (request.tools.length && !this.#model.tools)) {
-        yield { type: 'failed', error: { code: 'CAPABILITY_MISMATCH', message: 'The selected Ollama model cannot use these settings or tools.', retryable: false } };
+        yield { type: 'failed', error: { code: 'CAPABILITY_MISMATCH', message: 'The selected Local LLM model cannot use these settings or tools.', retryable: false } };
         return;
       }
       const safe = sanitizeModelRequestTextFields(request).request;
@@ -110,7 +110,7 @@ export class OllamaAdapter implements ModelAdapter {
       const code = error instanceof HttpError && error.kind === 'timeout' ? 'TIMED_OUT'
         : error instanceof HttpError && error.kind === 'aborted' ? 'ABORTED'
           : error instanceof HttpError && (error.kind === 'network' || error.kind === 'status') ? 'PROVIDER_UNAVAILABLE' : 'INVALID_RESPONSE';
-      yield { type: 'failed', error: { code, message: `Ollama request failed (${code}).`, retryable: code === 'PROVIDER_UNAVAILABLE' || code === 'TIMED_OUT', provider_request_sent: sent } };
+      yield { type: 'failed', error: { code, message: `Local LLM request failed (${code}).`, retryable: code === 'PROVIDER_UNAVAILABLE' || code === 'TIMED_OUT', provider_request_sent: sent } };
     }
   }
 }

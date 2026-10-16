@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { ANTHROPIC_AGENTS_CHECK } from './anthropic-schema.ts';
+import { LOCAL_LLM_AGENTS_CHECK } from './local-llm-schema.ts';
 
 const PREVIOUS = "CHECK(provider IN ('openai_subscription','ollama'))";
 const NEXT = "CHECK(provider IN ('openai_subscription','ollama','openai_compatible'))";
@@ -11,7 +12,7 @@ export function openaiCompatibleSchema(db: DatabaseSync): void {
   const row = db.prepare("SELECT sql FROM sqlite_schema WHERE type='table' AND name='agents'").get();
   const sql = typeof row?.sql === 'string' ? row.sql : '';
   // A later migration may already have widened the constraint further.
-  if (sql.split(NEXT).length !== 2 && sql.split(ANTHROPIC_AGENTS_CHECK).length !== 2) widen(db, sql);
+  if ([NEXT, ANTHROPIC_AGENTS_CHECK, LOCAL_LLM_AGENTS_CHECK].every(text => sql.split(text).length !== 2)) widen(db, sql);
   const columns = new Set(db.prepare('PRAGMA table_info(model_settings)').all().map(column => column.name));
   if (!columns.has('compatible_url')) db.exec('ALTER TABLE model_settings ADD COLUMN compatible_url TEXT');
   if (!columns.has('compatible_parallel')) db.exec('ALTER TABLE model_settings ADD COLUMN compatible_parallel INTEGER NOT NULL DEFAULT 2 CHECK(compatible_parallel BETWEEN 1 AND 8)');

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { LOCAL_LLM_AGENTS_CHECK, LOCAL_LLM_FALLBACK_CHECK } from './local-llm-schema.ts';
 
 const AGENTS = ["CHECK(provider IN ('openai_subscription','ollama','openai_compatible'))", "CHECK(provider IN ('openai_subscription','ollama','openai_compatible','anthropic'))"] as const;
 const FALLBACK = ["CHECK(fallback_provider IN ('ollama','openai_compatible'))", "CHECK(fallback_provider IN ('ollama','openai_compatible','anthropic'))"] as const;
@@ -13,7 +14,8 @@ export function anthropicSchema(db: DatabaseSync): void {
     const [previous, next] = index === 0 ? AGENTS : FALLBACK;
     const row = db.prepare("SELECT sql FROM sqlite_schema WHERE type='table' AND name=?").get(table);
     const sql = typeof row?.sql === 'string' ? row.sql : '';
-    if (sql.split(next).length === 2) return undefined;
+    // The Local LLM rename rewrites this text again; a replayed database may already carry it.
+    if (sql.split(next).length === 2 || sql.split(index === 0 ? LOCAL_LLM_AGENTS_CHECK : LOCAL_LLM_FALLBACK_CHECK).length === 2) return undefined;
     if (sql.split(previous).length !== 2) throw new Error(`Unexpected ${table} schema`);
     return { table, sql: sql.replace(previous, next) };
   }).filter(edit => edit !== undefined);

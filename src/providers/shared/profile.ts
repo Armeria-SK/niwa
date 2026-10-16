@@ -7,7 +7,7 @@ import type { ModelAdapterCapabilities } from '../../contracts/index.ts';
 
 export const modelProfileSchema = Type.Object({
   runtime: Type.Union([Type.Literal('gpt'), Type.Literal('api')]),
-  provider_id: Type.Union([Type.Literal('openai_subscription'), Type.Literal('ollama')]),
+  provider_id: Type.Union([Type.Literal('openai_subscription'), Type.Literal('local_llm')]),
   provider_model_id: Type.String({ minLength: 1, maxLength: 256 }),
   supported_efforts: Type.Array(reasoningEffortSchema, { uniqueItems: true }),
   max_output_tokens: Type.Integer({ minimum: 1, maximum: 1_000_000 }),

@@ -3,8 +3,8 @@ import type { Agent, FallbackProvider } from '../domain/types.ts';
 import { check, DomainError } from '../domain/types.ts';
 import type { Runtime } from '../runtime/runtime.ts';
 import type { ResolveAdapter } from '../runtime/turns.ts';
-import { inspectOllamaModel, listOllamaModels, ollamaUrl, OllamaAdapter, type OllamaSlot } from './ollama/adapter.ts';
-import { OllamaLimiter } from './ollama/limiter.ts';
+import { inspectLocalLlmModel, listLocalLlmModels, localLlmUrl, LocalLlmAdapter, type LocalLlmSlot } from './local-llm/adapter.ts';
+import { LocalLlmLimiter } from './local-llm/limiter.ts';
 import type { Subscription } from '../auth/subscription.ts';
 import { createHash } from 'node:crypto';
 import type { ModelAdapter } from './shared/adapter.ts';
@@ -26,7 +26,7 @@ interface AnthropicTarget { readonly key: string; readonly revision: number }
 export class ModelGateway {
   #runtime: Runtime;
   #fetch: typeof fetch;
-  #limiter = new OllamaLimiter();
+  #limiter = new LocalLlmLimiter();
   #compatibleLimiter = new EndpointLimiter();
   readonly subscription: Subscription | undefined;
   /** OpenAI-compatible API key. Absent when the host has no secrets directory (tests, embedded use). */
@@ -172,21 +172,21 @@ export class ModelGateway {
     (await this.#verify('openai_compatible', model, 'native'))();
     return this.#runtime.setAgentModel(this.#runtime.administrator(), agentId, 'openai_compatible', model, 'native');
   }
-  #slot(url: string): OllamaSlot {
-    const key = ollamaUrl(url, 'chat').href;
+  #slot(url: string): LocalLlmSlot {
+    const key = localLlmUrl(url, 'chat').href;
     return signal => this.#limiter.acquire(key, () => this.#runtime.modelSettings(this.#runtime.administrator()).maxParallel, signal);
   }
   #url(): string {
-    const url = this.#runtime.modelSettings(this.#runtime.administrator()).ollamaUrl;
-    check(url, 'conflict', 'Ollama is not configured');
+    const url = this.#runtime.modelSettings(this.#runtime.administrator()).localLlmUrl;
+    check(url, 'conflict', 'Local LLM is not configured');
     return url;
   }
-  async catalog(): Promise<{ provider: 'ollama'; model: string }[]> {
-    return (await listOllamaModels(this.#url(), this.#fetch)).map(model => ({ provider: 'ollama', model }));
+  async catalog(): Promise<{ provider: 'local_llm'; model: string }[]> {
+    return (await listLocalLlmModels(this.#url(), this.#fetch)).map(model => ({ provider: 'local_llm', model }));
   }
   async select(agentId: string, model: string): Promise<Agent> {
-    (await this.#verify('ollama', model, 'native'))();
-    return this.#runtime.setAgentModel(this.#runtime.administrator(), agentId, 'ollama', model, 'native');
+    (await this.#verify('local_llm', model, 'native'))();
+    return this.#runtime.setAgentModel(this.#runtime.administrator(), agentId, 'local_llm', model, 'native');
   }
   async updateProfile(agentId: string, patch: Record<string, unknown>, version: string, selection?: Pick<Agent, 'provider' | 'model' | 'reasoning'>) {
     // Copy before discovery so validation and persistence always use the same input.
@@ -231,14 +231,14 @@ export class ModelGateway {
       check(!found || effort === 'native' || (found.efforts.length > 0 && (effort === 'minimal' || found.efforts.includes(effort as AnthropicModel['efforts'][number]))), 'invalid', 'The model does not support this reasoning effort');
       return () => check((this.#anthropic?.key.revision ?? 0) === target.revision, 'conflict', 'Claude API key changed during discovery');
     }
-    check(provider === 'ollama' && effort === 'native', 'invalid', 'Invalid Ollama selection');
+    check(provider === 'local_llm' && effort === 'native', 'invalid', 'Invalid Local LLM selection');
     const url = this.#url();
-    const installed = await listOllamaModels(url, this.#fetch);
+    const installed = await listLocalLlmModels(url, this.#fetch);
     check(installed.includes(model), 'invalid', 'The model is not installed');
-    await inspectOllamaModel(url, model, this.#fetch);
-    return () => check(this.#url() === url, 'conflict', 'Ollama configuration changed during discovery');
+    await inspectLocalLlmModel(url, model, this.#fetch);
+    return () => check(this.#url() === url, 'conflict', 'Local LLM configuration changed during discovery');
   }
-  async selectFallback(model: string | null, provider: FallbackProvider = 'ollama'): Promise<ReturnType<Runtime['modelSettings']>> {
+  async selectFallback(model: string | null, provider: FallbackProvider = 'local_llm'): Promise<ReturnType<Runtime['modelSettings']>> {
     const admin = this.#runtime.administrator();
     if (provider === 'anthropic') {
       if (model !== null) (await this.#verify('anthropic', model, 'native'))();
@@ -251,11 +251,11 @@ export class ModelGateway {
       this.#runtime.configureFallback(admin, this.#runtime.modelSettings(admin).compatibleUrl ?? '', model, provider);
       return this.#runtime.modelSettings(admin);
     }
-    check(provider === 'ollama', 'invalid', 'Invalid fallback provider');
+    check(provider === 'local_llm', 'invalid', 'Invalid fallback provider');
     const url = this.#url();
     if (model !== null) {
-      check((await listOllamaModels(url, this.#fetch)).includes(model), 'invalid', 'The model is not installed');
-      const capability = await inspectOllamaModel(url, model, this.#fetch);
+      check((await listLocalLlmModels(url, this.#fetch)).includes(model), 'invalid', 'The model is not installed');
+      const capability = await inspectLocalLlmModel(url, model, this.#fetch);
       check(capability.tools, 'invalid', 'The fallback model must support tools');
     }
     this.#runtime.configureFallback(admin, url, model, provider);
@@ -282,7 +282,7 @@ export class ModelGateway {
       const runtime = this.#runtime; const admin = runtime.administrator();
       if (runtime.providerLimits.blocked(admin, key)) {
         const settings=runtime.modelSettings(admin);
-        if(!settings.fallbackModel||!(settings.fallbackProvider==='ollama'?settings.ollamaUrl:settings.fallbackProvider==='anthropic'?await this.#anthropicTarget():settings.compatibleUrl))throw new ModelSetupError({code:'QUOTA_EXCEEDED',retryable:true,message:'接続先の利用枠回復を待っています。',reset_at:Math.ceil(runtime.providerLimits.nextProbe(admin,key)/1000)});
+        if(!settings.fallbackModel||!(settings.fallbackProvider==='local_llm'?settings.localLlmUrl:settings.fallbackProvider==='anthropic'?await this.#anthropicTarget():settings.compatibleUrl))throw new ModelSetupError({code:'QUOTA_EXCEEDED',retryable:true,message:'接続先の利用枠回復を待っています。',reset_at:Math.ceil(runtime.providerLimits.nextProbe(admin,key)/1000)});
         const fallback = await this.#fallback(agent, signal);
         check(subscription.revision === generation, 'conflict', 'Subscription account changed'); return fallback;
       }
@@ -323,12 +323,12 @@ export class ModelGateway {
       check((this.#anthropic?.key.revision ?? 0) === target.revision, 'conflict', 'Claude API key changed during discovery');
       return this.#record(this.#anthropicAdapter(target, model), agent.id, 'anthropic', agent.model, 'configured');
     }
-    check(agent.provider === 'ollama', 'conflict', 'Subscription login and capability verification are required');
+    check(agent.provider === 'local_llm', 'conflict', 'Subscription login and capability verification are required');
     const url = this.#url();
-    const model = await inspectOllamaModel(url, agent.model, this.#fetch);
+    const model = await inspectLocalLlmModel(url, agent.model, this.#fetch);
     signal?.throwIfAborted();
-    check(this.#url() === url, 'conflict', 'Ollama configuration changed during discovery');
-    return this.#record(new OllamaAdapter(url, model, this.#fetch, this.#slot(url)), agent.id, 'ollama', agent.model, 'configured');
+    check(this.#url() === url, 'conflict', 'Local LLM configuration changed during discovery');
+    return this.#record(new LocalLlmAdapter(url, model, this.#fetch, this.#slot(url)), agent.id, 'local_llm', agent.model, 'configured');
   };
   #record(adapter: ModelAdapter, agentId: string, provider: Agent['provider'], model: string, reason: 'configured' | 'quota'): ModelAdapter {
     const runtime = this.#runtime;
@@ -358,12 +358,12 @@ export class ModelGateway {
       check(current.compatibleUrl === target.url && current.fallbackProvider === 'openai_compatible' && current.fallbackModel === settings.fallbackModel, 'conflict', 'Fallback settings changed');
       return this.#record(this.#compatibleAdapter(target, settings.fallbackModel), agent.id, 'openai_compatible', settings.fallbackModel, 'quota');
     }
-    check(settings.ollamaUrl && settings.fallbackModel, 'conflict', 'A verified fallback model is required');
-    const model = await inspectOllamaModel(settings.ollamaUrl, settings.fallbackModel, this.#fetch);
+    check(settings.localLlmUrl && settings.fallbackModel, 'conflict', 'A verified fallback model is required');
+    const model = await inspectLocalLlmModel(settings.localLlmUrl, settings.fallbackModel, this.#fetch);
     signal?.throwIfAborted();
     check(model.tools, 'conflict', 'Fallback model must support tools');
     const current = this.#runtime.modelSettings(admin);
-    check(current.ollamaUrl === settings.ollamaUrl && current.fallbackModel === settings.fallbackModel, 'conflict', 'Fallback settings changed');
-    return this.#record(new OllamaAdapter(settings.ollamaUrl, model, this.#fetch, this.#slot(settings.ollamaUrl)), agent.id, 'ollama', settings.fallbackModel, 'quota');
+    check(current.localLlmUrl === settings.localLlmUrl && current.fallbackModel === settings.fallbackModel, 'conflict', 'Fallback settings changed');
+    return this.#record(new LocalLlmAdapter(settings.localLlmUrl, model, this.#fetch, this.#slot(settings.localLlmUrl)), agent.id, 'local_llm', settings.fallbackModel, 'quota');
   }
 }

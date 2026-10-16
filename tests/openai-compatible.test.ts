@@ -69,27 +69,27 @@ test('upgrading a schema49 database widens the provider constraint in place and 
   const root = mkdtempSync(join(tmpdir(), 'niwa-compatible-upgrade-')); let runtime = new Runtime(root);
   try {
     let admin = runtime.administrator(); const leader = runtime.bootstrap(admin); const member = runtime.createAgent(runtime.agentSession(leader.id), '既存Bot');
-    runtime.configureOllama(admin, 'http://127.0.0.1:11434'); runtime.configureFallback(admin, 'http://127.0.0.1:11434', 'artificial-local');
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434'); runtime.configureFallback(admin, 'http://127.0.0.1:11434', 'artificial-local');
     runtime.close();
     const db = new DatabaseSync(join(root, 'control.db'));
     const sql = String(db.prepare("SELECT sql FROM sqlite_schema WHERE name='agents'").get()!.sql);
     const version = Number(db.prepare('PRAGMA schema_version').get()!.schema_version);
     db.exec('BEGIN; PRAGMA writable_schema=ON;');
-    db.prepare("UPDATE sqlite_schema SET sql=? WHERE name='agents'").run(sql.replace(",'openai_compatible','anthropic'", ''));
+    db.prepare("UPDATE sqlite_schema SET sql=? WHERE name='agents'").run(sql.replace(",'openai_compatible','anthropic'", '').replace("'local_llm'", "'ollama'"));
     db.exec(`PRAGMA schema_version=${version + 1}; PRAGMA writable_schema=OFF; COMMIT;`);
-    db.exec('ALTER TABLE model_settings DROP COLUMN compatible_url; ALTER TABLE model_settings DROP COLUMN compatible_parallel; ALTER TABLE model_settings DROP COLUMN fallback_provider; ALTER TABLE model_settings DROP COLUMN anthropic_parallel; DROP TRIGGER clear_schedule_sources; DROP TABLE schedule_sources; PRAGMA user_version=49;');
+    db.exec('ALTER TABLE model_settings RENAME COLUMN local_llm_url TO ollama_url; ALTER TABLE model_settings DROP COLUMN compatible_url; ALTER TABLE model_settings DROP COLUMN compatible_parallel; ALTER TABLE model_settings DROP COLUMN fallback_provider; ALTER TABLE model_settings DROP COLUMN anthropic_parallel; DROP TRIGGER clear_schedule_sources; DROP TABLE schedule_sources; PRAGMA user_version=49;');
     const before = JSON.stringify(db.prepare('SELECT * FROM agents ORDER BY id').all());
     const autonomy = db.prepare('SELECT count(*) AS count FROM agent_autonomy').get()!.count;
     db.close();
     runtime = new Runtime(root); admin = runtime.administrator();
     const after = new DatabaseSync(join(root, 'control.db'));
     try {
-      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 52);
+      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 53);
       assert.equal(JSON.stringify(after.prepare('SELECT * FROM agents ORDER BY id').all()), before);
       assert.equal(after.prepare('SELECT count(*) AS count FROM agent_autonomy').get()!.count, autonomy);
       assert.match(String(after.prepare("SELECT sql FROM sqlite_schema WHERE name='agents'").get()!.sql), /'openai_compatible'/);
     } finally { after.close(); }
-    assert.deepEqual(runtime.modelSettings(admin), { ollamaUrl: 'http://127.0.0.1:11434', fallbackModel: 'artificial-local', maxParallel: 1, fallbackProvider: 'ollama', compatibleUrl: null, compatibleParallel: 2, anthropicParallel: 2 });
+    assert.deepEqual(runtime.modelSettings(admin), { localLlmUrl: 'http://127.0.0.1:11434', fallbackModel: 'artificial-local', maxParallel: 1, fallbackProvider: 'local_llm', compatibleUrl: null, compatibleParallel: 2, anthropicParallel: 2 });
     runtime.setAgentModel(admin, member.id, 'openai_compatible', 'artificial-model', 'native');
     assert.equal(runtime.agents(admin).find(agent => agent.id === member.id)!.provider, 'openai_compatible');
   } finally { runtime.close(); rmSync(root, { recursive: true, force: true }); }
@@ -286,7 +286,7 @@ test('subscription quota can switch to an OpenAI-compatible fallback model', asy
     await assert.rejects(gateway.selectFallback('missing', 'openai_compatible'), /not available/);
     const settings = await gateway.selectFallback('fallback-model', 'openai_compatible');
     assert.equal(settings.fallbackProvider, 'openai_compatible'); assert.equal(settings.fallbackModel, 'fallback-model');
-    runtime.configureOllama(admin, 'http://127.0.0.1:9');
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:9');
     assert.equal(runtime.modelSettings(admin).fallbackModel, 'fallback-model');
     runtime.setAgentModel(admin, leader.id, 'openai_subscription', 'artificial-model', 'low');
     const room = runtime.createRoom(admin, '切替');

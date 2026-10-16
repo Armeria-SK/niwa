@@ -24,7 +24,7 @@ import type { XOAuth } from '../auth/x-oauth.ts';
 const string = Type.String({ minLength: 1, maxLength: 20_000 });
 const id = Type.String({ pattern: '^[0-9a-f-]{36}$' });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
-const provider = Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription'), Type.Literal('openai_compatible'), Type.Literal('anthropic')]);
+const provider = Type.Union([Type.Literal('local_llm'), Type.Literal('openai_subscription'), Type.Literal('openai_compatible'), Type.Literal('anthropic')]);
 const scheduleFields = { agent_id: id, room_id: id, prompt: string,
       interval_ms: Type.Integer({ minimum: 60_000, maximum: 365 * 86400_000 }), next_at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }),
       max_runs: Type.Integer({ minimum: 1, maximum: 10_000 }), timeout_ms: Type.Integer({ minimum: 60_000, maximum: 86400_000 }),
@@ -182,8 +182,8 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'GET', path: /^\/api\/model-routes$/, run: () => runtime.modelRoutes(admin) },
     { method: 'PUT', path: /^\/api\/common-rules$/, schema: object({ revision: Type.Integer({ minimum: 1 }), body: Type.String({ maxLength: 20_000 }) }),
       run: (_m, b) => { runtime.updateCommonRules(admin, b.revision as number, b.body as string); return runtime.commonRules(admin); } },
-    { method: 'PATCH', path: /^\/api\/model-settings$/, schema: object({ ollamaUrl: Type.Optional(Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 2048 })])), maxParallel: Type.Optional(Type.Integer({ minimum: 1, maximum: 8 })) }),
-      run: (_m, b) => { if (b.ollamaUrl !== undefined) runtime.configureOllama(admin, b.ollamaUrl as string | null); if (b.maxParallel !== undefined) runtime.configureOllamaParallel(admin, b.maxParallel as number); return runtime.modelSettings(admin); } },
+    { method: 'PATCH', path: /^\/api\/model-settings$/, schema: object({ localLlmUrl: Type.Optional(Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 2048 })])), maxParallel: Type.Optional(Type.Integer({ minimum: 1, maximum: 8 })) }),
+      run: (_m, b) => { if (b.localLlmUrl !== undefined) runtime.configureLocalLlm(admin, b.localLlmUrl as string | null); if (b.maxParallel !== undefined) runtime.configureLocalLlmParallel(admin, b.maxParallel as number); return runtime.modelSettings(admin); } },
     { method: 'GET', path: /^\/api\/models$/, run: () => models.catalog() },
     // The API key is write-only: responses report only whether one is configured for the saved URL.
     { method: 'GET', path: /^\/api\/openai-compatible$/, run: () => models.compatibleStatus() },
@@ -201,10 +201,10 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'GET', path: /^\/api\/anthropic\/models$/, run: () => models.anthropicCatalog() },
     { method: 'POST', path: /^\/api\/anthropic\/check$/, schema: object({}), run: () => models.checkAnthropic() },
     { method: 'PUT', path: /^\/api\/model-settings\/fallback$/, schema: object({ model: Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 256 })]),
-      provider: Type.Optional(Type.Union([Type.Literal('ollama'), Type.Literal('openai_compatible'), Type.Literal('anthropic')])) }),
-      run: (_m, b) => models.selectFallback(b.model as string | null, (b.provider ?? 'ollama') as FallbackProvider) },
+      provider: Type.Optional(Type.Union([Type.Literal('local_llm'), Type.Literal('openai_compatible'), Type.Literal('anthropic')])) }),
+      run: (_m, b) => models.selectFallback(b.model as string | null, (b.provider ?? 'local_llm') as FallbackProvider) },
     { method: 'PUT', path: /^\/api\/agents\/([0-9a-f-]{36})\/model$/, schema: object({ provider, model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.Optional(Type.String({ maxLength: 20 })) }),
-      run: (m, b) => b.provider === 'ollama' ? models.select(m[1]!, b.model as string) : b.provider === 'openai_compatible' ? models.selectCompatible(m[1]!, b.model as string)
+      run: (m, b) => b.provider === 'local_llm' ? models.select(m[1]!, b.model as string) : b.provider === 'openai_compatible' ? models.selectCompatible(m[1]!, b.model as string)
         : b.provider === 'anthropic' ? models.selectAnthropic(m[1]!, b.model as string, (b.reasoning as string | undefined) || 'medium') : models.selectSubscription(m[1]!, b.model as string, b.reasoning as string) },
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/profile$/, schema: object({ patch: profileSchema, version: Type.String({ pattern: '^[0-9a-f]{64}$' }), selection: Type.Optional(object({ provider, model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 20 }) })) }), run: (m, b) => models.updateProfile(m[1]!, b.patch as Record<string, unknown>, b.version as string, b.selection as Pick<Agent, 'provider' | 'model' | 'reasoning'> | undefined) },
     { method: 'DELETE', path: /^\/api\/agents\/([0-9a-f-]{36})$/, schema: object({ version: Type.String({ pattern: '^[0-9a-f]{64}$' }) }), run: async (m, b) => { runtime.deleteAgent(admin, m[1]!, b.version as string);if(workareas)await runtime.workareas.purgeRetired(workareas);return { ok: true }; } },
