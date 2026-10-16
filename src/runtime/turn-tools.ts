@@ -248,8 +248,8 @@ async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease
       const links=Array.isArray(result.content)?result.content.filter((item:JsonObject)=>item.type==='resource_link'&&typeof item.uri==='string'&&item.uri.length<=2048).map((item:JsonObject)=>({name:item.name,url:mcpResourceUrl(tool.server.id,room!.id,item.uri as string)})):[];
       return {...result,...(links.length?{downloads:links}:{})};
     };
-    // A write reaches outside Niwa; like forms, the administrator approves the exact call first.
-    if(!tool.readOnly){
+    // The administrator registered this server; only writes they marked for review wait for approval of the exact call.
+    if(tool.approval){
       const action={tool:call.name,arguments:call.arguments};
       if(JSON.stringify(action,null,2).length>2000)return {error:'approval_too_large',message:'承認画面に表示できる長さ(2000字)を超えています。引数を短くするか分けてください。'};
       if(!runtime.authorizeAction(actor,lease,operationId,`外部ツールの書き込み：${call.name}`,action))return {waiting_for_approval:true};

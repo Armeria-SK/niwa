@@ -29,13 +29,13 @@ export function McpConnections(){
  function check(server){return run(async()=>{
   const result=await api('/mcp/probe','POST',server.transport==='url'?{url:server.url,...(server.token?{token:server.token}:savedToken(server,status)&&!server.clearToken?{id:server.id}:{})}:{socket:server.socket});
   if(!result.ok)throw Error(result.message);
-  const catalog=result.tools.map(tool=>{const saved=server.catalog.find(t=>t.name===tool.name);return {...tool,selected:saved?.selected??false,readOnly:saved?.readOnly??false,hint:tool.readOnlyHint===true};});
+  const catalog=result.tools.map(tool=>{const saved=server.catalog.find(t=>t.name===tool.name);return {...tool,selected:saved?.selected??false,readOnly:saved?.readOnly??false,...(saved?.approval===true?{approval:true}:{}),hint:tool.readOnlyHint===true};});
   setServers(current=>current.map(s=>s.key===server.key?{...s,catalog,checked:true,conversationIsolation:result.conversationIsolation}:s));
   if(server.catalog.some(tool=>tool.selected&&!catalog.some(t=>t.name===tool.name)))touch(server.key);
   setNotice('接続できました。Botに公開するツールを選んで保存してください。');
  });}
  function save(e){e.preventDefault();return run(async()=>{
-  const configs=servers.map(({id,transport,socket,url,scope,enabled,catalog})=>({id,...(transport==='url'?{url}:{socket}),scope,enabled,tools:catalog.filter(t=>t.selected).map(t=>({name:t.name,readOnly:t.readOnly}))}));
+  const configs=servers.map(({id,transport,socket,url,scope,enabled,catalog})=>({id,...(transport==='url'?{url}:{socket}),scope,enabled,tools:catalog.filter(t=>t.selected).map(t=>({name:t.name,readOnly:t.readOnly,...(!t.readOnly&&t.approval===true?{approval:true}:{})}))}));
   const tokens=servers.filter(s=>s.transport==='url'&&(s.token||s.clearToken)).map(s=>({id:s.id,value:s.token||null}));
   if(new Set(configs.map(s=>s.id)).size!==configs.length)throw Error('接続IDが重複しています。別のIDを指定してください。');
   if(configs.some(s=>s.enabled&&!s.tools.length))throw Error('有効な接続には、公開するツールを1つ以上選んでください。');
@@ -70,7 +70,7 @@ export function McpConnections(){
     {server.checked?<p className="field-hint">接続確認済み · {server.conversationIsolation?'会話ごとの分離に対応':'共有会話での利用に対応'}</p>:null}
     {server.catalog.length?<div className="mcp-tools"><h3>Botに公開するツール</h3><p className="field-hint">操作区分は、ツールの実際の動作に合わせて確認してください。初期値は「実行・書き込みあり」です。</p>{server.catalog.map(tool=><div className="mcp-tool" key={tool.name}>
      <label><input type="checkbox" checked={tool.selected} onChange={e=>change(server.key,{catalog:server.catalog.map(t=>t.name===tool.name?{...t,selected:e.target.checked}:t)})}/><span><strong>{tool.name}</strong><small>{tool.description}</small>{tool.hint?<small>接続先の申告: 読み取りのみ（実際の動作を確認して操作区分を選んでください）</small>:null}</span></label>
-     <select aria-label={`${tool.name} の操作区分`} disabled={!tool.selected} value={tool.readOnly?'read':'write'} onChange={e=>change(server.key,{catalog:server.catalog.map(t=>t.name===tool.name?{...t,readOnly:e.target.value==='read'}:t)})}><option value="write">実行・書き込みあり</option><option value="read">読み取りのみ</option></select>
+     <select aria-label={`${tool.name} の操作区分`} disabled={!tool.selected} value={tool.readOnly?'read':tool.approval===true?'write-approval':'write'} onChange={e=>change(server.key,{catalog:server.catalog.map(t=>{if(t.name!==tool.name)return t;const {approval,...rest}=t;return {...rest,readOnly:e.target.value==='read',...(e.target.value==='write-approval'?{approval:true}:{})};})})}><option value="write">書き込みあり</option><option value="write-approval">書き込みあり（毎回承認）</option><option value="read">読み取りのみ</option></select>
     </div>)}</div>:<p className="field-hint">「接続を確認」でツール一覧を取得できます。</p>}
    </fieldset>)}
    {ready?<button className="button secondary" type="button" disabled={busy||servers.length>=8} onClick={()=>{const added=draftServer({id:'',socket:'',scope:'conversation',enabled:true,tools:[]});setServers(current=>[...current,added]);touch(added.key);setNotice('');}}>MCP接続を追加</button>:null}

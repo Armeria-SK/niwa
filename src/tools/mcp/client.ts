@@ -9,7 +9,7 @@ import type {JsonObject,ModelToolDefinition} from '../../contracts/model.ts';
 import {redactSecrets} from '../../shared/redaction.ts';
 
 const name=Type.String({pattern:'^[a-z][a-z0-9_]{0,47}$'});
-export const mcpServerSchema=Type.Object({id:Type.String({pattern:'^[a-z][a-z0-9_]{0,19}$'}),socket:Type.Optional(Type.String({pattern:'^/',maxLength:100})),url:Type.Optional(Type.String({pattern:'^https?://',maxLength:500})),scope:Type.Union([Type.Literal('shared'),Type.Literal('conversation')]),enabled:Type.Optional(Type.Boolean()),tools:Type.Array(Type.Object({name,readOnly:Type.Boolean()},{additionalProperties:false}),{maxItems:32})},{additionalProperties:false});
+export const mcpServerSchema=Type.Object({id:Type.String({pattern:'^[a-z][a-z0-9_]{0,19}$'}),socket:Type.Optional(Type.String({pattern:'^/',maxLength:100})),url:Type.Optional(Type.String({pattern:'^https?://',maxLength:500})),scope:Type.Union([Type.Literal('shared'),Type.Literal('conversation')]),enabled:Type.Optional(Type.Boolean()),tools:Type.Array(Type.Object({name,readOnly:Type.Boolean(),approval:Type.Optional(Type.Literal(true))},{additionalProperties:false}),{maxItems:32})},{additionalProperties:false});
 export type McpServerConfig=Static<typeof mcpServerSchema>;
 /** Static credential for a remote server: printable ASCII header value, kept in secrets/ only. */
 export const mcpTokenSchema=Type.String({pattern:'^[\\x21-\\x7e](?:[\\x20-\\x7e]{0,4094}[\\x21-\\x7e])?$',maxLength:4096});
@@ -31,7 +31,7 @@ export function mcpEndpoint(config:{socket?:string|undefined;url?:string|undefin
 }
 export const mcpEndpointValid=(config:{socket?:string|undefined;url?:string|undefined})=>{try{mcpEndpoint(config);return true;}catch{return false;}};
 export interface McpContext {scope:string;execution_id?:string;allow_start?:boolean;deadline:number}
-interface Registered {definition:ModelToolDefinition;server:McpServerConfig;remote:string;readOnly:boolean;replay:boolean;signature:string}
+interface Registered {definition:ModelToolDefinition;server:McpServerConfig;remote:string;readOnly:boolean;approval:boolean;replay:boolean;signature:string}
 export const mcpScope=(epoch:string,room:string)=>createHash('sha256').update(JSON.stringify([epoch,room])).digest('hex');
 export const mcpResourceUrl=(server:string,room:string,uri:string)=>`/api/mcp/${server}/resource?room=${encodeURIComponent(room)}&uri=${encodeURIComponent(uri)}`;
 
@@ -172,7 +172,7 @@ export class McpConnector{
    if(exposed.length>64)throw Error('MCP tool name exceeds model limit');
    if(this.registered.has(exposed)||entries.some(([n])=>n===exposed))throw Error('Duplicate MCP tool name');
    const definition={name:exposed,description:tool.description,input_schema:tool.inputSchema};
-   entries.push([exposed,{definition,server:config,remote:allowed.name,readOnly:allowed.readOnly,replay:list.conversationIsolation,signature:createHash('sha256').update(JSON.stringify([config,definition])).digest('hex')}]);
+   entries.push([exposed,{definition,server:config,remote:allowed.name,readOnly:allowed.readOnly,approval:!allowed.readOnly&&allowed.approval===true,replay:list.conversationIsolation,signature:createHash('sha256').update(JSON.stringify([config,definition])).digest('hex')}]);
   }
   return()=>{entries.forEach(([n,r])=>this.registered.set(n,r));this.servers.set(config.id,config);this.sessions.set(config.id,session);this.endpoints.set(config.id,endpoint);this.failures.delete(config.id);};
  }

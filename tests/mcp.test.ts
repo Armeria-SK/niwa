@@ -34,7 +34,7 @@ async function fixture(t:{after:(fn:()=>Promise<void>)=>void},scope:'conversatio
  });server.listen(socket);await once(server,'listening');chmodSync(socket,0o600);
  mkdirSync(join(root,'state'));const runtime=new Runtime(join(root,'state'));
  t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));runtime.close();rmSync(root,{recursive:true,force:true});});
- const config={id:'local',socket,scope,tools:[{name:'write',readOnly:false},{name:'read',readOnly:true}]};
+ const config={id:'local',socket,scope,tools:[{name:'write',readOnly:false,approval:true as const},{name:'read',readOnly:true}]};
  return {root,socket,runtime,calls,effects,config};
 }
 test('MCP discovers only configured tools and pins caller context and write receipts',async t=>{
@@ -53,6 +53,13 @@ test('MCP discovers only configured tools and pins caller context and write rece
  assert.equal(meta.scope,mcpScope(f.runtime.workareas.epoch(),room.id));assert.equal(meta.allow_start,true);assert.match(JSON.stringify(result),/\/api\/mcp\/local\/resource/);
  f.runtime.tasks.cancel(admin,lease.task.id);assert.ok((await executeAsyncTurnTool(f.runtime,actor,lease,call,'0:1',undefined,{mcp})).error);assert.equal(f.calls.length,1);
  const resource=await mcp.resource('local','fixture://document',String(meta.scope));assert.equal(resource.data.toString(),'人工のファイル');
+});
+test('MCP writes run without approval unless the administrator marked the tool for review',async t=>{
+ const f=await fixture(t),mcp=await McpConnector.connect([{...f.config,tools:[{name:'write',readOnly:false}]}]);
+ const admin=f.runtime.administrator(),leader=f.runtime.bootstrap(admin),actor=f.runtime.agentSession(leader.id),room=f.runtime.createRoom(admin,'人工の会話');
+ f.runtime.tasks.create(admin,leader.id,room.id,'人工検証');const lease=f.runtime.tasks.claim(admin)!;
+ const result=await executeAsyncTurnTool(f.runtime,actor,lease,{tool_call_id:'free',name:'mcp_local_write',arguments:{text:'fixture'}},'0:0',undefined,{mcp});
+ assert.equal(result.waiting_for_approval,undefined);assert.equal(f.calls.length,1);assert.equal(f.runtime.approvals(admin).length,0);
 });
 test('MCP ordinary servers are shared-only and cannot replay unrecorded writes',async t=>{
  const f=await fixture(t,'shared',false),mcp=await McpConnector.connect([f.config]);
