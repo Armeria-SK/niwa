@@ -223,3 +223,27 @@ test('approving a paused operation records exact authorization without releasing
  assert.equal(resumed.task.id,task.id);assert.equal(r.authorizeAction(aa,resumed,'synthetic-operation','人工操作',action),true);
  assert.equal(r.authorizeAction(aa,resumed,'synthetic-operation','変更した人工操作',{...action,body:'changed'}),false);
 });
+// Memory DB writes are not covered by the control transaction, so a rejected recipient must leave every earlier recipient's memory untouched.
+function twoRecipients(t:{after(fn:()=>void):void}){const root=mkdtempSync('/tmp/niwa-atomic-'),r=new Runtime(root),admin=r.administrator(),a=r.bootstrap(admin),aa=r.agentSession(a.id),room=r.createRoom(admin,'人工の案件');t.after(()=>{r.close();rmSync(root,{recursive:true,force:true});});
+ const [x,y]=[r.createAgent(aa,'担当一'),r.createAgent(aa,'担当二')].sort((p,q)=>p.id<q.id?-1:1);return {root,r,admin,aa,x:x!,y:y!,room};}
+const memoryRows=(root:string,agent:string,sql:string,task:string)=>{const d=new DatabaseSync(join(root,'agents',agent,'memory.db'),{readOnly:true});try{return d.prepare(sql).all(task);}finally{d.close();}};
+test('a follow-up rejected for a later dormant recipient keeps the earlier recipient plan',t=>{
+ const {root,r,admin,aa,x,y,room}=twoRecipients(t);
+ const task=r.submit(admin,randomUUID(),room.id,'人工の調査',x.id).task!,lease=r.tasks.claim(admin)!,xa=r.agentSession(x.id);
+ assert.equal(lease.task.id,task.id);
+ r.tasks.updatePlan(xa,lease,'p1',0,['残り作業A','残り作業B']);r.tasks.wait(xa,lease,'waiting_user','どちらの対象ですか');r.setDormant(aa,y.id,true);
+ const sql='SELECT remaining FROM task_plans WHERE task_id=?',before=memoryRows(root,x.id,sql,task.id);assert.equal(before.length,1);
+ assert.throws(()=>r.submit(admin,randomUUID(),room.id,'対象はAです',[x.id,y.id]),/dormant/);
+ assert.equal(r.tasks.get(admin,task.id).state,'waiting_user');assert.equal(r.tasks.replies(admin,task.id).length,0);
+ assert.deepEqual(memoryRows(root,x.id,sql,task.id),before);
+});
+test('an amendment rejected for a later recipient keeps the earlier recipient steps and plan',t=>{
+ const {root,r,admin,x,y,room}=twoRecipients(t);
+ const task=r.submit(admin,randomUUID(),room.id,'人工の調査',x.id).task!,lease=r.tasks.claim(admin)!,xa=r.agentSession(x.id);
+ r.tasks.saveStep(xa,lease,r.context(xa,room.id).revision,[{type:'text',text:'途中までの考察'} as any]);r.tasks.updatePlan(xa,lease,'p1',0,['残り作業A']);
+ const ctl=r.tasks.controlRevision(admin,task.id),sql='SELECT discarded FROM task_steps WHERE task_id=?',plan='SELECT remaining FROM task_plans WHERE task_id=?';
+ assert.deepEqual(memoryRows(root,x.id,sql,task.id).map(row=>row.discarded),[0]);
+ assert.throws(()=>r.submit(admin,randomUUID(),room.id,'範囲を変更',[x.id,y.id],undefined,{kind:'amend',task_id:task.id,expected_revision:ctl}),/Target does not belong/);
+ assert.equal(r.tasks.get(admin,task.id).state,'running');assert.equal(r.tasks.replies(admin,task.id).length,0);
+ assert.deepEqual(memoryRows(root,x.id,sql,task.id).map(row=>row.discarded),[0]);assert.equal(memoryRows(root,x.id,plan,task.id).length,1);
+});
