@@ -17,8 +17,8 @@ const schema = Type.Object({ version: Type.Literal(1), origin: Type.String({ max
   workareasEnabled: Type.Optional(Type.Boolean()), packagesEnabled: Type.Optional(Type.Boolean()), xAccountId: Type.Optional(Type.String({ pattern: '^[0-9]{1,19}$' })) }, { additionalProperties: false });
 export type Installation = Static<typeof schema>;
 const savedMcpSchema=Type.Object({version:Type.Literal(1),servers:Type.Array(mcpServerSchema,{maxItems:8})},{additionalProperties:false});
-function validate(value: unknown): Installation {
-  if (!Value.Check(schema, value)) throw new Error('Invalid config/niwa.json');
+function validate(value: unknown, source = 'config/niwa.json'): Installation {
+  if (!Value.Check(schema, value)) throw new Error(`Invalid ${source}`);
   const config = value as Installation;
   const ids=new Set<string>();
   for(const server of config.mcpServers??[]){
@@ -40,7 +40,8 @@ export function readInstallation(root: string): Installation {
   const paths=productPaths(root),file = join(paths.config, 'niwa.json');
   const stat = lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || stat.size > 65_536) throw new Error('Invalid config/niwa.json');
-  const config=validate(JSON.parse(readFileSync(file, 'utf8')) as unknown);
+  let raw:unknown;try{raw=JSON.parse(readFileSync(file, 'utf8'));}catch{throw new Error('Invalid config/niwa.json');}
+  const config=validate(raw);
   // Fixed deployment settings stay read-only under systemd. UI-managed MCP settings
   // take precedence, including an empty list; legacy config is only the initial seed.
   assertDirectoryPath(paths.state);
@@ -50,9 +51,9 @@ export function readInstallation(root: string): Installation {
   try{
     const info=fstatSync(fd);
     if(!info.isFile()||info.nlink!==1||info.size>65_536||(process.platform!=='win32'&&((info.mode&0o077)!==0||info.uid!==process.getuid!())))throw new Error('Unsafe state/mcp.json');
-    const saved:unknown=JSON.parse(readFileSync(fd,'utf8'));
+    let saved:unknown;try{saved=JSON.parse(readFileSync(fd,'utf8'));}catch{throw new Error('Invalid state/mcp.json');}
     if(!Value.Check(savedMcpSchema,saved))throw new Error('Invalid state/mcp.json');
-    return validate({...config,mcpServers:saved.servers});
+    return validate({...config,mcpServers:saved.servers},'state/mcp.json');
   }finally{closeSync(fd);}
 }
 export const mcpConfigRevision=(servers:McpServerConfig[])=>createHash('sha256').update(JSON.stringify(servers)).digest('hex');

@@ -158,3 +158,51 @@ test('MCP settings and probing require administrator authentication and same-ori
  const saved=await call('/api/mcp','PUT',payload);assert.equal(saved.status,200);assert.equal(saved.body.applied,true);assert.deepEqual(saved.body.connected,['local']);
  assert.equal((await call('/api/mcp','PUT',payload)).status,409);assert.equal((await call('/api/mcp','PUT',{...payload,unexpected:true})).status,400);
 });
+async function miniServer(t:{after:(fn:()=>Promise<void>)=>void},socket:string){
+ const server=createServer(async(req,res)=>{
+  const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));const msg=JSON.parse(Buffer.concat(chunks).toString());
+  if(msg.id===undefined){res.writeHead(202);res.end();return;}
+  const result=msg.method==='initialize'?{protocolVersion:'2025-06-18',capabilities:{experimental:{niwaContextV1:true}}}:msg.method==='tools/list'?{tools:[{name:'read',description:'late',inputSchema:{type:'object'}}]}:{};
+  res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:msg.id,result}));
+ });server.listen(socket);await once(server,'listening');chmodSync(socket,0o600);
+ t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
+}
+const until=async(check:()=>boolean,ms=3000)=>{const end=Date.now()+ms;while(!check()&&Date.now()<end)await new Promise(r=>setTimeout(r,10));};
+const lateConfig=(socket:string)=>({id:'late',socket,scope:'conversation' as const,tools:[{name:'read',readOnly:false}]});
+test('MCP boot keeps reachable servers when another is down, reports each failure and retries until it recovers',async t=>{
+ const f=await fixture(t),late=join(f.root,'late.sock');
+ writeFileSync(join(f.root,'config/niwa.json'),JSON.stringify({...readInstallation(f.root),mcpServers:[f.config,lateConfig(late)]}));
+ const settings=await McpSettings.open(f.root,undefined,{initial:20,max:40});t.after(()=>settings.close());
+ let status=settings.status();assert.deepEqual(status.connected,['local']);assert.deepEqual(status.failed,[{id:'late',reason:'ENOENT'}]);assert.equal(status.applied,false);assert.ok(status.error);
+ assert.deepEqual(status.tools.map(x=>x.name).sort(),['mcp_local_read','mcp_local_write']);
+ await new Promise(r=>setTimeout(r,100));assert.deepEqual(settings.status().connected,['local']);
+ await miniServer(t,late);await until(()=>settings.status().connected.length===2);
+ status=settings.status();assert.deepEqual(status.connected.sort(),['late','local']);assert.deepEqual(status.failed,[]);assert.equal(status.applied,true);assert.equal(status.error,null);
+ assert.ok(status.tools.some(x=>x.name==='mcp_late_read'));
+});
+test('MCP retries stop when settings close',async t=>{
+ const f=await fixture(t),late=join(f.root,'late.sock');
+ writeFileSync(join(f.root,'config/niwa.json'),JSON.stringify({...readInstallation(f.root),mcpServers:[lateConfig(late)]}));
+ const settings=await McpSettings.open(f.root,undefined,{initial:20,max:40});settings.close();
+ await miniServer(t,late);await new Promise(r=>setTimeout(r,150));assert.deepEqual(settings.connector.connections(),[]);
+});
+test('a failing server does not block saving unchanged settings but a newly failing one does',async t=>{
+ const f=await fixture(t),down=lateConfig(join(f.root,'late.sock'));
+ writeFileSync(join(f.root,'config/niwa.json'),JSON.stringify({...readInstallation(f.root),mcpServers:[down]}));
+ const settings=await McpSettings.open(f.root,undefined,{initial:60000,max:60000});t.after(()=>settings.close());
+ const saved=await settings.save({revision:settings.status().revision,servers:[down,f.config]});assert.equal(saved.ok,true);
+ assert.deepEqual(settings.status().connected,['local']);assert.deepEqual(settings.status().failed.map(x=>x.id),['late']);
+ const refused=await settings.save({revision:settings.status().revision,servers:[down,f.config,{...f.config,id:'other',socket:join(f.root,'none.sock')}]});
+ assert.equal(refused.ok,false);assert.ok('message' in refused&&/other: ENOENT/.test(refused.message));
+});
+test('invalid MCP state is named correctly and status keeps the last good state',async t=>{
+ const f=await fixture(t),state=join(f.root,'state/mcp.json');
+ await f.manager.save({revision:f.manager.status().revision,servers:[f.config]});
+ const good=f.manager.status();
+ writeFileSync(state,JSON.stringify({version:1,servers:[{...f.config,id:'BAD'}]}),{mode:0o600});
+ assert.throws(()=>readInstallation(f.root),/Invalid state\/mcp\.json/);
+ let status=f.manager.status();assert.equal(status.revision,good.revision);assert.deepEqual(status.connected,['local']);assert.match(String(status.error),/state\/mcp\.json/);
+ writeFileSync(join(f.root,'config/niwa.json'),'{broken');
+ status=f.manager.status();assert.equal(status.revision,good.revision);assert.match(String(status.error),/config\/niwa\.json/);
+ assert.throws(()=>readInstallation(f.root),/Invalid config\/niwa\.json/);
+});
