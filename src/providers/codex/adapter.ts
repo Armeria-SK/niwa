@@ -9,6 +9,7 @@ import {
   type ModelFailureCode,
   type ModelFailureOrigin,
   type ModelMessage,
+  type ModelOutputDelta,
   type ModelRequest,
   type ReasoningEffort,
 } from '../../contracts/index.ts';
@@ -16,7 +17,7 @@ import type { CredentialStore, OAuthCredential } from '../../auth/credential-sto
 import { subscriptionUsageLimit } from './usage-limit.ts';
 import { Value } from '@sinclair/typebox/value';
 
-import { createProgressModelEventStream, type ModelAdapter, type ModelEventStream, type ModelRunOptions } from '../shared/adapter.ts';
+import { createProgressModelEventStream, emitModelDelta, type ModelAdapter, type ModelEventStream, type ModelRunOptions } from '../shared/adapter.ts';
 import { createEffectiveModelCapabilities, type ModelProfile } from '../shared/profile.ts';
 import {
   DEFAULT_SUBSCRIPTION_BASE_URL,
@@ -235,7 +236,7 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
         const reset=retry?(/^\d+$/.test(retry)?Math.ceil(Date.now()/1000)+Number(retry):Math.ceil(Date.parse(retry)/1000)):undefined;
         throw error.details.retryable&&reset!==undefined&&Number.isSafeInteger(reset)&&reset>=0&&reset<=8640000000000?new SubscriptionFailure({...error.details,reset_at:reset}):error;
       }
-      const parsed = await readCodexResponse(response, this.#maxResponseBodyBytes, requestScope, [...exactCredentials], summary=>onDisplay?.({type:'reasoning_summary',summary}));
+      const parsed = await readCodexResponse(response, this.#maxResponseBodyBytes, requestScope, [...exactCredentials], summary=>onDisplay?.({type:'reasoning_summary',summary}),options.on_delta?delta=>emitModelDelta(options,delta):undefined);
       requestScope.throwIfAborted();
       observation.merge(parsed.diagnostics);
       if (parsed.diagnostics.response_completed) {
@@ -943,6 +944,7 @@ async function readCodexResponse(
   scope: BoundedRequestScope,
   exactCredentials: readonly string[],
   onSummary?: (summary:string)=>void,
+  onDelta?: (delta:ModelOutputDelta)=>void,
 ): Promise<CodexResponsesParseResult> {
   if (scope.signal.aborted) {
     cancelResponseBody(response);
@@ -959,7 +961,7 @@ async function readCodexResponse(
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
   let mode: 'unknown' | 'sse' | 'json' = contentType.includes('text/event-stream') ? 'sse' : 'unknown';
-  let sse = mode === 'sse' ? createCodexResponsesStreamParser(exactCredentials,onSummary) : undefined;
+  let sse = mode === 'sse' ? createCodexResponsesStreamParser(exactCredentials,onSummary,onDelta) : undefined;
   let prefix = '';
   let body = '';
   let total = 0;
@@ -968,7 +970,7 @@ async function readCodexResponse(
     const trimmed = prefix.trimStart();
     if (trimmed.startsWith('data:') || trimmed.startsWith('event:') || trimmed.startsWith(':')) {
       mode = 'sse';
-      sse = createCodexResponsesStreamParser(exactCredentials,onSummary);
+      sse = createCodexResponsesStreamParser(exactCredentials,onSummary,onDelta);
       sse.push(prefix);
       prefix = '';
       return;

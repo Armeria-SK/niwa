@@ -1,6 +1,6 @@
 // Derived from Carried c695f855419ffc69d1e62b04f1de8de36c7c162d, core/providers/src/codex-responses-parser.ts.
 // Apache-2.0. Modified for Niwa; upstream revision and source path are recorded above.
-import type { JsonObject, ModelEvent } from '../../contracts/index.ts';
+import type { JsonObject, ModelEvent, ModelOutputDelta } from '../../contracts/index.ts';
 import { subscriptionUsageLimit } from './usage-limit.ts';
 
 import {
@@ -153,6 +153,11 @@ interface ParseContext {
   pendingKind: 'text' | 'reasoning' | undefined;
   pendingParts: string[];
   terminalKind?: 'completed' | 'incomplete';
+  /** Display-only partial output; never part of events, diagnostics, or continuation. */
+  onDelta?: (delta: ModelOutputDelta) => void;
+  readonly draftCalls: Map<string, string | undefined>;
+  draftTail: string;
+  draftBlocked: boolean;
 }
 
 export interface CodexResponsesStreamParser {
@@ -224,6 +229,9 @@ function createContext(exactSecrets: string | readonly string[] | undefined): Pa
     textBytes: 0,
     pendingKind: undefined,
     pendingParts: [],
+    draftCalls: new Map<string, string | undefined>(),
+    draftTail: '',
+    draftBlocked: false,
   };
 }
 
@@ -295,8 +303,9 @@ function parseOutput(output: readonly unknown[], context: ParseContext): void {
   }
 }
 
-export function createCodexResponsesStreamParser(exactSecrets?: string | readonly string[], onSummary?: (summary:string)=>void): CodexResponsesStreamParser {
+export function createCodexResponsesStreamParser(exactSecrets?: string | readonly string[], onSummary?: (summary:string)=>void, onDelta?: (delta: ModelOutputDelta)=>void): CodexResponsesStreamParser {
   const context = createContext(exactSecrets);
+  if (onDelta) context.onDelta = onDelta;
   let lineBuffer = '';
   let frameEvent: string | undefined;
   let frameData: string[] = [];
@@ -468,7 +477,7 @@ function processRecord(record: Record<string, unknown>, context: ParseContext, e
   }
   recordMetadata(record, context);
   if (eventType === 'response.output_text.delta') {
-    if (typeof record['delta'] === 'string') addText(record['delta'], context);
+    if (typeof record['delta'] === 'string') { addText(record['delta'], context); observeDelta(context, { channel: 'text', delta: record['delta'] }); }
     return;
   }
   if (eventType === 'response.output_text.done') { flushPending(context); return; }
@@ -488,6 +497,7 @@ function processRecord(record: Record<string, unknown>, context: ParseContext, e
     });
     if (item?.['type'] === 'function_call') recordToolCallShape(item, context, record['item_id']);
     context.functionCalls.registerOutputItem(withOuterItemId(item, record));
+    if (item?.['type'] === 'function_call') rememberDraftCall(item, record, context);
     return;
   }
   if (eventType === 'response.output_item.done') {
@@ -510,7 +520,12 @@ function processRecord(record: Record<string, unknown>, context: ParseContext, e
     flushPending(context);
     recordToolCallShape(record, context);
     context.functionCalls.appendArguments(record['item_id'], record['call_id'], record['delta']);
-    if (typeof record['delta'] === 'string') context.diagnostics.observed_tool_call = true;
+    if (typeof record['delta'] === 'string') {
+      context.diagnostics.observed_tool_call = true;
+      const id = typeof record['item_id'] === 'string' && record['item_id'] ? record['item_id'] : typeof record['call_id'] === 'string' && record['call_id'] ? record['call_id'] : undefined;
+      const name = id === undefined ? undefined : context.draftCalls.get(id);
+      if (id !== undefined) observeDelta(context, { channel: 'tool_arguments', call_id: id.slice(0, 256), ...(name ? { name } : {}), delta: record['delta'] });
+    }
     return;
   }
   if (eventType === 'response.function_call_arguments.done') {
@@ -543,6 +558,23 @@ function processRecord(record: Record<string, unknown>, context: ParseContext, e
     return;
   }
   if (record['usage'] !== undefined) recordUsage(record['usage'], context);
+}
+
+function rememberDraftCall(item: Record<string, unknown>, record: Record<string, unknown>, context: ParseContext): void {
+  if (!context.onDelta || context.draftCalls.size >= 64) return;
+  const name = typeof item['name'] === 'string' && item['name'].length <= 128 && item['name'] ? item['name'] : undefined;
+  for (const id of [record['item_id'], item['id'], item['call_id']]) if (typeof id === 'string' && id) context.draftCalls.set(id, name);
+}
+
+/** Forward an already accepted wire delta for display. Exact credentials stop all later display deltas. */
+function observeDelta(context: ParseContext, delta: ModelOutputDelta): void {
+  if (!context.onDelta || context.draftBlocked || !delta.delta) return;
+  if (context.max_exact_credential_length > 0) {
+    const combined = `${context.draftTail}${delta.delta}`;
+    if (containsExactCredentialMaterial(combined, context.exact_credentials)) { context.draftBlocked = true; return; }
+    context.draftTail = combined.slice(-(context.max_exact_credential_length - 1) || combined.length);
+  }
+  try { context.onDelta(delta); } catch { /* display only */ }
 }
 
 function processFailure(record: Record<string, unknown>, context: ParseContext): never {

@@ -12,6 +12,7 @@ import { DomainError } from '../domain/types.ts';
 import type { Agent, Settings } from '../domain/types.ts';
 import type { Runtime } from '../runtime/runtime.ts';
 import { WebAuth } from './auth.ts';
+import { LiveStreams } from './live-stream.ts';
 import { ModelGateway } from '../providers/gateway.ts';
 import { serveStatic } from './static.ts';
 import { profileSchema, creationProfileSchema } from '../domain/profile.ts';
@@ -48,6 +49,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 export function createApiServer(runtime: Runtime, auth: WebAuth, models = new ModelGateway(runtime), webRoot?: string, backups?: Backups,
   workspace?: { read: WorkspaceRead; download: WorkspaceDownload }, x?: XOAuth, workareas?:WorkareaTransport, mcp?:McpConnector, mcpSettings?:McpSettings) {
   const admin = runtime.administrator();
+  const live = new LiveStreams(runtime, admin, auth);
   type Route = { method: string; path: RegExp; schema?: TSchema; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL) => unknown };
   const scoped=(area:string,input:Parameters<Runtime['workareas']['execute']>[2])=>{
     if(!workareas)throw new DomainError('conflict','Workareas are not configured');
@@ -201,7 +203,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'GET', path: /^\/api\/tasks\/([0-9a-f-]{36})\/history$/, run: m => runtime.tasks.history(admin, m[1]!) },
     { method: 'GET', path: /^\/api\/events$/, run: (_m, _b, url) => runtime.tasks.events(admin, Number(url.searchParams.get('after') ?? '0')) },
   ];
-  return createServer({ requestTimeout: 15_000, headersTimeout: 10_000, maxHeaderSize: 16_384 }, async (req, res) => {
+  const server = createServer({ requestTimeout: 15_000, headersTimeout: 10_000, maxHeaderSize: 16_384 }, async (req, res) => {
     try {
       if (!auth.validOrigin(req)) { send(res, 403, { error: 'origin_rejected' }); return; }
       const url = new URL(req.url ?? '/', auth.origin);
@@ -235,6 +237,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
         res.writeHead(200,{'Content-Type':file.mime,'Content-Disposition':'attachment','Content-Length':file.data.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(file.data);return;
       }
       if (req.method === 'POST' && url.pathname === '/api/logout') { auth.logout(req, res); send(res, 200, { ok: true }); return; }
+      if (req.method === 'GET' && url.pathname === '/api/events/stream') { live.open(req, res); return; }
       for (const route of routes) {
         const match = url.pathname.match(route.path);
         if (req.method !== route.method || !match) continue;
@@ -246,7 +249,9 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     } catch (error) {
       const code = error instanceof DomainError ? error.code : 'internal_error';
       const status = { forbidden: 403, invalid: 400, not_found: 404, conflict: 409, limit: 413, internal_error: 500 }[code];
-      if (!res.destroyed) send(res, status, { error: code });
+      if (!res.destroyed && !res.headersSent) send(res, status, { error: code });
     }
   });
+  server.on('close', () => live.close());
+  return server;
 }

@@ -13,6 +13,7 @@ import { Settings } from './pages/Settings.jsx';
 import { DeleteContentDialog } from './ContentActions.jsx';
 import { TrashIcon } from './icons.jsx';
 import { useRoomSearch } from './useRoomSearch.js';
+import { useLiveStream } from './useLiveStream.js';
 
 const navItems = [
   { id: 'conversation', label: '会話', icon: ChatIcon },
@@ -68,11 +69,27 @@ export function App() {
   useEffect(() => () => { clearTimeout(toastTimer.current); for (const timer of celebrationTimers.current.values()) clearTimeout(timer); }, []);
   useEffect(() => { try { sessionStorage.setItem('niwa-thread', selectedThread); } catch { /* Optional browser state. */ } }, [selectedThread]);
   useEffect(() => { api('/session').then(result => setAuthenticated(result.authenticated)).catch(() => setAuthenticated(false)); }, []);
+  const pushed = useRef({ busy: false, again: false, timer: null, last: 0 });
+  // Pushed hints are coalesced: one refresh at a time, at most about once per 0.8 seconds.
+  function requestRefresh() {
+    const state = pushed.current;
+    if (state.busy) { state.again = true; return; }
+    if (state.timer) return;
+    state.timer = setTimeout(async () => {
+      state.timer = null; state.busy = true; state.last = Date.now();
+      try { await refresh(); } finally { state.busy = false; if (state.again) { state.again = false; requestRefresh(); } }
+    }, Math.max(0, state.last + 800 - Date.now()));
+  }
+  const live = useLiveStream(!!authenticated && ready, requestRefresh);
+  const liveConnected = useRef(false); const pollNow = useRef(null);
+  useEffect(() => { const lost = liveConnected.current && !live.connected; liveConnected.current = live.connected; if (lost) pollNow.current?.(); }, [live.connected]);
   useEffect(() => {
     if (!authenticated) return;
-    let stopped = false; let timer;
-    async function poll() { await refresh(); if (!stopped) timer = setTimeout(poll, 2000); }
-    void poll(); return () => { stopped = true; clearTimeout(timer); refreshVersion.current++; };
+    let stopped = false; let timer; let running = false;
+    // While the stream is connected, polling is only a slow safety net.
+    async function poll() { running = true; try { await refresh(); } finally { running = false; } if (!stopped) timer = setTimeout(poll, liveConnected.current ? 30_000 : 2000); }
+    pollNow.current = () => { if (running) return; clearTimeout(timer); timer = setTimeout(poll, 2000); };
+    void poll(); return () => { stopped = true; pollNow.current = null; clearTimeout(timer); clearTimeout(pushed.current.timer); pushed.current.timer = null; refreshVersion.current++; };
   }, [authenticated]);
 
   async function refresh() {
@@ -211,7 +228,7 @@ export function App() {
       <div className="sidebar-bottom"><a href="#settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}><SettingsIcon size={23} /><span>設定</span></a><button className="preview-label" onClick={async () => { await api('/logout', 'POST', {}); setAuthenticated(false); setReady(false); }}><span className="preview-dot" />ログアウト<InfoIcon size={13} /></button></div>
     </aside>
     {page === 'conversation' && !thread ? <main className="conversation" id="main-content"><EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState></main> : null}
-    {page === 'conversation' && thread ? <Conversation onThreadAction={organizeThread} thread={thread} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => setMobileDetail(false)} onArtifact={openArtifact} /> : null}
+    {page === 'conversation' && thread ? <Conversation onThreadAction={organizeThread} drafts={Object.values(live.drafts).filter(draft => draft.room_id === thread.id)} thread={thread} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => setMobileDetail(false)} onArtifact={openArtifact} /> : null}
     {page === 'members' ? <Members onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), 'Botを削除しました。会話と成果物は残っています。')} onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={selectedMember} onSelect={setSelectedMember} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
     {page === 'activity' ? <Activity onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '予定を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={activityFilter} onFilter={setActivityFilter} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(() => api(`/approvals/${id}`, 'POST', { approved, version }), approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
     {page === 'settings' ? <Settings onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} /> : null}

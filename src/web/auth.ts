@@ -27,9 +27,12 @@ export class WebAuth {
     return (req.headers.cookie ?? '').split(';').map(item => item.trim()).find(item => item.startsWith(`${this.#cookie}=`))?.slice(this.#cookie.length + 1) ?? '';
   }
   #prune(): void { for (const [token, expiry] of this.#sessions) if (expiry <= Date.now()) this.#sessions.delete(token); }
-  authenticated(req: IncomingMessage): boolean {
+  authenticated(req: IncomingMessage): boolean { return this.session(req) !== undefined; }
+  /** Opaque hashed session id for per-session limits; never the cookie value. */
+  session(req: IncomingMessage): string | undefined {
     this.#prune();
-    return this.#sessions.has(this.#hash(this.#token(req)).toString('hex'));
+    const id = this.#hash(this.#token(req)).toString('hex');
+    return this.#sessions.has(id) ? id : undefined;
   }
   login(key: string, req: IncomingMessage, res: ServerResponse): boolean {
     this.#attempts = this.#attempts.filter(time => time > Date.now() - 60_000);
