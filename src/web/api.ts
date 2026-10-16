@@ -31,6 +31,12 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(JSON.stringify(body));
 }
+/** Landing page for the cross-site OAuth return. A link, not a redirect, so the Strict session cookie is sent when the person comes back. */
+function sendNotice(res: ServerResponse, status: number, message: string): void {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" });
+  res.end(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Niwa</title><body style="font-family:sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.7"><p>${message}</p><p><a href="/#settings">Niwaの設定へ戻る</a></p></body></html>`);
+}
 async function readBody(req: IncomingMessage): Promise<unknown> {
   if (req.headers['content-type']?.split(';')[0]?.trim() !== 'application/json') throw new DomainError('invalid', 'Expected JSON');
   if (Number(req.headers['content-length']) > 65_536) throw new DomainError('limit', 'Body too large');
@@ -124,7 +130,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       return models.subscription.models(); } },
     { method: 'GET', path: /^\/api\/backups$/, run: async () => {
       const items = await backups?.list() ?? [];
-      return { available: !!backups, error: backups?.error ?? null,
+      return { available: !!backups, error: backups?.error ?? null, failed_at: backups?.failedAt ?? null, next_attempt_at: backups?.nextAttemptAt ?? null,
         items: items.map(item => ({ id: item.id, created_at: item.created_at, bytes: item.files.reduce((sum, file) => sum + file.bytes, 0) })) }; } },
     { method: 'POST', path: /^\/api\/backups$/, schema: object({}), run: async () => {
       if (!backups) throw new DomainError('conflict', 'Backup service unavailable');
@@ -214,15 +220,16 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
         try {
           if (url.searchParams.has('error') || url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length !== 1) throw new Error('Invalid callback');
           await x.finish(url.searchParams.get('state')!, url.searchParams.get('code')!);
-          send(res, 200, { connected: true, message: 'Xを接続しました。このタブを閉じてNiwaの設定へ戻ってください。' });
-        } catch { send(res, 400, { connected: false, message: 'Xの接続を完了できませんでした。Niwaの設定から接続をやり直してください。' }); }
+          sendNotice(res, 200, 'Xを接続しました。');
+        } catch { sendNotice(res, 400, 'Xの接続を完了できませんでした。Niwaの設定から接続をやり直してください。'); }
         return;
       }
       if (req.method === 'POST' && url.pathname === '/api/login') {
         const body = await readBody(req);
         if (!Value.Check(object({ key: Type.String({ maxLength: 128 }) }), body)) throw new DomainError('invalid', 'Invalid login');
-        const ok = auth.login((body as { key: string }).key, req, res);
-        send(res, ok ? 200 : 401, { authenticated: ok }); return;
+        const result = auth.login((body as { key: string }).key, req, res);
+        if (typeof result === 'object') { res.setHeader('Retry-After', String(result.retryAfter)); send(res, 429, { error: 'rate_limited' }); return; }
+        send(res, result === 'ok' ? 200 : 401, { authenticated: result === 'ok', ...(result === 'ok' ? {} : { error: 'invalid_key' }) }); return;
       }
       if (req.method === 'GET' && url.pathname === '/api/session') { send(res, 200, { authenticated: auth.authenticated(req) }); return; }
       if (!auth.authenticated(req)) { send(res, 401, { error: 'authentication_required' }); return; }

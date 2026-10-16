@@ -23,7 +23,7 @@ export function Modal({ title, children, onClose, className = '' }) {
     dialog.showModal();
     return () => { dialog.close(); previous?.focus?.(); };
   }, []);
-  return <dialog ref={ref} className={`modal ${className}`} aria-labelledby={titleId} onCancel={onClose} onClick={e => { if (e.target === e.currentTarget) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) onClose(); } }}>
+  return <dialog ref={ref} className={`modal ${className}`} aria-labelledby={titleId} onCancel={e => { e.preventDefault(); onClose(); }} onClick={e => { if (e.target === e.currentTarget) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) onClose(); } }}>
     <div className="modal-top"><h2 id={titleId}>{title}</h2><IconButton label="閉じる" onClick={onClose}><CloseIcon size={21} /></IconButton></div>
     {children}
   </dialog>;
@@ -57,16 +57,20 @@ export function AppearanceFields({ draft, onChange }) {
 
 export function AppearanceEditor({ member, onSave, onCancel }) {
   const [draft, setDraft] = useState(member);
+  const [saving, setSaving] = useState(false);
+  const working = useRef(false);
   const valid = /^#[0-9a-f]{6}$/i.test(draft.color);
   return <form className="appearance-editor" onSubmit={async e => {
     e.preventDefault();
-    if (valid) {
+    if (!valid || working.current) return;
+    working.current = true; setSaving(true);
+    try {
       const version = await onSave({ shape: draft.shape, color: draft.color, motion: draft.motion || 'auto', profile_version: draft.profile_version });
       if (version) setDraft(current => ({ ...current, profile_version: version }));
-    }
+    } finally { working.current = false; setSaving(false); }
   }}>
     <AppearanceFields draft={draft} onChange={(key, value) => setDraft(current => ({ ...current, [key]: value }))} />
-    <div className="form-actions">{onCancel ? <button type="button" className="button subtle" onClick={onCancel}>キャンセル</button> : null}<button type="button" className="button subtle" onClick={() => setDraft(member)}>最新の内容を読み込む</button><button className="button primary" disabled={!valid}>保存</button></div>
+    <div className="form-actions">{onCancel ? <button type="button" className="button subtle" onClick={onCancel}>キャンセル</button> : null}<button type="button" className="button subtle" onClick={() => setDraft(member)}>最新の内容を読み込む</button><button className="button primary" disabled={!valid || saving}>{saving ? '保存しています…' : '保存'}</button></div>
   </form>;
 }
 

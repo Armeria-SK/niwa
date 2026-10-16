@@ -142,6 +142,40 @@ test('HTTP authentication rejects forged identity and cross-origin mutations; lo
   assert.equal((await f.call('/api/state')).status, 401);
 });
 
+test('X callback ends on a small page with a link back to settings, not raw JSON', async t => {
+  const f = await fixture(t); const root = f.root;
+  const origin = 'https://niwa.test'; let fail = false;
+  const server = createApiServer(f.runtime, new WebAuth(origin, 'k'.repeat(43)), undefined, undefined, undefined, undefined, { finish: async () => { if (fail) throw new Error('x'); } } as never);
+  server.listen(0, '127.0.0.1'); await once(server, 'listening'); t.after(() => { server.close(); server.closeAllConnections(); void root; });
+  const get = (query: string) => new Promise<Response>((resolve, reject) => request(`http://127.0.0.1:${(server.address() as { port: number }).port}/api/x/callback?${query}`, { headers: { host: 'niwa.test' } }, incoming => {
+    const chunks: Buffer[] = []; incoming.on('data', chunk => chunks.push(Buffer.from(chunk)));
+    incoming.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: incoming.statusCode!, headers: Object.fromEntries(Object.entries(incoming.headers).map(([k, v]) => [k, String(v)])) })));
+  }).on('error', reject).end());
+  const state = 'a'.repeat(43);
+  const ok = await get(`state=${state}&code=c`); assert.equal(ok.status, 200);
+  assert.match(ok.headers.get('content-type')!, /text\/html/); assert.match(ok.headers.get('content-security-policy')!, /default-src 'none'/);
+  assert.match(await ok.text(), /href="\/#settings"/);
+  fail = true; const bad = await get(`state=${state}&code=c`); assert.equal(bad.status, 400); assert.match(await bad.text(), /href="\/#settings"/);
+});
+
+test('login lockout is per client address, counts only failures, and answers 429 with Retry-After', async t => {
+  const f = await fixture(t); 
+  const auth = new WebAuth('https://niwa.test', 'k'.repeat(43));
+  const req = (address: string) => ({ socket: { remoteAddress: address }, headers: {} }) as never;
+  const res = { setHeader() {} } as never;
+  for (let i = 0; i < 12; i++) assert.equal(auth.login('k'.repeat(43), req('10.0.0.1'), res), 'ok');
+  for (let i = 0; i < 10; i++) assert.equal(auth.login('wrong', req('10.0.0.2'), res), 'denied');
+  const locked = auth.login('k'.repeat(43), req('10.0.0.2'), res);
+  assert.ok(typeof locked === 'object' && locked.retryAfter >= 1 && locked.retryAfter <= 60);
+  assert.equal(auth.login('k'.repeat(43), req('10.0.0.1'), res), 'ok');
+  for (let i = 0; i < 300; i++) auth.login('wrong', req(`10.1.${i >> 8}.${i & 255}`), res);
+  assert.equal(auth.login('k'.repeat(43), req('10.0.0.3'), res), 'ok');
+  for (let i = 0; i < 10; i++) assert.equal((await f.call('/api/login', 'POST', { key: 'wrong' })).status, 401);
+  const blocked = await f.call('/api/login', 'POST', { key: 'wrong' });
+  assert.equal(blocked.status, 429); assert.ok(Number(blocked.headers.get('retry-after')) >= 1);
+  assert.deepEqual(await blocked.json(), { error: 'rate_limited' });
+});
+
 test('HTTP submission posts and queues atomically, rejects extra authority, and deduplicates retries', async t => {
   const f = await fixture(t); await f.login();
   const room = await (await f.call('/api/rooms', 'POST', { title: 'HTTPの庭' })).json() as { id: string };

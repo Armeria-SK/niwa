@@ -14,10 +14,15 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
   const [tab, setTab] = useState('theme');
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
-  useEffect(() => { setDraft(current => current.rules === settings.rules ? { ...current, rulesRevision: settings.rulesRevision } : current); }, [settings.rules, settings.rulesRevision]);
+  const [touched, setTouched] = useState(() => new Set());
+  // Untouched fields follow the server, so saving sends only what was edited here and never reverts another tab's change.
+  useEffect(() => { setDraft(current => {
+    const next = { ...settings, ...Object.fromEntries([...touched].map(key => [key, current[key]])), ...(touched.has('rules') ? { rulesRevision: current.rulesRevision } : {}) };
+    return Object.keys(next).every(key => next[key] === current[key]) ? current : next;
+  }); }, [settings, touched]);
   useEffect(() => { onPreviewTheme(draft.theme); return () => onPreviewTheme(null); }, [draft.theme, onPreviewTheme]);
-  const change = (key, value) => { setDraft(current => ({ ...current, [key]: value })); setSaved(false); };
-  async function submit(e) { e.preventDefault(); setSaved(await onSave(draft)); }
+  const change = (key, value) => { setDraft(current => ({ ...current, [key]: value })); setTouched(current => new Set(current).add(key)); setSaved(false); };
+  async function submit(e) { e.preventDefault(); const ok = await onSave(draft, touched); if (ok) setTouched(new Set()); setSaved(ok); }
   return <main className="work-area settings-page" id="main-content" tabIndex={-1}>
     <div className="page-heading"><div><span className="eyebrow">心地よく、一緒に過ごすために。</span><h1>設定</h1><p>みんなのルールと、活動の仕方を整えます。</p></div></div>
     <Segmented label="設定のカテゴリ" className="settings-tabs" options={[{ value: 'theme', label: 'テーマ' }, { value: 'rules', label: '共通ルール' }, { value: 'models', label: 'モデルと接続' }, { value: 'mcp', label: 'MCP接続' }, { value: 'activity', label: '活動と人数' }, { value: 'backup', label: 'バックアップ' }]} value={tab} onChange={value => { setTab(value); setSaved(false); }} />
@@ -46,7 +51,7 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
         <div className="field-pair"><label className="field"><span>実行する時刻（日本時間）</span><input type="time" value={draft.backupTime} onChange={e => change('backupTime', e.target.value)} required /></label><label className="field"><span>保存する日数</span><div className="input-with-unit"><input type="number" min="1" max="365" value={draft.backupDays} onChange={e => change('backupDays', e.target.value)} required /><span>日</span></div></label></div>
         <BackupStatus enabled={settings.backupEnabled} />
       </section> : null}
-      <div className="form-actions settings-save"><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />保存しました</> : null}</span><button type="button" className="button subtle" onClick={() => { setDraft(settings); setSaved(false); }}>変更を戻す</button><button className="button primary">設定を保存</button></div>
+      <div className="form-actions settings-save"><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />保存しました</> : null}</span><button type="button" className="button subtle" onClick={() => { setDraft(settings); setTouched(new Set()); setSaved(false); }}>変更を戻す</button><button className="button primary">設定を保存</button></div>
     </form>}
     </div>
   </main>;

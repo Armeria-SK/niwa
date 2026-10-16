@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 export class WebAuth {
   #key: Buffer;
   #sessions = new Map<string, number>();
-  #attempts: number[] = [];
+  #failures = new Map<string, number[]>();
   readonly origin: string;
   #cookie: string;
   #secure: boolean;
@@ -31,18 +31,25 @@ export class WebAuth {
     this.#prune();
     return this.#sessions.has(this.#hash(this.#token(req)).toString('hex'));
   }
-  login(key: string, req: IncomingMessage, res: ServerResponse): boolean {
-    this.#attempts = this.#attempts.filter(time => time > Date.now() - 60_000);
-    if (this.#attempts.length >= 10) return false;
-    this.#attempts.push(Date.now());
-    if (!timingSafeEqual(this.#hash(key), this.#key)) return false;
+  /** Failures are counted per client address, so a stranger's guesses cannot lock out the administrator on another address. */
+  login(key: string, req: IncomingMessage, res: ServerResponse): 'ok' | 'denied' | { retryAfter: number } {
+    const client = req.socket.remoteAddress ?? '', now = Date.now();
+    for (const [address, times] of this.#failures) if (times.every(time => time <= now - 60_000)) this.#failures.delete(address);
+    const recent = (this.#failures.get(client) ?? []).filter(time => time > now - 60_000);
+    if (recent.length >= 10) return { retryAfter: Math.max(1, Math.ceil((recent[0]! + 60_000 - now) / 1000)) };
+    if (!timingSafeEqual(this.#hash(key), this.#key)) {
+      this.#failures.delete(client); this.#failures.set(client, [...recent, now]);
+      if (this.#failures.size > 256) this.#failures.delete(this.#failures.keys().next().value!);
+      return 'denied';
+    }
+    this.#failures.delete(client);
     this.#prune();
     this.#sessions.delete(this.#hash(this.#token(req)).toString('hex'));
     if (this.#sessions.size >= 32) this.#sessions.delete(this.#sessions.keys().next().value!);
     const token = randomBytes(32).toString('base64url');
     this.#sessions.set(this.#hash(token).toString('hex'), Date.now() + 8 * 60 * 60_000);
     this.#setCookie(res, token, 8 * 60 * 60);
-    return true;
+    return 'ok';
   }
   logout(req: IncomingMessage, res: ServerResponse): void {
     this.#sessions.delete(this.#hash(this.#token(req)).toString('hex'));
