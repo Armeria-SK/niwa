@@ -51,12 +51,12 @@ export const connectionError=(server,status,dirty)=>{
 };
 /** Whether the card offers to type a client ID: not needed while the URL is signed in, unless the last failure points at the client. A form that is already open can always be closed. */
 export const clientChoice=(server,status)=>server.needClient===true||!loggedIn(server,status)||['invalid_client','client_registration_required'].includes(failureFor(server,status)?.code);
-/** What to do with the client ID form of a card once a login was started from it: leave it while the login is open, close it (and forget what was typed) when the login succeeded, keep it when it ended otherwise. Nothing when no login was started from the card. */
+/** What to do with the client ID form of a card once a login was started from it: leave it while the login is open, close it (and forget what was typed) when the login succeeded, keep it when it ended otherwise. Either way the fallback link of the finished login goes. Nothing when no login was started from the card. */
 export const settleClientForm=(server,status)=>{
  if(!server.awaitingLogin)return undefined;
  const entry=loginEntry(server,status);
  if(entry?.pending)return undefined;
- return loggedIn(server,status)&&!failureFor(server,status)?{awaitingLogin:false,needClient:false,clientId:'',clientSecret:''}:{awaitingLogin:false};
+ return loggedIn(server,status)&&!failureFor(server,status)?{awaitingLogin:false,loginLink:'',needClient:false,clientId:'',clientSecret:''}:{awaitingLogin:false,loginLink:''};
 };
 /** The hint that a client is reused is only true while one is on file. */
 export const clientOnFile=(server,status)=>loginEntry(server,status)?.client_saved===true;

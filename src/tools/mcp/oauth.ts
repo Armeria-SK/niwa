@@ -365,7 +365,7 @@ export class McpOAuth{
    access:async signal=>{
     signal?.throwIfAborted();
     const credential=this.usable(id,resource);
-    // A short-lived token is renewed when half of its lifetime is gone (at the latest 60 s before the end), not before every request.
+    // A token is renewed 60 s before its end, or when half of its lifetime is gone if that lifetime is shorter than two minutes; not before every request.
     const margin=credential.lifetime===undefined?60_000:Math.min(60_000,credential.lifetime*500);
     if(credential.expires_at!==undefined&&credential.expires_at-Date.now()<=margin){
      if(!credential.refresh_token){this.flag(id,credential);throw new McpLoginRequired();}
@@ -408,14 +408,10 @@ export class McpOAuth{
   for(const id of this.failures.keys())if(!keep.has(id))this.failures.delete(id);
   const active=new Set([...this.pending.values()].map(f=>f.slot));
   for(const source of [this.exchanging,this.starting,this.held,this.flights])for(const slot of source.keys())active.add(slot);
-  const dropped:{id:string;credential:McpOAuthCredential}[]=[];
-  for(const slot of active){
-   const id=idOf(slot);
-   if(keep.get(id)===slot.slice(id.length+1))continue;
-   const held=this.held.get(slot);
-   if(held)dropped.push({id,credential:held.credential});
-   if(!keep.has(id))this.forget(id);else this.forgetSlot(slot);
-  }
+  const gone=[...active].filter(slot=>keep.get(idOf(slot))!==slot.slice(idOf(slot).length+1));
+  // Collected before anything is forgotten: forgetting a connection drops the held logins of all its URLs at once.
+  const dropped=gone.flatMap(slot=>{const held=this.held.get(slot);return held?[{id:idOf(slot),credential:held.credential}]:[];});
+  for(const slot of gone){const id=idOf(slot);if(!keep.has(id))this.forget(id);else this.forgetSlot(slot);}
   return dropped;
  }
  /** Every login there is, on disk or only held in memory, whatever connection it belongs to. */

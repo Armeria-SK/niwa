@@ -1215,10 +1215,10 @@ test('the client ID form of a card closes when the login started from it succeed
  assert.equal(settleClientForm(card(),entry({pending:true})),undefined);
  assert.equal(settleClientForm(card(),entry({pending:true,logins:[{resource:url,status:'signed_in'}]})),undefined);
  // Success closes the form and forgets what was typed.
- assert.deepEqual(settleClientForm(card(),entry({logins:[{resource:url,status:'signed_in'}]})),{awaitingLogin:false,needClient:false,clientId:'',clientSecret:''});
+ assert.deepEqual(settleClientForm(card(),entry({logins:[{resource:url,status:'signed_in'}]})),{awaitingLogin:false,loginLink:'',needClient:false,clientId:'',clientSecret:''});
  // A login that did not succeed keeps the form, also next to an older login.
- assert.deepEqual(settleClientForm(card(),entry()),{awaitingLogin:false});
- assert.deepEqual(settleClientForm(card(),entry({logins:[{resource:url,status:'signed_in'}],failure:{code:'invalid_client',at:1,resource:url}})),{awaitingLogin:false});
+ assert.deepEqual(settleClientForm(card(),entry()),{awaitingLogin:false,loginLink:''});
+ assert.deepEqual(settleClientForm(card(),entry({logins:[{resource:url,status:'signed_in'}],failure:{code:'invalid_client',at:1,resource:url}})),{awaitingLogin:false,loginLink:''});
  // The "client is reused" hint needs a client on file.
  assert.equal(clientOnFile({id:'remote'},entry({client_saved:true})),true);assert.equal(clientOnFile({id:'remote'},entry()),false);
 });
@@ -1279,4 +1279,24 @@ test('tokens issued to a login that was cancelled meanwhile are given back to th
  await until(()=>as.refreshes().length>before);await oauth.logout('remote');
  assert.equal(await renewing,'login_required');await until(()=>as.revoked.length>revoked+1);
  assert.equal(as.revoked.at(-1)!.form.get('token'),as.latestRefresh);
+});
+
+test('forgetting a connection returns the held logins of every URL it had, not only the first',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),oauth=new McpOAuth(join(f.root,'secrets')),other=mcp.url+'?team=b';
+ t.mock.method(console,'error',()=>{});
+ const held:string[]=[];
+ for(const url of [mcp.url,other]){
+  mcp.resource=url;as.expiresIn=0;
+  const s=await oauth.start('remote',url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
+  // The renewal cannot be written, so the renewed login is held in memory.
+  const file=f.secret(credFile(url));as.onRefresh=()=>{rmSync(file);mkdirSync(file);as.onRefresh=undefined;};
+  await mcpRpc({url,oauth:oauth.source('remote',url)},'tools/list');held.push(as.latestRefresh);
+ }
+ assert.equal(held.length,2);assert.equal(oauth.states([])[0]!.logins.filter(l=>l.unsaved).length,2);
+ // The connection is removed: both held logins come back for revocation, and nothing is left held.
+ const dropped=oauth.forgetExcept(new Map());
+ assert.deepEqual(dropped.map(d=>d.credential.refresh_token).sort(),[...held].sort());assert.deepEqual(dropped.map(d=>d.id),['remote','remote']);
+ assert.equal(oauth.states([]).some(entry=>entry.unsaved),false);
+ // Kept URLs are not returned.
+ assert.deepEqual(oauth.forgetExcept(new Map([['remote',mcp.url]])),[]);
 });

@@ -46,10 +46,12 @@ export function McpConnections(){
   const manual=server.needClient&&server.clientId?{client_id:server.clientId,...(server.clientSecret?{client_secret:server.clientSecret}:{})}:{};
   const result=await api('/mcp/oauth/start','POST',{id:server.id,url:server.url,...manual});
   // A refused start is shown on the card (the server keeps the reason), not as a message at the bottom of the form.
-  const value=await api('/mcp');setStatus(current=>current&&value.revision===current.revision?value:current);
-  // The server keeps what was typed for the login that is open, so the form does not hold the secret (or the ID) any longer.
-  if(result.ok){local(server.key,{loginLink:result.url,awaitingLogin:true,clientId:'',clientSecret:''});window.open(result.url,'_blank','noopener,noreferrer');}
+  // The tab opens at once, while the click still counts for the browser; the link stays on the card in case it is blocked. The server keeps what was typed for the login that is open, so the form does not hold the secret (or the ID) any longer.
+  if(result.ok){local(server.key,{loginLink:result.url,clientId:'',clientSecret:''});window.open(result.url,'_blank','noopener,noreferrer');}
   else if(result.code==='client_registration_required')local(server.key,{needClient:true});
+  const value=await api('/mcp');setStatus(current=>current&&value.revision===current.revision?value:current);
+  // Only now does the status show the login as pending, which is what tells "open" from "ended".
+  if(result.ok)local(server.key,{awaitingLogin:true});
  });}
  function logout(server){return run(async()=>{
   await api('/mcp/oauth/logout','POST',{id:server.id,url:hrefOf(server.url)});local(server.key,{loginLink:'',checked:false});
@@ -94,7 +96,7 @@ export function McpConnections(){
     <label className="field"><span>接続方法</span><select value={server.transport} onChange={e=>change(server.key,{transport:e.target.value,...resetTools,checked:false,conversationIsolation:undefined})}><option value="socket">このPCのソケット</option><option value="url">URL（HTTPS）</option></select></label>
     {server.transport==='url'?<><label className="field"><span>URL</span><input type="url" value={server.url} maxLength={500} pattern="https?://.+" required onChange={e=>change(server.key,{url:e.target.value,...carryTools(server,e.target.value),checked:false,conversationIsolation:undefined})} placeholder="https://example.com/mcp" spellCheck={false}/><small>https:// で始まるURLを入力します（このPCのサービスなら http://127.0.0.1 も使えます）。ユーザー名・パスワード・#は含められません。</small></label>
      <label className="field"><span>認証の方法</span><select value={server.auth} onChange={e=>change(server.key,{auth:e.target.value,token:'',clearToken:false})}><option value="none">なし</option><option value="token">認証トークン</option><option value="oauth">OAuthでログイン</option></select></label>
-     {status?.token_errors?.includes(server.id)&&server.auth!=='oauth'?<p className="field-error">保存済みの認証トークンのファイルを読み込めません。トークンを入力し直すか、認証の方法を「なし」にして保存するとこのファイルを削除します。それまで保存はできません。</p>:null}
+     {status?.token_errors?.includes(server.id)&&server.auth!=='oauth'?<p className="field-error">保存済みの認証トークンのファイルを読み込めません。認証トークンを入力し直して保存するか、トークンが不要なら「なし」にして保存してください（認証が必要な接続先では、「Botに公開する」を外すか接続を削除してから保存します）。それまで、ほかの接続の変更も保存できません。</p>:null}
      {server.auth==='token'?<>
      <label className="field"><span>認証トークン</span><input type="password" autoComplete="off" value={server.token} maxLength={4096} disabled={tokenCleared(server,status)} onChange={e=>change(server.key,{token:e.target.value})} placeholder={savedToken(server,status)?'設定済み（変更するときだけ入力）':'未設定'} spellCheck={false}/><small>トークンだけを入力すると「Bearer」を付けて送ります。保存したトークンは画面に表示しません。{server.savedUrl&&server.url&&origin(server.url)!==origin(server.savedUrl)&&status?.tokens?.includes(server.savedId)?' 接続先が変わったため、保存済みのトークンは使いません。':''}</small></label>
      {savedToken(server,status)?<label className="mcp-enabled"><input type="checkbox" checked={server.clearToken} onChange={e=>change(server.key,{clearToken:e.target.checked,token:''})}/>保存済みのトークンを削除する</label>:null}</>:null}
@@ -109,7 +111,7 @@ export function McpConnections(){
       <div className="inline-actions"><button className="button secondary" type="button" disabled={!idValid(server.id)||!address(server)||(server.needClient&&!server.clientId)} onClick={()=>login(server)}>ログイン</button>
        {loginFor(server,status)?<button className="button subtle" type="button" onClick={()=>logout(server)}>ログアウト</button>:null}</div>
       {!idValid(server.id)?<p className="field-hint">ログインの前に、接続IDを入力してください。</p>:null}
-      {server.loginLink&&/^https?:\/\//.test(server.loginLink)&&loginEntry(server,status)?.pending?<p className="field-hint">別のタブで開いたログイン画面で手続きを完了してください。開かないときは、<a href={server.loginLink} target="_blank" rel="noopener noreferrer">こちらを開いてください</a>。</p>:null}
+      {server.loginLink&&/^https?:\/\//.test(server.loginLink)?<p className="field-hint">別のタブで開いたログイン画面で手続きを完了してください。開かないときは、<a href={server.loginLink} target="_blank" rel="noopener noreferrer">こちらを開いてください</a>。</p>:null}
       <p className="field-hint">ログイン情報はNiwaのsecretsフォルダーに保存し、画面には表示しません。URLを変えたときは、もう一度ログインが必要です。</p></>:null}
     </>
     :<label className="field"><span>ソケットのパス</span><input value={server.socket} maxLength={100} pattern="/.*" required onChange={e=>change(server.key,{socket:e.target.value,catalog:[],checked:false,conversationIsolation:undefined})} placeholder="/home/niwa/tool-service/runtime/mcp.sock" spellCheck={false}/></label>}
