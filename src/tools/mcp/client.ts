@@ -9,11 +9,17 @@ import type {JsonObject,ModelToolDefinition} from '../../contracts/model.ts';
 import {redactSecrets} from '../../shared/redaction.ts';
 
 const name=Type.String({pattern:'^[a-z][a-z0-9_]{0,47}$'});
-export const mcpServerSchema=Type.Object({id:Type.String({pattern:'^[a-z][a-z0-9_]{0,19}$'}),socket:Type.Optional(Type.String({pattern:'^/',maxLength:100})),url:Type.Optional(Type.String({pattern:'^https?://',maxLength:500})),scope:Type.Union([Type.Literal('shared'),Type.Literal('conversation')]),enabled:Type.Optional(Type.Boolean()),tools:Type.Array(Type.Object({name,readOnly:Type.Boolean(),approval:Type.Optional(Type.Literal(true))},{additionalProperties:false}),{maxItems:32})},{additionalProperties:false});
+export const mcpServerSchema=Type.Object({id:Type.String({pattern:'^[a-z][a-z0-9_]{0,19}$'}),socket:Type.Optional(Type.String({pattern:'^/',maxLength:100})),url:Type.Optional(Type.String({pattern:'^https?://',maxLength:500})),oauth:Type.Optional(Type.Literal(true)),scope:Type.Union([Type.Literal('shared'),Type.Literal('conversation')]),enabled:Type.Optional(Type.Boolean()),tools:Type.Array(Type.Object({name,readOnly:Type.Boolean(),approval:Type.Optional(Type.Literal(true))},{additionalProperties:false}),{maxItems:32})},{additionalProperties:false});
 export type McpServerConfig=Static<typeof mcpServerSchema>;
 /** Static credential for a remote server: printable ASCII header value, kept in secrets/ only. */
 export const mcpTokenSchema=Type.String({pattern:'^[\\x21-\\x7e](?:[\\x20-\\x7e]{0,4094}[\\x21-\\x7e])?$',maxLength:4096});
-export type McpEndpoint={socket:string}|{url:string;token?:string|undefined};
+/** OAuth access/refresh tokens: printable ASCII without quote or backslash, so a JSON-encoded copy still matches the plain value when redacting. */
+export const mcpOAuthTokenSchema=Type.String({pattern:'^[\\x21\\x23-\\x5b\\x5d-\\x7e]{8,4096}$',maxLength:4096});
+/** Supplies Bearer tokens for one OAuth connection; `refresh` renews after the server rejected `rejected`, `reject` marks the login unusable. */
+export interface McpOAuthSource{access(signal?:AbortSignal):Promise<string>;refresh(rejected:string,signal?:AbortSignal):Promise<string>;reject(token:string):void;secrets():string[]}
+export type McpEndpoint={socket:string}|{url:string;token?:string|undefined;oauth?:McpOAuthSource|undefined};
+/** The login is missing, expired for good or refused: the administrator has to sign in again. */
+export class McpLoginRequired extends Error{constructor(){super('login_required');}}
 const loopback=new Set(['127.0.0.1','localhost','[::1]']);
 /** Canonical https URL without credentials or fragment; plain http only on loopback for local testing. */
 export function mcpUrl(value:string){
@@ -22,14 +28,23 @@ export function mcpUrl(value:string){
  if((url.href!==value&&url.href!==value+'/')||url.username||url.password||url.hash||!url.hostname||!(url.protocol==='https:'||(url.protocol==='http:'&&loopback.has(url.hostname))))return undefined;
  return url;
 }
-/** Exactly one transport per server: a private local socket or a remote Streamable HTTP URL. */
-export function mcpEndpoint(config:{socket?:string|undefined;url?:string|undefined},token?:string):McpEndpoint{
+/** URL found in OAuth metadata: https, or plain http on loopback only when the MCP server itself is local. No credentials or fragment. */
+export function oauthUrl(value:unknown,allowLoopback:boolean){
+ if(typeof value!=='string'||value.length>2048||!/^[\x21-\x7e]+$/.test(value)||value.includes('#'))return undefined;
+ let url:URL;try{url=new URL(value);}catch{return undefined;}
+ if(url.username||url.password||url.hash||!url.hostname||!(url.protocol==='https:'||(allowLoopback&&url.protocol==='http:'&&loopback.has(url.hostname))))return undefined;
+ return url;
+}
+/** Exactly one transport per server: a private local socket or a remote Streamable HTTP URL. An OAuth server never uses a static token. */
+export function mcpEndpoint(config:{socket?:string|undefined;url?:string|undefined;oauth?:true|undefined},token?:string,oauth?:McpOAuthSource):McpEndpoint{
  if((config.socket===undefined)===(config.url===undefined))throw Error('MCP server needs exactly one of socket or url');
- if(config.url===undefined)return {socket:config.socket!};
+ if(config.url===undefined){if(config.oauth)throw Error('OAuth needs a URL');return {socket:config.socket!};}
  if(!mcpUrl(config.url))throw Error('Invalid MCP URL');
+ if(config.oauth){if(!oauth)throw Error('MCP OAuth unavailable');return {url:config.url,oauth};}
  return {url:config.url,token};
 }
-export const mcpEndpointValid=(config:{socket?:string|undefined;url?:string|undefined})=>{try{mcpEndpoint(config);return true;}catch{return false;}};
+const noOAuth:McpOAuthSource={access:()=>Promise.reject(new McpLoginRequired()),refresh:()=>Promise.reject(new McpLoginRequired()),reject:()=>{},secrets:()=>[]};
+export const mcpEndpointValid=(config:{socket?:string|undefined;url?:string|undefined;oauth?:true|undefined})=>{try{mcpEndpoint(config,undefined,noOAuth);return true;}catch{return false;}};
 export interface McpContext {scope:string;execution_id?:string;allow_start?:boolean;deadline:number}
 interface Registered {definition:ModelToolDefinition;server:McpServerConfig;remote:string;readOnly:boolean;approval:boolean;replay:boolean;signature:string}
 export const mcpScope=(epoch:string,room:string)=>createHash('sha256').update(JSON.stringify([epoch,room])).digest('hex');
@@ -44,7 +59,7 @@ const failure=(response:JsonObject)=>{const e=response.error as JsonObject|undef
 
 type Send=(headers:OutgoingHttpHeaders,signal:AbortSignal,reply:(res:IncomingMessage)=>void)=>ClientRequest;
 /** One POST per message. Redirects are never followed: any status other than 200/202 is a transport failure. */
-function transport(target:string|McpEndpoint):{send:Send;secrets:string[]}{
+function transport(target:string|McpEndpoint,bearer?:string):{send:Send;secrets:string[]}{
  const endpoint=typeof target==='string'?{socket:target}:target;
  if('socket' in endpoint){
   const socket=endpoint.socket;assertDirectoryPath(dirname(socket));const dir=lstatSync(dirname(socket)),stat=lstatSync(socket);
@@ -53,13 +68,27 @@ function transport(target:string|McpEndpoint):{send:Send;secrets:string[]}{
  }
  const url=mcpUrl(endpoint.url),token=endpoint.token;if(!url)throw Error('Invalid MCP URL');
  if(token!==undefined&&!new RegExp(mcpTokenSchema.pattern!).test(token))throw Error('Invalid MCP credential');
+ if(bearer!==undefined&&(token!==undefined||!new RegExp(mcpOAuthTokenSchema.pattern!).test(bearer)))throw Error('Invalid MCP credential');
  // A bare token is sent as Bearer; a value with a scheme ("Basic ...") is sent as given.
- const auth=token?{Authorization:token.includes(' ')?token:`Bearer ${token}`}:{},request=url.protocol==='https:'?httpsRequest:httpRequest;
- return {secrets:token?[token,...token.split(' ').filter(p=>p.length>=8)]:[],send:(headers,signal,reply)=>request(url,{method:'POST',agent:false,signal,headers:{...headers,...auth}},reply)};
+ const auth=bearer!==undefined?{Authorization:`Bearer ${bearer}`}:token?{Authorization:token.includes(' ')?token:`Bearer ${token}`}:{},request=url.protocol==='https:'?httpsRequest:httpRequest;
+ return {secrets:bearer!==undefined?[bearer]:token?[token,...token.split(' ').filter(p=>p.length>=8)]:[],send:(headers,signal,reply)=>request(url,{method:'POST',agent:false,signal,headers:{...headers,...auth}},reply)};
 }
-/** MCP JSON-RPC over a private Unix HTTP socket or a remote Streamable HTTP endpoint. No subprocesses. */
+/** MCP JSON-RPC over a private Unix HTTP socket or a remote Streamable HTTP endpoint. No subprocesses.
+ * With an OAuth source the Bearer token comes from it; one 401 renews the token and repeats the request (a 401 means nothing ran), a second one asks for a new login. */
 export async function mcpRpc(target:string|McpEndpoint,method:string,params:JsonObject={},signal?:AbortSignal,maxBytes=512*1024,session?:McpSession,reinitialize=true):Promise<JsonObject>{
- const {send,secrets}=transport(target);
+ const oauth=typeof target==='string'||!('url' in target)?undefined:target.oauth;
+ if(!oauth)return mcpPost(target,undefined,method,params,signal,maxBytes,session,reinitialize);
+ let bearer=await oauth.access(signal);
+ try{return await mcpPost(target,bearer,method,params,signal,maxBytes,session,reinitialize);}
+ catch(error){
+  if(!(error instanceof McpHttpError&&error.status===401))throw error;
+  const rejected=bearer;bearer=await oauth.refresh(rejected,signal);
+  try{return await mcpPost(target,bearer,method,params,signal,maxBytes,session,reinitialize);}
+  catch(again){if(again instanceof McpHttpError&&again.status===401){oauth.reject(bearer);throw new McpLoginRequired();}throw again;}
+ }
+}
+async function mcpPost(target:string|McpEndpoint,bearer:string|undefined,method:string,params:JsonObject,signal:AbortSignal|undefined,maxBytes:number,session:McpSession|undefined,reinitialize:boolean):Promise<JsonObject>{
+ const {send,secrets}=transport(target,bearer);
  const id=randomUUID(),notification=method.startsWith('notifications/'),sent=session?.id;
  const body=JSON.stringify({jsonrpc:'2.0',...(notification?{}:{id}),method,params});
  if(Buffer.byteLength(body)>65536)throw Error('MCP request too large');
@@ -102,11 +131,12 @@ export async function mcpRpc(target:string|McpEndpoint,method:string,params:Json
   if(sent&&reinitialize&&session&&method!=='initialize'&&error instanceof McpHttpError&&error.status===404&&!cancellation.aborted){
    // The server dropped the session before running anything: start a new one and retry once.
    if(session.id===sent){session.id=undefined;await mcpInitialize(target,session,signal);}
-   return mcpRpc(target,method,params,signal,maxBytes,session,false);
+   return mcpPost(target,bearer,method,params,signal,maxBytes,session,false);
   }
   if(cancellation.aborted&&!notification)await mcpRpc(target,'notifications/cancelled',{requestId:id},AbortSignal.timeout(5000),undefined,session,false).catch(()=>{});
   // A remote server may echo the credential; never pass it on to logs, the model or the administrator.
-  if(secrets.length&&error instanceof Error)error.message=redactSecrets(error.message,secrets);
+  const oauth=typeof target==='string'||!('url' in target)?undefined:target.oauth;
+  if(error instanceof Error&&(secrets.length||oauth))error.message=redactSecrets(error.message,[...secrets,...(oauth?.secrets()??[])]);
   throw error;
  }
 }
@@ -117,6 +147,7 @@ export async function mcpInitialize(target:string|McpEndpoint,session:McpSession
  await mcpRpc(target,'notifications/initialized',{},signal,undefined,session,false);
  return hello;
 }
+const endpointSecrets=(endpoint:McpEndpoint)=>'socket' in endpoint?[]:endpoint.oauth?endpoint.oauth.secrets():endpoint.token?[endpoint.token]:[];
 export class McpConnector{
  private registered=new Map<string,Registered>();
  private servers=new Map<string,McpServerConfig>();
@@ -126,6 +157,9 @@ export class McpConnector{
  private downloads=0;
  private retired=false;
  private retrying=false;
+ private again=false;
+ /** Called when a server drops out at run time (its login ended), so the owner can schedule reconnection. */
+ onFailed:(()=>void)|undefined;
  private constructor(){}
  static async discover(target:string|McpEndpoint,signal?:AbortSignal,session:McpSession={}){
    const hello=await mcpInitialize(target,session,signal);
@@ -142,14 +176,14 @@ export class McpConnector{
    });
    return {conversationIsolation:capabilities?.niwaContextV1===true,tools};
  }
- /** Servers are checked independently (10s each). Strict mode rejects on the first failure; otherwise failures are recorded and can be retried. Remote tokens are keyed by server id. */
- static async connect(configs:McpServerConfig[],signal?:AbortSignal,tolerant=false,tokens:Record<string,string>={}){
+ /** Servers are checked independently (10s each). Strict mode rejects on the first failure; otherwise failures are recorded and can be retried. Remote tokens are keyed by server id; OAuth servers get their token source from `oauth`. */
+ static async connect(configs:McpServerConfig[],signal?:AbortSignal,tolerant=false,tokens:Record<string,string>={},oauth?:(config:McpServerConfig)=>McpOAuthSource){
   const connector=new McpConnector();
   const ids=new Set<string>(),endpoints=new Map<string,McpEndpoint>();
   for(const config of configs){
    if(ids.has(config.id))throw Error('Duplicate MCP server');ids.add(config.id);
    if(config.enabled!==false&&!config.tools.length)throw Error('No MCP tools selected');
-   endpoints.set(config.id,mcpEndpoint(config,config.url===undefined?undefined:tokens[config.id]));
+   endpoints.set(config.id,mcpEndpoint(config,config.url===undefined||config.oauth?undefined:tokens[config.id],config.oauth?oauth?.(config):undefined));
   }
   const active=configs.filter(c=>c.enabled!==false);
   const results=await Promise.allSettled(active.map(config=>connector.prepare(config,endpoints.get(config.id)!,signal)));
@@ -176,15 +210,31 @@ export class McpConnector{
   }
   return()=>{entries.forEach(([n,r])=>this.registered.set(n,r));this.servers.set(config.id,config);this.sessions.set(config.id,session);this.endpoints.set(config.id,endpoint);this.failures.delete(config.id);};
  }
+ /** Takes a connected server out of service and queues it for retry; used when its OAuth login is gone. */
+ markFailed(id:string,reason:string){
+  const config=this.servers.get(id),endpoint=this.endpoints.get(id);
+  if(this.retired||!config||!endpoint||!('url' in endpoint)||!endpoint.oauth)return;
+  for(const [name,tool] of this.registered)if(tool.server.id===id)this.registered.delete(name);
+  this.servers.delete(id);this.sessions.delete(id);this.endpoints.delete(id);this.failures.set(id,{config,endpoint,reason});
+  this.onFailed?.();
+ }
+ private async guarded<T>(id:string,work:Promise<T>){
+  try{return await work;}catch(error){if(error instanceof McpLoginRequired)this.markFailed(id,'login_required');throw error;}
+ }
  failed(){return [...this.failures].map(([id,f])=>({id,reason:f.reason,config:f.config}));}
  /** Re-checks servers that failed to connect; returns true while any is still failing. */
- async retryFailed(signal?:AbortSignal){
-  if(this.retired||this.retrying)return this.failures.size>0;
+ async retryFailed(signal?:AbortSignal,force=false){
+  if(this.retired)return this.failures.size>0;
+  // A forced retry (a login just completed) must not be lost to a run that already started.
+  if(this.retrying){if(force)this.again=true;return this.failures.size>0;}
   this.retrying=true;
-  try{await Promise.all([...this.failures.values()].map(async f=>{
-   try{const publish=await this.prepare(f.config,f.endpoint,signal);if(!this.retired)publish();}
-   catch(error){const current=this.failures.get(f.config.id);if(current)current.reason=McpConnector.reason(error);}
-  }));}finally{this.retrying=false;}
+  try{do{
+   this.again=false;
+   await Promise.all([...this.failures.values()].map(async f=>{
+    try{const publish=await this.prepare(f.config,f.endpoint,signal);if(!this.retired)publish();}
+    catch(error){const current=this.failures.get(f.config.id);if(current)current.reason=McpConnector.reason(error);}
+   }));
+  }while(this.again&&!this.retired);}finally{this.retrying=false;}
   return this.failures.size>0;
  }
  retire(){this.retired=true;}
@@ -194,17 +244,19 @@ export class McpConnector{
  async call(name:string,args:JsonObject,context:McpContext,signal?:AbortSignal):Promise<JsonObject>{
   const tool=this.registered.get(name);if(this.retired||!tool)throw Error('MCP tool unavailable');
   if(!tool.readOnly&&context.allow_start===false&&!tool.replay)return {error:'outcome_unknown'};
-  const endpoint=this.endpoints.get(tool.server.id)!,token='token' in endpoint?endpoint.token:undefined;
-  let result=await mcpRpc(endpoint,'tools/call',{name:tool.remote,arguments:args,_meta:{'org.niwa/context':context}},signal,undefined,this.sessions.get(tool.server.id));
+  const endpoint=this.endpoints.get(tool.server.id)!,sent=endpointSecrets(endpoint);
+  let result=await this.guarded(tool.server.id,mcpRpc(endpoint,'tools/call',{name:tool.remote,arguments:args,_meta:{'org.niwa/context':context}},signal,undefined,this.sessions.get(tool.server.id)));
   if(!Array.isArray(result.content)||result.content.length>100)throw Error('Invalid MCP result');
-  if(token&&JSON.stringify(result).includes(token))result=JSON.parse(JSON.stringify(result).split(token).join('[REDACTED]')) as JsonObject;
+  // A remote server may echo its credential back; the model never sees it.
+  // Tokens renewed during the call count as well as the one that was sent.
+  for(const secret of new Set([...sent,...endpointSecrets(endpoint)]))if(secret&&JSON.stringify(result).includes(secret))result=JSON.parse(JSON.stringify(result).split(secret).join('[REDACTED]')) as JsonObject;
   return {...result,untrusted:true};
  }
  async resource(server:string,uri:string,scope:string){
   const config=this.servers.get(server);if(this.retired||!config||uri.length>2048||this.downloads>=2)throw Error('MCP resource unavailable');
   this.downloads++;
   try{
-   const result=await mcpRpc(this.endpoints.get(config.id)!,'resources/read',{uri,_meta:{'org.niwa/context':{scope,deadline:Date.now()+30000}}},undefined,90*1024*1024,this.sessions.get(config.id));
+   const result=await this.guarded(config.id,mcpRpc(this.endpoints.get(config.id)!,'resources/read',{uri,_meta:{'org.niwa/context':{scope,deadline:Date.now()+30000}}},undefined,90*1024*1024,this.sessions.get(config.id)));
    if(!Array.isArray(result.contents)||result.contents.length!==1)throw Error('Invalid MCP resource');
    const item=result.contents[0] as JsonObject;if(item.uri!==uri)throw Error('MCP resource URI mismatch');
    const data=typeof item.blob==='string'?Buffer.from(item.blob,'base64'):typeof item.text==='string'?Buffer.from(item.text):undefined;

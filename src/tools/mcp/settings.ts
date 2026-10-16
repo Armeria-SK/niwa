@@ -3,15 +3,20 @@ import {Value} from '@sinclair/typebox/value';
 import {DomainError} from '../../domain/types.ts';
 import {readInstallation,saveMcpInstallation,mcpConfigRevision} from '../../config/installation.ts';
 import {productPaths} from '../../config/paths.ts';
-import {McpConnector,mcpServerSchema,mcpTokenSchema,mcpEndpoint,mcpEndpointValid,mcpUrl,type McpServerConfig} from './client.ts';
+import {McpConnector,McpLoginRequired,mcpServerSchema,mcpTokenSchema,mcpEndpoint,mcpEndpointValid,mcpUrl,type McpOAuthSource,type McpServerConfig} from './client.ts';
 import {readMcpTokens,writeMcpToken} from './secrets.ts';
+import {McpOAuth} from './oauth.ts';
+import {listMcpOAuth,readMcpOAuth,writeMcpOAuth,type McpOAuthCredential} from './oauth-store.ts';
 
 const {id,socket,url}=mcpServerSchema.properties;
 /** Tokens travel only browser→server: a string sets, null removes, absence keeps the stored one while the URL origin is unchanged. */
 export const mcpUpdateSchema=Type.Object({revision:Type.String({pattern:'^[a-f0-9]{64}$'}),servers:Type.Array(mcpServerSchema,{maxItems:8}),tokens:Type.Optional(Type.Array(Type.Object({id,value:Type.Union([mcpTokenSchema,Type.Null()])},{additionalProperties:false}),{maxItems:8}))},{additionalProperties:false});
-export const mcpProbeSchema=Type.Object({socket,url,token:Type.Optional(mcpTokenSchema),id:Type.Optional(id)},{additionalProperties:false});
+export const mcpProbeSchema=Type.Object({socket,url,token:Type.Optional(mcpTokenSchema),id:Type.Optional(id),oauth:Type.Optional(Type.Literal(true))},{additionalProperties:false});
+export const mcpOAuthStartSchema=Type.Object({id,url:Type.String({pattern:'^https?://',maxLength:500}),client_id:Type.Optional(Type.String({pattern:'^[\\x21-\\x7e]{1,512}$'})),client_secret:Type.Optional(Type.String({pattern:'^[\\x21-\\x7e]{1,4096}$'}))},{additionalProperties:false});
+export const mcpOAuthLogoutSchema=Type.Object({id},{additionalProperties:false});
 const connectionMessage='接続できませんでした。サービスの起動、ソケットのパスと権限（URLの場合はURLと認証トークン）、対応する会話範囲・ツールを確認してください。';
 const storageMessage='MCP設定を保存できませんでした。Niwaの保存先の書き込み権限と空き容量を確認してください。';
+const loginMessage='ログインが必要です。「ログイン」からログインしてください。';
 const origin=(value:string|undefined)=>value===undefined?undefined:mcpUrl(value)?.origin;
 
 /** Immutable connectors make configuration changes take effect at the next model step. Servers that failed to connect are retried with backoff while open. */
@@ -24,12 +29,28 @@ export class McpSettings{
  private timer:NodeJS.Timeout|undefined;
  private last?:ReturnType<McpSettings['read']>;
  private secrets:string;
- private constructor(private root:string,public connector:McpConnector,private saved:(servers:McpServerConfig[])=>void,private retry:{initial:number;max:number}){this.delay=retry.initial;this.secrets=productPaths(root).secrets;}
- static async open(root:string,saved:(servers:McpServerConfig[])=>void=()=>{},retry={initial:5000,max:300000}){
-  const settings=new McpSettings(root,await McpConnector.connect([]),saved,retry);
+ private oauth:McpOAuth;
+ private constructor(private root:string,public connector:McpConnector,private saved:(servers:McpServerConfig[])=>void,private retry:{initial:number;max:number},fetcher?:typeof fetch){
+  this.delay=retry.initial;this.secrets=productPaths(root).secrets;
+  this.oauth=new McpOAuth(this.secrets,{...(fetcher?{fetcher}:{}),onLogin:()=>{void this.reconnect();}});
+ }
+ static async open(root:string,saved:(servers:McpServerConfig[])=>void=()=>{},retry={initial:5000,max:300000},fetcher?:typeof fetch){
+  const settings=new McpSettings(root,await McpConnector.connect([]),saved,retry,fetcher);
   const servers=readInstallation(root).mcpServers??[];
-  settings.connector=await McpConnector.connect(servers,undefined,true,settings.tokens());settings.adopt(servers);
+  settings.connector=await McpConnector.connect(servers,undefined,true,settings.tokens(),settings.source);settings.watch(settings.connector);settings.adopt(servers);
   return settings;
+ }
+ private source=(config:McpServerConfig):McpOAuthSource=>this.oauth.source(config.id,config.url!);
+ /** A server that drops out at run time (its login ended) is retried like one that failed to connect. */
+ private watch(connector:McpConnector){
+  connector.onFailed=()=>{if(this.closed||this.connector!==connector)return;this.applied='';if(!this.timer)this.delay=this.retry.initial;this.schedule();};
+ }
+ /** A login just completed: servers waiting for it connect now instead of after the backoff. */
+ private async reconnect(){
+  const connector=this.connector;
+  if(this.closed||!connector.failed().length)return;
+  await connector.retryFailed(undefined,true).catch(()=>{});
+  if(!this.closed&&this.connector===connector&&!connector.failed().length)this.applied=this.built;
  }
  private adopt(servers:McpServerConfig[]){
   this.built=mcpConfigRevision(servers);this.delay=this.retry.initial;
@@ -54,7 +75,7 @@ export class McpSettings{
  read(){
   const servers=readInstallation(this.root).mcpServers??[],revision=mcpConfigRevision(servers),failed=this.connector.failed().map(({id,reason})=>({id,reason})),stored=this.tokens();
   // Only which servers have a credential is reported; the value never leaves the server.
-  return {available:true,revision,servers,tokens:servers.filter(s=>s.url!==undefined&&stored[s.id]!==undefined).map(s=>s.id),connected:this.connector.connections(),failed,applied:revision===this.applied,error:failed.length?connectionMessage:null,busy:this.busy,tools:this.connector.tools(true).map(t=>({name:t.name,description:t.description}))};
+  return {available:true,revision,servers,tokens:servers.filter(s=>s.url!==undefined&&!s.oauth&&stored[s.id]!==undefined).map(s=>s.id),oauth:this.oauth.states(servers),connected:this.connector.connections(),failed,applied:revision===this.applied,error:failed.length?connectionMessage:null,busy:this.busy,tools:this.connector.tools(true).map(t=>({name:t.name,description:t.description}))};
  }
  status(){
   try{return this.last=this.read();}
@@ -66,14 +87,16 @@ export class McpSettings{
   }
  }
  async probe(input:Static<typeof mcpProbeSchema>){
-  if(!Value.Check(mcpProbeSchema,input)||!mcpEndpointValid(input))throw new DomainError('invalid','Invalid MCP address');
+  if(!Value.Check(mcpProbeSchema,input)||!mcpEndpointValid(input)||(input.oauth&&(input.id===undefined||input.token!==undefined)))throw new DomainError('invalid','Invalid MCP address');
   if(this.busy||this.closed)throw new DomainError('conflict','MCP connection in progress');
   let token=input.token;
+  // An OAuth login is used only for the exact URL it was made for (the source checks this on every request).
+  const source=input.oauth?this.oauth.source(input.id!,input.url!):undefined;
   // A stored credential is sent only to the origin it was saved for.
-  if(token===undefined&&input.url!==undefined&&input.id!==undefined){const saved=this.status().servers.find(s=>s.id===input.id);if(saved&&origin(saved.url)===origin(input.url))token=this.tokens()[input.id];}
+  if(!input.oauth&&token===undefined&&input.url!==undefined&&input.id!==undefined){const saved=this.status().servers.find(s=>s.id===input.id);if(saved&&origin(saved.url)===origin(input.url))token=this.tokens()[input.id];}
   this.busy=true;
-  try{return {ok:true,...await McpConnector.discover(mcpEndpoint(input,token),AbortSignal.timeout(10000))};}
-  catch(error){return {ok:false,message:`${connectionMessage}（${McpConnector.reason(error)}）`};}
+  try{return {ok:true,...await McpConnector.discover(mcpEndpoint(input,token,source),AbortSignal.timeout(10000))};}
+  catch(error){return {ok:false,message:error instanceof McpLoginRequired?loginMessage:`${connectionMessage}（${McpConnector.reason(error)}）`};}
   finally{this.busy=false;}
  }
  async save(input:Static<typeof mcpUpdateSchema>){
@@ -85,38 +108,68 @@ export class McpSettings{
    ids.add(server.id);
   }
   const changes=new Map<string,string|null>();
-  for(const token of input.tokens??[]){if(changes.has(token.id)||input.servers.find(s=>s.id===token.id)?.url===undefined)throw new DomainError('invalid','Tokens apply only to URL connections');changes.set(token.id,token.value);}
+  for(const token of input.tokens??[]){
+   const target=input.servers.find(s=>s.id===token.id);
+   if(changes.has(token.id)||target?.url===undefined||target.oauth)throw new DomainError('invalid','Tokens apply only to URL connections without OAuth');changes.set(token.id,token.value);
+  }
   let stored:Record<string,string>;
   try{stored=readMcpTokens(this.secrets);}catch{return {ok:false,message:'保存済みの認証トークンを読み込めません。secretsフォルダーの mcp-token-* の権限と内容を確認してください。'};}
   const previous=this.status().servers,tokens:Record<string,string>={};
   for(const server of input.servers){
-   if(server.url===undefined)continue;
+   if(server.url===undefined||server.oauth)continue;
    const change=changes.get(server.id),value=change!==undefined?change??undefined:origin(previous.find(p=>p.id===server.id)?.url)===origin(server.url)?stored[server.id]:undefined;
    if(value!==undefined)tokens[server.id]=value;
   }
   this.busy=true;
   try{
    let next:McpConnector;
-   try{next=await McpConnector.connect(input.servers,undefined,true,tokens);}
+   try{next=await McpConnector.connect(input.servers,undefined,true,tokens,this.source);}
    catch{return {ok:false,message:connectionMessage};}
    // Servers already known to be down and unchanged do not block saving the rest.
    const known=this.connector.failed(),bad=next.failed().filter(f=>!known.some(k=>k.id===f.id&&JSON.stringify(k.config)===JSON.stringify(f.config))||tokens[f.id]!==stored[f.id]);
    if(bad.length){next.retire();return {ok:false,message:`${connectionMessage}（${bad.map(f=>`${f.id}: ${f.reason}`).join(' / ').slice(0,300)}）`};}
    if(this.closed){next.retire();throw new DomainError('conflict','MCP service closing');}
-   let servers:McpServerConfig[];const written:string[]=[];
+   let servers:McpServerConfig[];const written:string[]=[],removed:string[]=[];
+   // OAuth logins of deleted or no-longer-OAuth servers, and ones made for another URL, are removed with the configuration.
+   const logins=new Map(input.servers.filter(s=>s.oauth&&s.url!==undefined).map(s=>[s.id,mcpUrl(s.url!)!.href])),dropped=new Map<string,McpOAuthCredential|undefined>();
+   try{for(const key of listMcpOAuth(this.secrets)){
+    let login:McpOAuthCredential|undefined;try{login=readMcpOAuth(this.secrets,key);}catch{}
+    if(!logins.has(key)||(login&&login.resource!==logins.get(key)))dropped.set(key,login);
+   }}catch{}
    // Credentials first (removed servers' too), then the configuration; a failure restores the previous credentials.
    try{
     for(const key of new Set([...Object.keys(stored),...Object.keys(tokens)]))if(tokens[key]!==stored[key]){written.push(key);writeMcpToken(this.secrets,key,tokens[key]);}
+    for(const key of dropped.keys()){removed.push(key);writeMcpOAuth(this.secrets,key,undefined);}
     servers=saveMcpInstallation(this.root,input.servers,input.revision);
    }catch(error){
     next.retire();
     for(const key of written)try{writeMcpToken(this.secrets,key,stored[key]);}catch{}
+    for(const key of removed){const login=dropped.get(key);if(login)try{writeMcpOAuth(this.secrets,key,login);}catch{}}
     if(['EACCES','EPERM','EROFS','ENOSPC','EDQUOT'].includes((error as NodeJS.ErrnoException).code??''))return {ok:false,message:storageMessage};
     throw error;
    }
-   this.connector.retire();this.connector=next;this.adopt(servers);this.saved(servers);
+   this.connector.retire();this.connector=next;this.watch(next);this.adopt(servers);this.saved(servers);
+   for(const key of dropped.keys())this.oauth.forget(key);
    return {ok:true,...this.status(),busy:false};
   }finally{this.busy=false;}
  }
- close(){this.closed=true;clearTimeout(this.timer);this.timer=undefined;this.connector.retire();}
+ /** Starts a login. The administrator opens the returned address in a browser; the provider sends them back to `callback`. */
+ async oauthStart(input:Static<typeof mcpOAuthStartSchema>,callback:string){
+  if(!Value.Check(mcpOAuthStartSchema,input)||!mcpUrl(input.url)||(input.client_secret!==undefined&&input.client_id===undefined))throw new DomainError('invalid','Invalid OAuth request');
+  if(this.closed)throw new DomainError('conflict','MCP service closing');
+  return this.oauth.start(input.id,input.url,input.client_id!==undefined?{client_id:input.client_id,client_secret:input.client_secret}:undefined,callback);
+ }
+ /** The browser's return from the provider (no admin cookie): true when the login was stored. */
+ async oauthFinish(params:{state?:string|undefined;code?:string|undefined;error?:string|undefined;iss?:string|undefined}){
+  return !this.closed&&!!await this.oauth.finish(params);
+ }
+ async oauthLogout(input:Static<typeof mcpOAuthLogoutSchema>){
+  if(!Value.Check(mcpOAuthLogoutSchema,input))throw new DomainError('invalid','Invalid OAuth request');
+  if(this.closed)throw new DomainError('conflict','MCP service closing');
+  await this.oauth.logout(input.id);
+  // The running connection stops being reported as connected right away.
+  this.connector.markFailed(input.id,'login_required');
+  return {ok:true};
+ }
+ close(){this.closed=true;clearTimeout(this.timer);this.timer=undefined;this.connector.retire();this.oauth.close();}
 }

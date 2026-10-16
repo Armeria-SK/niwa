@@ -1,6 +1,6 @@
 import type {SubmissionContext} from '../runtime/conversation-work.ts';
 import {mcpScope,type McpConnector} from '../tools/mcp/client.ts';
-import {mcpUpdateSchema,mcpProbeSchema,type McpSettings} from '../tools/mcp/settings.ts';
+import {mcpUpdateSchema,mcpProbeSchema,mcpOAuthStartSchema,mcpOAuthLogoutSchema,type McpSettings} from '../tools/mcp/settings.ts';
 import {qualityReviewSchema,type QualityReview} from '../runtime/artifact-quality.ts';
 import {environmentDefinitionSchema} from '../tools/environments/registry.ts';
 import {randomUUID} from 'node:crypto';
@@ -33,6 +33,12 @@ const scheduleFields = { agent_id: id, room_id: id, prompt: string,
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(JSON.stringify(body));
+}
+/** Landing page for the cross-site OAuth return. A link, not a redirect, so the Strict session cookie is sent when the person comes back. */
+function sendNotice(res: ServerResponse, status: number, message: string): void {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" });
+  res.end(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Niwa</title><body style="font-family:sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.7"><p>${message}</p><p><a href="/#settings">Niwaの設定へ戻る</a></p></body></html>`);
 }
 /** Webhook bodies: at most 64 KiB of UTF-8 JSON or plain text. The content stays untrusted data for the next run. */
 async function readHook(req: IncomingMessage): Promise<{ type: string; text: string } | number> {
@@ -82,6 +88,10 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       if(!mcpSettings)throw new DomainError('conflict','MCP configuration unavailable');return mcpSettings.probe(b as Parameters<McpSettings['probe']>[0]);}},
     {method:'PUT',path:/^\/api\/mcp$/,schema:mcpUpdateSchema,run:(_m,b)=>{
       if(!mcpSettings)throw new DomainError('conflict','MCP configuration unavailable');return mcpSettings.save(b as unknown as Parameters<McpSettings['save']>[0]);}},
+    {method:'POST',path:/^\/api\/mcp\/oauth\/start$/,schema:mcpOAuthStartSchema,run:(_m,b)=>{
+      if(!mcpSettings)throw new DomainError('conflict','MCP configuration unavailable');return mcpSettings.oauthStart(b as Parameters<McpSettings['oauthStart']>[0],auth.origin+'/api/mcp/oauth/callback');}},
+    {method:'POST',path:/^\/api\/mcp\/oauth\/logout$/,schema:mcpOAuthLogoutSchema,run:(_m,b)=>{
+      if(!mcpSettings)throw new DomainError('conflict','MCP configuration unavailable');return mcpSettings.oauthLogout(b as Parameters<McpSettings['oauthLogout']>[0]);}},
     {method:'GET',path:/^\/api\/workareas\/([0-9a-f-]{36})\/executions$/,run:m=>{
       if(!workareas)throw new DomainError('conflict','Executor unavailable');return runtime.workareas.execution(admin,m[1]!,{operation:'execution_list'},workareas);}},
     {method:'POST',path:/^\/api\/workareas\/([0-9a-f-]{36})\/executions\/([0-9a-f-]{36})\/stop$/,schema:object({}),run:m=>{
@@ -263,6 +273,17 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       if (url.origin !== auth.origin) { send(res, 403, { error: 'origin_rejected' }); return; }
       if (!url.pathname.startsWith('/api/') && webRoot && serveStatic(webRoot, req, res)) return;
       if (!url.pathname.startsWith('/api/')) { send(res, 404, { error: 'not_found' }); return; }
+      // The browser returns from the provider without the Strict admin cookie. The single-use state created by an authenticated start is the proof instead.
+      if (req.method === 'GET' && url.pathname === '/api/mcp/oauth/callback' && mcpSettings) {
+        res.setHeader('Referrer-Policy', 'no-referrer');
+        const once = (name: string) => { const all = url.searchParams.getAll(name); return all.length > 1 ? null : all[0]; };
+        const params = { state: once('state'), code: once('code'), error: once('error'), iss: once('iss') };
+        let done = false;
+        if (!Object.values(params).includes(null as never)) try { done = await mcpSettings.oauthFinish(params as Parameters<McpSettings['oauthFinish']>[0]); } catch { done = false; }
+        if (done) sendNotice(res, 200, 'MCPの接続先にログインしました。Niwaの画面に戻って「接続を確認」を押してください。');
+        else sendNotice(res, 400, params.error ? 'ログインが取り消されたか、拒否されました。Niwaの設定から、もう一度ログインしてください。' : 'ログインを完了できませんでした。Niwaの設定から、もう一度ログインしてください。');
+        return;
+      }
       if (req.method === 'POST' && url.pathname === '/api/login') {
         const body = await readBody(req);
         if (!Value.Check(object({ key: Type.String({ maxLength: 128 }) }), body)) throw new DomainError('invalid', 'Invalid login');
