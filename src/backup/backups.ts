@@ -40,7 +40,13 @@ export class Backups {
   #lastCompletedAt = 0;
   #failure: string | null = null;
   #listError: string | null = null;
+  #failedAt: number | null = null;
+  #failures = 0;
+  #nextAttempt = 0;
   get error(): string | null { return this.#failure ?? this.#listError; }
+  get failedAt(): number | null { return this.#failedAt; }
+  /** When the scheduled backup will be retried after failures; null when it is not waiting. */
+  get nextAttemptAt(): number | null { return this.#failures ? this.#nextAttempt : null; }
   constructor(runtime: Runtime, paths: ProductPaths, installation: Installation, private clock = () => Date.now()) {
     this.#runtime = runtime; this.#paths = paths; this.#installation = installation;
   }
@@ -103,10 +109,10 @@ export class Backups {
         if (!validId(old.id) || target !== join(this.#paths.backups, old.id)) throw new Error('Invalid backup path');
         assertDirectoryPath(target); await fs.rm(target, { recursive: true });
       }
-      this.#failure = null;
+      this.#failure = null; this.#failedAt = null; this.#failures = 0; this.#nextAttempt = 0;
       return manifest;
     } catch (error) {
-      this.#failure = 'バックアップを保存できませんでした。保存先と空き容量を確認してください。';
+      this.#failure = 'バックアップを保存できませんでした。保存先と空き容量を確認してください。'; this.#failedAt = this.clock();
       throw error;
     } finally {
       assertDirectoryPath(stage); await fs.rm(stage, { recursive: true, force: true });
@@ -121,7 +127,9 @@ export class Backups {
   tick(): Promise<void> {
     if (this.#stopped) return Promise.resolve();
     return this.#checking ??= this.#daily().catch(() => {
-      this.#failure = 'バックアップを保存できませんでした。保存先と空き容量を確認してください。';
+      this.#failure = 'バックアップを保存できませんでした。保存先と空き容量を確認してください。'; this.#failedAt = this.clock();
+      // 5 minutes doubling to 6 hours, so a persistent fault does not rebuild a snapshot every minute.
+      this.#nextAttempt = this.#failedAt + Math.min(6 * 3600_000, 300_000 * 2 ** this.#failures++);
     }).finally(() => { this.#checking = undefined; });
   }
   async #daily(): Promise<void> {
@@ -133,7 +141,7 @@ export class Backups {
     if (!settings.backupEnabled) return;
     const [hour, minute] = settings.backupTime.split(':').map(Number);
     const due = day + hour! * 3600_000 + minute! * 60_000;
-    if (now >= due && Math.max(items[0]?.created_at ?? 0, this.#lastCompletedAt) < day) await this.create();
+    if (now >= due && now >= this.#nextAttempt && Math.max(items[0]?.created_at ?? 0, this.#lastCompletedAt) < day) await this.create();
   }
   async stop(): Promise<void> {
     this.#stopped = true; clearInterval(this.#timer); this.#timer = undefined;

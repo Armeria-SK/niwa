@@ -211,6 +211,25 @@ test('backup captures a consistent set of databases, excludes secrets, and compr
   } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a failing daily backup backs off from 5 minutes up to 6 hours, reports it, and resets on success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-backup-backoff-'));
+  const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
+  const paths = initializeInstallation(root, installation); const runtime = new Runtime(paths.state); runtime.bootstrap(runtime.administrator());
+  let now = Date.parse('2026-09-07T03:00:00+09:00'); const backups = new Backups(runtime, paths, installation, () => now);
+  const snapshot = runtime.snapshot.bind(runtime); let attempts = 0; let broken = true;
+  runtime.snapshot = (actor, directory) => { attempts++; if (broken) throw new Error('Artificial storage failure'); return snapshot(actor, directory); };
+  try {
+    assert.equal(backups.nextAttemptAt, null);
+    await backups.tick(); assert.equal(attempts, 1); assert.equal(backups.failedAt, now); assert.equal(backups.nextAttemptAt, now + 300_000);
+    now += 60_000; await backups.tick(); assert.equal(attempts, 1);
+    now += 240_000; await backups.tick(); assert.equal(attempts, 2); assert.equal(backups.nextAttemptAt, now + 600_000);
+    for (let i = 0; i < 6; i++) { now = backups.nextAttemptAt!; await backups.tick(); }
+    assert.equal(backups.nextAttemptAt! - now, 6 * 3600_000);
+    broken = false; now = backups.nextAttemptAt!; await backups.tick();
+    assert.equal((await backups.list()).length, 1); assert.equal(backups.failedAt, null); assert.equal(backups.nextAttemptAt, null); assert.equal(backups.error, null);
+  } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test('retention removes expired complete backups and a failed snapshot leaves no partial backup', async () => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-retention-'));
   const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
@@ -304,5 +323,11 @@ test('installation restore refuses a running source, preserves it, and creates a
     finally { restored.close(); }
     await assert.rejects(restoreInstallation(root, manifest.id, destination), /EEXIST/);
     assert.equal(existsSync(join(restoredPaths.state, 'control.db')), true);
+    const moved = join(base, 'moved');
+    for (const bad of [{ origin: 'http://example.com' }, { origin: 'https://niwa.test/path' }, { port: 0 }, { port: 70000 }, { port: 1.5 }]) {
+      await assert.rejects(restoreInstallation(root, manifest.id, moved, bad)); assert.equal(existsSync(moved), false);
+    }
+    await restoreInstallation(root, manifest.id, moved, { origin: 'https://niwa2.test', port: 4321 });
+    assert.deepEqual(readInstallation(moved), { version: 1, origin: 'https://niwa2.test', port: 4321 });
   } finally { await backups.stop(); runtime.close(); rmSync(base, { recursive: true, force: true }); }
 });

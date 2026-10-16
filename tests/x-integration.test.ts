@@ -53,7 +53,7 @@ test('X login requires administrator and same-origin POST; cookie-free callback 
   const call = (path: string, method = 'GET', body?: unknown, cookie = '', source = origin) => new Promise<{ status: number; data: any; cookie: string }>((resolve, reject) => {
     const req = request({ hostname: '127.0.0.1', port, path, method, headers: { Host: 'niwa.test', Origin: source, Cookie: cookie, 'Content-Type': 'application/json' } }, res => {
       let content = ''; res.setEncoding('utf8'); res.on('data', chunk => { content += chunk; }); res.on('error', reject);
-      res.on('end', () => resolve({ status: res.statusCode!, data: JSON.parse(content), cookie: res.headers['set-cookie']?.[0]?.split(';')[0] ?? '' }));
+      res.on('end', () => resolve({ status: res.statusCode!, data: res.headers['content-type']?.startsWith('text/html') ? content : JSON.parse(content), cookie: res.headers['set-cookie']?.[0]?.split(';')[0] ?? '' }));
     }); req.on('error', reject); req.end(body === undefined ? undefined : JSON.stringify(body));
   });
   try {

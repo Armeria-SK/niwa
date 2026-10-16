@@ -55,7 +55,12 @@ test('X refresh is shared, failed refresh is not replayed, and disconnect preven
   assert.deepEqual(await Promise.all([auth.access(), auth.access()]), [tokens.access_token, tokens.access_token]); assert.equal(refreshes, 1);
   const failedStore = new MemoryCredentialStore(); await failedStore.write(expired);
   const failed = new XOAuth(failedStore, { client_id: 'client' }, '123', async () => { throw Error('synthetic failure'); });
-  await assert.rejects(failed.access()); await assert.rejects(failed.access(), /renewed/);
+  await assert.rejects(failed.access(), /synthetic failure/); await assert.rejects(failed.access(), /synthetic failure/);
+  assert.equal((await failed.status()).needs_authorization, false);
+  const rejectedStore = new MemoryCredentialStore(); await rejectedStore.write(expired);
+  const rejected = new XOAuth(rejectedStore, { client_id: 'client' }, '123', async () => json({ error: 'invalid_grant' }, 400));
+  await assert.rejects(rejected.access(), /rejected/); await assert.rejects(rejected.access(), /renewed/);
+  assert.equal((await rejected.status()).needs_authorization, true);
   const stoppedStore = new MemoryCredentialStore(); await stoppedStore.write(expired);
   let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
   let started!: () => void; const start = new Promise<void>(resolve => { started = resolve; });
@@ -64,6 +69,28 @@ test('X refresh is shared, failed refresh is not replayed, and disconnect preven
   });
   const pending = stopped.access(); await start; await stopped.disconnect(); release();
   await assert.rejects(pending, /changed/); assert.equal(await stoppedStore.read(), undefined);
+});
+
+test('X refresh survives a caller giving up, stores the rotated token before verifying, and drops it only for another account', async () => {
+  const expired = { access_token: 'old', refresh_token: 'refresh', expires_at: 0, account_id: '123' };
+  const store = new MemoryCredentialStore(); await store.write(expired);
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let refreshes = 0;
+  const auth = new XOAuth(store, { client_id: 'client' }, '123', async url => {
+    if (String(url).endsWith('/token')) { refreshes++; await held; return json(tokens); } return json({ data: { id: '123' } });
+  });
+  const first = new AbortController(); const abandoned = auth.access(first.signal); const patient = auth.access();
+  first.abort(); await assert.rejects(abandoned); release();
+  assert.equal(await patient, tokens.access_token); assert.equal(refreshes, 1); assert.equal((await auth.status()).needs_authorization, false);
+  const transient = new MemoryCredentialStore(); await transient.write(expired); let verifies = 0;
+  const flaky = new XOAuth(transient, { client_id: 'client' }, '123', async url => {
+    if (String(url).endsWith('/token')) return json(tokens);
+    if (verifies++ === 0) return json({}, 503); return json({ data: { id: '123' } });
+  });
+  await assert.rejects(flaky.access(), /verified/); assert.equal((await transient.read())?.refresh_token, tokens.refresh_token);
+  assert.equal(await flaky.access(), tokens.access_token);
+  const other = new MemoryCredentialStore(); await other.write(expired);
+  const wrong = new XOAuth(other, { client_id: 'client' }, '123', async url => String(url).endsWith('/token') ? json(tokens) : json({ data: { id: '456' } }));
+  await assert.rejects(wrong.access(), /match/); assert.equal(await other.read(), undefined); assert.equal((await wrong.status()).needs_authorization, true);
 });
 
 test('X JSON transport rejects arbitrary hosts, redirects and oversized responses', async () => {
