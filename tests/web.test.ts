@@ -85,7 +85,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }, includeB
     cookie = response.headers.get('set-cookie')!.split(';')[0]!;
     return response;
   };
-  return { runtime, admin, leader, call, login, root };
+  return { runtime, admin, leader, call, login, root, port: address.port };
 }
 
 test('administrator schedules API validates input and persists stop/resume', async t => {
@@ -294,4 +294,44 @@ test('artifact review and freezing require authenticated exact hashes without ap
  assert.equal(item.frozen,1);assert.equal(item.sha256,hash);assert.equal(f.runtime.approvals(f.admin).length,0);
  const board=await (await f.call(`/api/rooms/${room.id}/coordination`)).json() as {digest:{artifact_count:number}};
  assert.equal(board.digest.artifact_count,1);
+});
+
+test('webhook endpoint takes its own token instead of the admin session, bounds the body and is reachable through a proxy host', async t => {
+  const f = await fixture(t); const room = f.runtime.createRoom(f.admin, '外部の通知');
+  const schedule = { id: randomUUID(), agent_id: f.leader.id, room_id: room.id, prompt: '届いた通知を確認する', interval_ms: 60_000,
+    next_at: Date.now() + 60_000, max_runs: 5, timeout_ms: 60_000, trigger_kind: 'webhook' };
+  assert.equal((await f.call(`/api/schedules/${schedule.id}/token`, 'POST', {})).status, 401);
+  await f.login();
+  assert.equal((await f.call('/api/schedules', 'POST', { ...schedule, source_url: 'https://news.example.com/' })).status, 400);
+  assert.equal((await f.call('/api/schedules', 'POST', schedule)).status, 200);
+  const issued = await (await f.call(`/api/schedules/${schedule.id}/token`, 'POST', {})).json() as { token: string; path: string };
+  assert.equal(issued.path, `/api/hooks/${schedule.id}`); assert.match(issued.token, /^[A-Za-z0-9_-]{43}$/);
+  const listed = await (await f.call('/api/schedules')).json() as { hook_ready: number }[];
+  assert.equal(listed[0]!.hook_ready, 1); assert.ok(!JSON.stringify(listed).includes(issued.token));
+  // No admin cookie, no Origin, and the Host an HTTPS proxy forwards.
+  const hook = (headers: Record<string, string>, body: string | Buffer = '{"event":"issue"}', method = 'POST', path = issued.path) => new Promise<{ status: number; headers: Record<string, unknown> }>((resolve, reject) => {
+    const outgoing = request(`http://127.0.0.1:${f.port}${path}`, { method, agent: false, headers: { host: 'niwa.tailnet.example.net', 'content-type': 'application/json', ...headers } }, incoming => {
+      incoming.resume(); incoming.on('end', () => resolve({ status: incoming.statusCode!, headers: incoming.headers }));
+    });
+    outgoing.on('error', reject); outgoing.end(body);
+  });
+  const bearer = { authorization: `Bearer ${issued.token}` };
+  assert.equal((await hook({})).status, 401);
+  const wrong = await hook({ authorization: `Bearer ${issued.token.slice(0, -2)}xx` }); assert.equal(wrong.status, 401); assert.equal(wrong.headers['www-authenticate'], 'Bearer');
+  assert.equal((await hook({ authorization: `Bearer ${randomBytes(32).toString('base64url')}` }, '{}', 'POST', `/api/hooks/${randomUUID()}`)).status, 401);
+  assert.equal((await hook(bearer, '{}', 'GET')).status, 405);
+  assert.equal((await hook({ ...bearer, origin: 'https://attacker.example' })).status, 403);
+  assert.equal((await hook({ ...bearer, 'content-type': 'image/png' })).status, 415);
+  assert.equal((await hook(bearer, '{"broken"')).status, 400);
+  assert.equal((await hook(bearer, Buffer.from([0xff, 0xfe]))).status, 400);
+  assert.equal((await hook(bearer, 'x'.repeat(65_537))).status, 413);
+  assert.equal(f.runtime.schedules.list(f.admin)[0]!.has_pending, 0);
+  assert.equal((await hook(bearer)).status, 202);
+  assert.equal((await hook({ 'x-niwa-token': issued.token, 'content-type': 'text/plain; charset=utf-8' }, 'メールが届きました')).status, 202);
+  assert.equal(f.runtime.schedules.list(f.admin)[0]!.has_pending, 1);
+  // The admin routes still reject the proxy host, and a reissued token replaces the old one.
+  assert.equal((await hook(bearer, '{}', 'GET', '/api/schedules')).status, 403);
+  await f.call(`/api/schedules/${schedule.id}/token`, 'POST', {});
+  assert.equal((await hook(bearer)).status, 401);
+  assert.equal((await f.call(`/api/schedules/${schedule.id}`, 'PATCH', { enabled: false })).status, 200);
 });

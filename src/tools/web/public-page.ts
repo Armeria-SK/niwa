@@ -77,6 +77,9 @@ export const networkFor = (accept: string, types: RegExp, maxBytes = MAX_BYTES, 
 });
 const network = networkFor('text/html,text/plain,text/markdown,text/csv,application/json,application/xml,application/rss+xml,application/atom+xml,text/xml', PAGE_TYPES, MAX_BYTES, true);
 const resourceNetwork = networkFor('*/*', RESOURCE_TYPES);
+// Feeds add only XML text types. Destination, port, redirect, size and time limits are the page reader's.
+const WATCH_TYPES = /^(text\/(html|plain|xml)|application\/(json|xml|rss\+xml|atom\+xml))(;|$)/i;
+const watchNetwork = networkFor('application/rss+xml,application/atom+xml,application/xml,text/xml,text/html,text/plain,application/json', WATCH_TYPES);
 
 export async function publicAddress(host: string, signal: AbortSignal, resolveHost: PageNetwork['resolve'] = network.resolve): Promise<string> {
   signal.throwIfAborted();
@@ -132,6 +135,12 @@ export async function readPublicPage(input: string, signal?: AbortSignal, transp
   const start = Math.max(0, Math.floor(offset)), end = start + 20_000, more = text.length > end;
   return { ...source, ...(extracted?{title:extracted.title,links:extracted.links}:{}), text: text.slice(start, end), truncated: more || !!cut,
     ...(start ? { offset: start } : {}), ...(more ? { next_offset: end } : {}), ...(cut ? { source_truncated: true } : {}) };
+}
+
+/** Anonymous GET for administrator-registered change checks. The text is untrusted external content and is never executed. */
+export async function readWatchedPage(input: string, signal?: AbortSignal, transport: PageNetwork = watchNetwork) {
+  const { body, ...source } = await fetchPublic(input, WATCH_TYPES, signal, transport);
+  return { ...source, body: body.toString('utf8') };
 }
 
 /** Broker-only anonymous GET. No caller-controlled headers, cookies, body, credentials or proxy. */
