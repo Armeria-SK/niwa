@@ -89,3 +89,16 @@ test('shutdown requeues current work, while runner failure becomes a visible wai
   assert.doesNotMatch(result.wait_reason!, /private detail/);
   await next.stop();
 });
+
+test('a throwing phase is logged once and neither stops the other phases nor makes tick throw', async t => {
+  const f = fixture(t); const errors = t.mock.method(console, 'error', () => {});
+  let calls = 0; f.runtime.schedules.dispatch = () => { throw new Error('synthetic schedule failure'); };
+  f.runtime.autonomousWakes.dispatch = () => { throw new Error('synthetic wake failure'); };
+  const scheduler = new Scheduler(f.runtime, { async run(lease) { calls++; f.tasks.finish(f.runtime.agentSession(lease.task.agent_id), lease, '完了'); } });
+  f.tasks.create(f.admin, f.leader.id, f.room.id, '通常の依頼');
+  try {
+    assert.doesNotThrow(() => scheduler.tick()); await setImmediate(); assert.equal(calls, 1);
+    assert.equal(errors.mock.callCount(), 2); assert.match(String(errors.mock.calls[0]!.arguments[0]), /schedules.*synthetic schedule failure/);
+    scheduler.tick(); assert.equal(errors.mock.callCount(), 2);
+  } finally { await scheduler.stop(); }
+});

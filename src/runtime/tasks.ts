@@ -69,7 +69,7 @@ export class Tasks {
     this.#access.room(actor, roomId);
     check(this.#access.participant(agentId, roomId), 'forbidden', 'Recipient cannot access this conversation');
     text(prompt);
-    const duration=prompt.match(/(?:制限時間|タイムボックス|期限)[:：\s]*(\d{1,4})\s*(秒|分|時間)/) ?? prompt.match(/(?<![\d.．-])(\d{1,4})\s*(秒|分|時間)(?:以内|で)/);
+    const duration=prompt.match(/(?:制限時間|タイムボックス|期限)[:：\s]*(\d{1,4})\s*(秒|分|時間)/);
     if(duration) {const seconds=Number(duration[1])*({秒:1,分:60,時間:3600}[duration[2]!] ?? 0);if(seconds>0 && seconds<=86400) deadlineAt=Math.min(deadlineAt,Date.now()+seconds*1000);}
     check(Number.isSafeInteger(deadlineAt) && deadlineAt > Date.now(), 'invalid', 'Task deadline must be in the future');
     return transaction(this.#db, () => {
@@ -484,7 +484,10 @@ export class Tasks {
   }
   finishPrompt(actor:Actor,lease:TaskLease,id:number,events:readonly ModelEvent[]){
     this.get(actor,lease.task.id);const usage=events.filter(e=>e.type==='usage').at(-1);
-    this.#db.prepare('UPDATE prompt_runs SET status=?,input_tokens=?,output_tokens=? WHERE id=? AND task_id=?').run(events.some(e=>e.type==='failed')?'failed':events.some(e=>e.type==='completed')?'completed':'unknown',usage?.input_tokens??null,usage?.output_tokens??null,id,lease.task.id);
+    const status=events.some(e=>e.type==='failed')?'failed':events.some(e=>e.type==='completed')?'completed':'unknown';
+    this.#db.prepare('UPDATE prompt_runs SET status=?,input_tokens=?,output_tokens=? WHERE id=? AND task_id=?').run(status,usage?.input_tokens??null,usage?.output_tokens??null,id,lease.task.id);
+    // A successful response ends the failure streak so backoff and progress describe only consecutive failures.
+    if(status==='completed')this.#db.prepare('DELETE FROM provider_failures WHERE task_id=?').run(lease.task.id);
   }
   promptRuns(actor:Actor,id:string){this.get(actor,id);return this.#db.prepare('SELECT * FROM prompt_runs WHERE task_id=? ORDER BY id').all(id);}
   steps(actor: Actor, id: string): { step: number; memory_revision: number; rules_revision: number; discarded: number; events: ModelEvent[] }[] {

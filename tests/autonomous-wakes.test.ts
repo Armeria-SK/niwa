@@ -163,3 +163,12 @@ test('wake status exposes the actual budget reset instead of an overdue wake tim
  const db=new DatabaseSync(join(root,'control.db'));db.prepare('UPDATE autonomous_wakes SET model_calls=24,budget_reset_at=?,next_at=?').run(now+3600000,now-60000);db.close();
  const row=r.autonomousWakes.list(admin)[0]!;assert.equal(row.reason,'自発活動の利用枠待ち');assert.equal(row.next_at,now+3600000);
 });
+
+test('a candidate whose task cannot be created is deferred and reported instead of blocking or rolling back the other wakes',t=>{
+ const {r,admin,leader,actor}=fixture(t),other=r.createAgent(actor,'仲間'),now=Date.now();
+ r.autonomousWakes.dispatch(admin,now);
+ const create=r.tasks.create.bind(r.tasks);r.tasks.create=(...args:Parameters<typeof create>)=>{if(args[1]===leader.id)throw new Error('synthetic create failure');return create(...args);};
+ assert.throws(()=>r.autonomousWakes.dispatch(admin,now+60000),/synthetic create failure/);
+ assert.equal(r.tasks.list(admin).length,0);const deferred=r.autonomousWakes.list(admin).find(w=>w.agent_id===leader.id)!;assert.equal(deferred.reason,'起動に失敗したため待機中');assert.ok(Number(deferred.next_at)>=now+60000+14*60000);
+ r.autonomousWakes.dispatch(admin,now+120001);assert.equal(r.tasks.list(admin).filter(x=>x.agent_id===other.id).length,1);
+});
