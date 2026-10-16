@@ -11,3 +11,10 @@ export function conversationText(message) {
   const readable = request.replace(metadata, '').replaceAll(artifactId, 'この成果物').replaceAll(sha256, '固定版');
   return `${heading}依頼内容：${readable}`;
 }
+
+/** The artifact id recorded by a stored handoff envelope; the title is looked up from loaded artifacts. */
+export function messageArtifact(message) {
+  if (message.artifact) return message.artifact;
+  if (message.author_id === 'administrator') return null;
+  return message.body.match(/^@[^\n]+ への依頼\n成果物の受け渡し\n親タスク：[0-9a-f-]{36}\n親の段階：review_ready\n成果物ID：([0-9a-f-]{36})\n/u)?.[1] ?? null;
+}

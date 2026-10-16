@@ -22,7 +22,7 @@ try{
  }
  fresh.exec('COMMIT');
  for(const [table,values] of rows)assert.deepEqual(fresh.prepare(`SELECT * FROM ${table}`).all(),values);
- for(const table of ['rooms','messages','tasks','artifacts','schedules'])assert.equal(fresh.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,0);
+ for(const table of ['rooms','messages','message_attachments','tasks','artifacts','schedules'])assert.equal(fresh.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,0);
  assert.equal(fresh.prepare('SELECT count(*) AS n FROM agents').get().n,1);
  assert.equal(fresh.prepare('PRAGMA quick_check').get().quick_check,'ok');
  assert.equal(fresh.prepare('PRAGMA foreign_key_check').all().length,0);
