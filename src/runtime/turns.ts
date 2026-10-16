@@ -9,6 +9,7 @@ import type { TaskLease } from '../domain/task.ts';
 import type { ModelMessage, ModelRequest, ModelEvent, ModelToolCall } from '../contracts/model.ts';
 import type { ModelAdapter } from '../providers/shared/adapter.ts';
 import { collectModelEvents } from '../providers/shared/adapter.ts';
+import type { DraftEnd } from './live.ts';
 import { isReasoningEffort } from '../providers/shared/catalog.ts';
 import { turnTools, executeAsyncTurnTool, type ExternalTools } from './turn-tools.ts';
 import { ContextLimit, fitContext, type FittedContext } from './context/fit.ts';
@@ -177,8 +178,15 @@ export class TurnRunner {
         const modelPhase=phaseTool??(reportingReads?'read_recovery_report':recoveringReads?'read_recovery':'model');
         const promptRun=runtime.tasks.recordPrompt(actor,lease,{version:promptVersion,phase:reportingReads?'read_recovery_report':recoveringReads?'read_recovery':phaseTool??'work',rules_revision:rules.revision,memory_revision:context.revision,input_bytes:fitted.input_bytes,estimated_input_tokens:fitted.estimated_input_tokens,removed_messages:fitted.removed_messages+history.length-recentHistory.length+roomMessages.length-selectedMessages.length});
         runtime.tasks.activity(actor,lease,String(promptRun),modelPhase,'running',context.revision);
-        let events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 600_000, ...(signal ? { signal } : {}) }),
-          { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024,on_summary:summary=>runtime.tasks.summary(actor,lease,String(promptRun),context.revision,summary),on_event:event=>{if(event.type!=='reasoning_summary'&&runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),modelPhase,'running',context.revision);} });
+        // Reply drafts are display-only memory; phase tools (memory/summary) never become a visible reply.
+        const draft=phaseTool?undefined:runtime.live.open({room_id:lease.task.room_id,agent_id:agent.id,task_id:lease.task.id});
+        let events: readonly ModelEvent[]; let draftEnd: DraftEnd = 'failed';
+        try {
+          events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 600_000, ...(signal ? { signal } : {}), ...(draft ? { on_delta: delta => draft.push(delta) } : {}) }),
+            { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024,on_summary:summary=>runtime.tasks.summary(actor,lease,String(promptRun),context.revision,summary),on_event:event=>{if(event.type!=='reasoning_summary'&&runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),modelPhase,'running',context.revision);} });
+          const failed=events.find(event=>event.type==='failed');
+          draftEnd=signal?.aborted||failed?.error.code==='ABORTED'?'cancelled':failed?'failed':'completed';
+        } finally { draft?.close(draftEnd); }
         runtime.tasks.finishPrompt(actor,lease,promptRun,events);
         if(runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),modelPhase,events.some(e=>e.type==='failed')?'failed':'completed',context.revision);
         events=events.filter(event=>event.type!=='reasoning_summary');

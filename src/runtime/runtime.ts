@@ -73,6 +73,7 @@ import type { JsonObject } from '../contracts/model.ts';
 import { contentManagementSchema } from '../storage/content-management-schema.ts';
 import { actionApprovalSchema } from '../storage/action-approval-schema.ts';
 import { memoryReviewSchema, type MemoryReview } from '../domain/memory-review.ts';
+import { LiveUpdates } from './live.ts';
 
 declare const identity: unique symbol;
 /** Opaque in-process capability; never construct this from HTTP or tool arguments. */
@@ -89,6 +90,8 @@ export class Runtime {
   readonly artifactVersions: ArtifactVersions;
   readonly schedules: Schedules;
   readonly providerLimits: ProviderLimits;
+  /** Memory-only drafts and viewer notifications; never persisted or given to models. */
+  readonly live = new LiveUpdates();
   #db: DatabaseSync;
   #root: string;
   #identities = new WeakMap<Actor, Principal>();
@@ -155,6 +158,14 @@ export class Runtime {
   // Composition-root functions: future HTTP authentication / scheduler issues these.
   // These are NOT login endpoints; models never get to choose an execution identity.
   administrator(): Actor { return this.#issue({ kind: 'admin', id: 'administrator' }); }
+  /** Content-free counter of committed writes for live refresh hints; 0 after close. */
+  changeVersion(actor: Actor): number {
+    if (this.#closed) return 0;
+    this.#admin(actor);
+    let total = Number(this.#db.prepare('SELECT total_changes() AS n').get()!.n);
+    for (const db of this.#memories.values()) { try { total += Number(db.prepare('SELECT total_changes() AS n').get()!.n); } catch { /* closed memory */ } }
+    return total;
+  }
   agentSession(agentId: string): Actor {
     this.#agent(agentId);
     return this.#issue({ kind: 'agent', id: agentId });

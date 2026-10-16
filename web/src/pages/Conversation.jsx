@@ -10,7 +10,7 @@ import { useConversationMessages } from '../useConversationMessages.js';
 import './Conversation.css';
 import {CoordinationBoard} from '../CoordinationBoard.jsx';
 
-export function Conversation({ thread, tasks, artifacts = [], onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
+export function Conversation({ thread, tasks, artifacts = [], drafts = [], onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
   const [showPresence, setShowPresence] = useState(false);
   const [showWork, setShowWork] = useState(false);
   const visibleMembers = thread.scope === 'private' ? members.filter(item => thread.members.includes(item.id)) : members;
@@ -22,7 +22,7 @@ export function Conversation({ thread, tasks, artifacts = [], onNewSession, memb
   return <>
     <main className="conversation" id="main-content" tabIndex={-1} aria-label={thread.title}>
       <div className="conversation-mobile-tools"><button className="text-button" onClick={onBack}><BackIcon size={20} />スレッド</button><IconButton label="メンバーの様子" onClick={() => setShowPresence(true)}><UsersIcon size={22} /></IconButton></div>
-      <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} artifacts={artifacts} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
+      <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} artifacts={artifacts} drafts={drafts} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
     </main>
     {showWork ? <CoordinationBoard roomId={thread.id} members={memberMap} onClose={() => setShowWork(false)} onArtifact={onArtifact}/> : null}
     <aside className="presence-rail" aria-label="メンバーの様子"><Presence {...presenceProps} /></aside>
@@ -30,7 +30,7 @@ export function Conversation({ thread, tasks, artifacts = [], onNewSession, memb
   </>;
 }
 
-function ThreadBody({ onShowWork, thread, tasks, artifacts, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
+function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
   const history = useConversationMessages(thread);
   const followBottom=useRef(true);
   const deletedConversation = thread.scope === 'private' && thread.members.length > 0 && thread.members.every(id => memberMap[id]?.deleted);
@@ -61,6 +61,10 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, onNewSession, member
   const previousLast = useRef(null); const prependPosition = useRef(null);
   const lastId = history.items.at(-1)?.id || history.first?.id;
   useEffect(() => { if (lastId && lastId !== previousLast.current && followBottom.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: previousLast.current ? 'smooth' : 'instant' }); previousLast.current = lastId; }, [lastId]);
+  // A posted reply from the same Bot after the draft started replaces the draft bubble.
+  const liveDrafts = drafts.filter(item => item.text && !history.items.some(message => message.author_id === item.agent_id && Date.parse(message.created_at) >= item.started_at));
+  const draftLength = liveDrafts.reduce((sum, item) => sum + item.text.length, 0);
+  useEffect(() => { if (draftLength && followBottom.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); }, [draftLength]);
   useLayoutEffect(() => {
     if (prependPosition.current && listRef.current) listRef.current.scrollTop = prependPosition.current.top + listRef.current.scrollHeight - prependPosition.current.height;
     prependPosition.current = null;
@@ -86,7 +90,7 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, onNewSession, member
       {history.loading ? <p role="status">発言を読み込み中…</p> : null}
       {history.error ? <p role="alert">{history.error}<button className="text-button" onClick={history.reload}>再読み込み</button></p> : null}
       {history.next !== null ? <button className="text-button" disabled={history.loading} onClick={loadEarlier}>以前の返信を50件読み込む</button> : null}
-      <div className="replies">{history.items.map(message=><Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message=>{setReplyTo(message);inputRef.current?.focus();}} onArtifact={onArtifact}/>)}</div>
+      <div className="replies">{history.items.map(message=><Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message=>{setReplyTo(message);inputRef.current?.focus();}} onArtifact={onArtifact}/>)}{liveDrafts.map(item => <DraftMessage key={item.task_id} draft={item} member={memberMap[item.agent_id]} />)}</div>
       {thread.message_count === 1 && !tasks.some(task => !['done', 'canceled'].includes(task.status)) ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
     </div>
     <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。返信するには「保管から戻す」を選んでください。</p> : null}
@@ -156,6 +160,16 @@ function AttachmentPreview({ file, onClose }) {
     <p className="muted">添付ファイル · {formatSize(file.size)} · テキストとして表示しています</p>
     {state.loading ? <p role="status">読み込み中…</p> : state.error ? <p role="alert">{state.error}</p> : <pre className="artifact-document attachment-document">{state.text}</pre>}
   </div><div className="form-actions"><a className="button primary" href={href} download={file.name}><DownloadIcon size={17} />ダウンロード</a></div></Modal>;
+}
+
+function DraftMessage({ draft, member }) {
+  const label = draft.state === 'sending' ? '送信しています' : '返答を書いています';
+  return <article className="message draft-message" aria-busy="true" aria-label={`${member?.name || 'Bot'}が${label}`}>
+    {member ? <Avatar member={member} size={60} /> : <Avatar size={60} />}
+    <div className="message-content"><div className="message-meta"><strong>{member?.name || '削除したBot'}</strong><span className="draft-status"><span className="typing-dots" aria-hidden="true"><span /><span /><span /></span>{label}</span></div>
+      <div className="message-bubble draft-bubble"><p className="draft-text">{draft.text}{draft.truncated ? '…' : ''}</p></div>
+    </div>
+  </article>;
 }
 
 function Presence({ members, paused, onPause, onAppearance, onMember, isPrivate, noHeading = false }) {
