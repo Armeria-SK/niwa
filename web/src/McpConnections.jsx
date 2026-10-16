@@ -1,11 +1,9 @@
 import {useEffect,useRef,useState} from 'react';
 import {api} from './api.js';
+import {origin,savedToken,tokenCleared,probeToken,tokenChanges} from './mcp-tokens.js';
 import './McpConnections.css';
 
 const draftServer=(server,tokens)=>({...server,auth:server.oauth?'oauth':server.url!==undefined&&tokens?.includes(server.id)?'token':'none',savedOAuth:server.oauth===true,clientId:'',clientSecret:'',needClient:false,loginLink:'',transport:server.url!==undefined?'url':'socket',socket:server.socket??'',url:server.url??'',savedId:server.id,savedUrl:server.url,token:'',clearToken:false,enabled:server.enabled!==false,key:crypto.randomUUID(),catalog:server.tools.map(tool=>({...tool,selected:true,description:'保存済みのツール'})),checked:false});
-const origin=value=>{try{return new URL(value).origin;}catch{return '';}};
-/** The saved token is reused only for the same connection ID and URL origin; the server applies the same rule. */
-const savedToken=(server,status)=>server.transport==='url'&&server.id===server.savedId&&!!server.savedUrl&&origin(server.url)===origin(server.savedUrl)&&!!status?.tokens?.includes(server.savedId);
 const address=server=>server.transport==='url'?/^https?:\/\/./.test(server.url):server.socket.startsWith('/');
 const hrefOf=value=>{try{return new URL(value).href;}catch{return '';}};
 const idValid=id=>/^[a-z][a-z0-9_]{0,19}$/.test(id);
@@ -56,7 +54,7 @@ export function McpConnections(){
  });}
  function check(server){return run(async()=>{
   if(server.transport==='url'&&server.auth==='oauth'&&!loggedIn(server,status))throw Error('先にログインしてください。');
-  const result=await api('/mcp/probe','POST',server.transport!=='url'?{socket:server.socket}:server.auth==='oauth'?{url:server.url,id:server.id,oauth:true}:{url:server.url,...(server.auth==='token'?server.token?{token:server.token}:savedToken(server,status)&&!server.clearToken?{id:server.id}:{}:{})});
+  const result=await api('/mcp/probe','POST',server.transport!=='url'?{socket:server.socket}:server.auth==='oauth'?{url:server.url,id:server.id,oauth:true}:{url:server.url,...probeToken(server,status)});
   if(!result.ok)throw Error(result.message);
   const catalog=result.tools.map(tool=>{const saved=server.catalog.find(t=>t.name===tool.name);return {...tool,selected:saved?.selected??false,readOnly:saved?.readOnly??false,...(saved?.approval===true?{approval:true}:{}),hint:tool.readOnlyHint===true};});
   setServers(current=>current.map(s=>s.key===server.key?{...s,catalog,checked:true,conversationIsolation:result.conversationIsolation}:s));
@@ -66,7 +64,7 @@ export function McpConnections(){
  function save(e){e.preventDefault();return run(async()=>{
   const configs=servers.map(({id,transport,socket,url,scope,enabled,catalog,auth})=>({id,...(transport==='url'?{url,...(auth==='oauth'?{oauth:true}:{})}:{socket}),scope,enabled,tools:catalog.filter(t=>t.selected).map(t=>({name:t.name,readOnly:t.readOnly,...(!t.readOnly&&t.approval===true?{approval:true}:{})}))}));
   // OAuth servers never carry a static token; choosing "none" removes a saved one.
-  const tokens=servers.filter(s=>s.transport==='url'&&s.auth!=='oauth').flatMap(s=>s.auth==='none'?(savedToken(s,status)?[{id:s.id,value:null}]:[]):s.token||s.clearToken?[{id:s.id,value:s.token||null}]:[]);
+  const tokens=tokenChanges(servers,status);
   if(new Set(configs.map(s=>s.id)).size!==configs.length)throw Error('接続IDが重複しています。別のIDを指定してください。');
   if(configs.some(s=>s.enabled&&!s.tools.length))throw Error('有効な接続には、公開するツールを1つ以上選んでください。');
   if(configs.some(s=>s.tools.some(t=>`mcp_${s.id}_${t.name}`.length>64)))throw Error('接続IDとツール名が長すぎます。接続IDを短くしてください。');
@@ -94,7 +92,7 @@ export function McpConnections(){
     {server.transport==='url'?<><label className="field"><span>URL</span><input type="url" value={server.url} maxLength={500} pattern="https?://.+" required onChange={e=>change(server.key,{url:e.target.value,catalog:[],checked:false,conversationIsolation:undefined})} placeholder="https://example.com/mcp" spellCheck={false}/><small>https:// で始まるURLを入力します。ユーザー名・パスワード・#は含められません。</small></label>
      <label className="field"><span>認証の方法</span><select value={server.auth} onChange={e=>change(server.key,{auth:e.target.value,token:'',clearToken:false})}><option value="none">なし</option><option value="token">認証トークン</option><option value="oauth">OAuthでログイン</option></select></label>
      {server.auth==='token'?<>
-     <label className="field"><span>認証トークン</span><input type="password" autoComplete="off" value={server.token} maxLength={4096} disabled={server.clearToken} onChange={e=>change(server.key,{token:e.target.value.trim()})} placeholder={savedToken(server,status)?'設定済み（変更するときだけ入力）':'未設定'} spellCheck={false}/><small>トークンだけを入力すると「Bearer」を付けて送ります。保存したトークンは画面に表示しません。{server.savedUrl&&server.url&&origin(server.url)!==origin(server.savedUrl)&&status?.tokens?.includes(server.savedId)?' 接続先が変わったため、保存済みのトークンは使いません。':''}</small></label>
+     <label className="field"><span>認証トークン</span><input type="password" autoComplete="off" value={server.token} maxLength={4096} disabled={tokenCleared(server,status)} onChange={e=>change(server.key,{token:e.target.value})} placeholder={savedToken(server,status)?'設定済み（変更するときだけ入力）':'未設定'} spellCheck={false}/><small>トークンだけを入力すると「Bearer」を付けて送ります。保存したトークンは画面に表示しません。{server.savedUrl&&server.url&&origin(server.url)!==origin(server.savedUrl)&&status?.tokens?.includes(server.savedId)?' 接続先が変わったため、保存済みのトークンは使いません。':''}</small></label>
      {savedToken(server,status)?<label className="mcp-enabled"><input type="checkbox" checked={server.clearToken} onChange={e=>change(server.key,{clearToken:e.target.checked,token:''})}/>保存済みのトークンを削除する</label>:null}</>:null}
      {server.auth==='oauth'?<>
       <p className="field-hint mcp-oauth-state" role="status">{loggedIn(server,status)?'ログイン済み':loginEntry(server,status)?.pending?'ログインを待っています':'ログインが必要です'}{(loginEntry(server,status)?.resource&&loginEntry(server,status).resource!==hrefOf(server.url))||(server.savedOAuth&&server.id!==server.savedId)?' · URLか接続IDを変えたため、もう一度ログインが必要です。':''}</p>

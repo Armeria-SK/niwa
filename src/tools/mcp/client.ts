@@ -50,14 +50,36 @@ interface Registered {definition:ModelToolDefinition;server:McpServerConfig;remo
 export const mcpScope=(epoch:string,room:string)=>createHash('sha256').update(JSON.stringify([epoch,room])).digest('hex');
 export const mcpResourceUrl=(server:string,room:string,uri:string)=>`/api/mcp/${server}/resource?room=${encodeURIComponent(room)}&uri=${encodeURIComponent(uri)}`;
 
-export interface McpSession {id?:string|undefined}
+/** `lost` marks a session whose id was dropped but not yet replaced; `renewal` is the one shared re-initialization every caller waits for. */
+export interface McpSession {id?:string|undefined;lost?:boolean|undefined;renewal?:Promise<void>|undefined}
 /** Bounded text safe to show to the model and the administrator. */
 export const mcpText=(value:unknown,max=200)=>String(value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g,' ').trim().slice(0,max);
 class McpHttpError extends Error{constructor(message:string,readonly status=0){super(message);}}
 const initializeParams={protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'niwa',version:'0.1.0'}};
-const failure=(response:JsonObject)=>{const e=response.error as JsonObject|undefined;return Error(`MCP error ${typeof e?.code==='number'?e.code:'?'}: ${mcpText(e?.message??'unknown')}`.slice(0,200));};
+// The credential is removed before the text is cut, so a long echoed token cannot leave a readable prefix.
+const failure=(response:JsonObject,secrets:readonly string[])=>{const e=response.error as JsonObject|undefined;return Error(`MCP error ${typeof e?.code==='number'?e.code:'?'}: ${mcpText(redactSecrets(String(e?.message??'unknown'),secrets))}`.slice(0,200));};
+/** One re-initialization at a time per session; it runs on its own deadline so a caller giving up does not break the others. */
+function renew(target:string|McpEndpoint,session:McpSession,signal?:AbortSignal){
+ session.lost=true;
+ const shared=session.renewal??=mcpInitialize(target,session,AbortSignal.timeout(30000)).then(()=>undefined).finally(()=>{session.renewal=undefined;});
+ if(!signal)return shared;
+ return new Promise<void>((resolve,reject)=>{
+  const stop=()=>reject(signal.reason);signal.addEventListener('abort',stop,{once:true});if(signal.aborted)stop();
+  shared.then(resolve,reject).finally(()=>signal.removeEventListener('abort',stop));
+ });
+}
 
 type Send=(headers:OutgoingHttpHeaders,signal:AbortSignal,reply:(res:IncomingMessage)=>void)=>ClientRequest;
+/** A scheme token ("Basic <credential>") also hides its credential part. */
+const staticSecrets=(token:string)=>[token,...token.split(' ').filter(p=>p.length>=8)];
+/** Every string in a tool result (keys included) with the credentials removed. */
+function scrub(value:unknown,secrets:readonly string[],depth=0):unknown{
+ if(depth>64)throw Error('Invalid MCP result');
+ if(typeof value==='string')return redactSecrets(value,secrets);
+ if(Array.isArray(value))return value.map(item=>scrub(item,secrets,depth+1));
+ if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>[redactSecrets(key,secrets),scrub(item,secrets,depth+1)]));
+ return value;
+}
 /** One POST per message. Redirects are never followed: any status other than 200/202 is a transport failure. */
 function transport(target:string|McpEndpoint,bearer?:string):{send:Send;secrets:string[]}{
  const endpoint=typeof target==='string'?{socket:target}:target;
@@ -71,7 +93,7 @@ function transport(target:string|McpEndpoint,bearer?:string):{send:Send;secrets:
  if(bearer!==undefined&&(token!==undefined||!new RegExp(mcpOAuthTokenSchema.pattern!).test(bearer)))throw Error('Invalid MCP credential');
  // A bare token is sent as Bearer; a value with a scheme ("Basic ...") is sent as given.
  const auth=bearer!==undefined?{Authorization:`Bearer ${bearer}`}:token?{Authorization:token.includes(' ')?token:`Bearer ${token}`}:{},request=url.protocol==='https:'?httpsRequest:httpRequest;
- return {secrets:bearer!==undefined?[bearer]:token?[token,...token.split(' ').filter(p=>p.length>=8)]:[],send:(headers,signal,reply)=>request(url,{method:'POST',agent:false,signal,headers:{...headers,...auth}},reply)};
+ return {secrets:bearer!==undefined?[bearer]:token?staticSecrets(token):[],send:(headers,signal,reply)=>request(url,{method:'POST',agent:false,signal,headers:{...headers,...auth}},reply)};
 }
 /** MCP JSON-RPC over a private Unix HTTP socket or a remote Streamable HTTP endpoint. No subprocesses.
  * With an OAuth source the Bearer token comes from it; one 401 renews the token and repeats the request (a 401 means nothing ran), a second one asks for a new login. */
@@ -88,7 +110,11 @@ export async function mcpRpc(target:string|McpEndpoint,method:string,params:Json
  }
 }
 async function mcpPost(target:string|McpEndpoint,bearer:string|undefined,method:string,params:JsonObject,signal:AbortSignal|undefined,maxBytes:number,session:McpSession|undefined,reinitialize:boolean):Promise<JsonObject>{
+ // A session that lost its id (a failed or still running re-initialization) is restored before anything else is sent.
+ if(session&&reinitialize&&method!=='initialize'&&(session.lost||session.renewal))await renew(target,session,signal);
  const {send,secrets}=transport(target,bearer);
+ const oauthSource=typeof target==='string'||!('url' in target)?undefined:target.oauth;
+ const known=()=>[...secrets,...(oauthSource?.secrets()??[])];
  const id=randomUUID(),notification=method.startsWith('notifications/'),sent=session?.id;
  const body=JSON.stringify({jsonrpc:'2.0',...(notification?{}:{id}),method,params});
  if(Buffer.byteLength(body)>65536)throw Error('MCP request too large');
@@ -103,7 +129,7 @@ async function mcpPost(target:string|McpEndpoint,bearer:string|undefined,method:
    const finish=(response:JsonObject|undefined)=>{
     if(done||!response||response.jsonrpc!=='2.0'||(response.id!==id&&!(response.id===null&&response.error)))return false;
     done=true;res.destroy();
-    if(response.error&&typeof response.error==='object')reject(failure(response));
+    if(response.error&&typeof response.error==='object')reject(failure(response,known()));
     else if(!response.result||typeof response.result!=='object'||Array.isArray(response.result))reject(Error('Invalid MCP reply'));
     else resolve(response.result as JsonObject);
     return true;
@@ -129,14 +155,14 @@ async function mcpPost(target:string|McpEndpoint,bearer:string|undefined,method:
   });req.on('error',reject);req.end(body);
  });}catch(error){
   if(sent&&reinitialize&&session&&method!=='initialize'&&error instanceof McpHttpError&&error.status===404&&!cancellation.aborted){
-   // The server dropped the session before running anything: start a new one and retry once.
-   if(session.id===sent){session.id=undefined;await mcpInitialize(target,session,signal);}
+   // The server dropped the session before running anything: every caller that sees it waits for one new session, then retries once.
+   if(session.id===sent)session.lost=true;
+   if(session.lost||session.renewal)await renew(target,session,signal);
    return mcpPost(target,bearer,method,params,signal,maxBytes,session,false);
   }
   if(cancellation.aborted&&!notification)await mcpRpc(target,'notifications/cancelled',{requestId:id},AbortSignal.timeout(5000),undefined,session,false).catch(()=>{});
   // A remote server may echo the credential; never pass it on to logs, the model or the administrator.
-  const oauth=typeof target==='string'||!('url' in target)?undefined:target.oauth;
-  if(error instanceof Error&&(secrets.length||oauth))error.message=redactSecrets(error.message,[...secrets,...(oauth?.secrets()??[])]);
+  if(error instanceof Error&&(secrets.length||oauthSource))error.message=redactSecrets(error.message,known());
   throw error;
  }
 }
@@ -145,9 +171,10 @@ export async function mcpInitialize(target:string|McpEndpoint,session:McpSession
  const hello=await mcpRpc(target,'initialize',initializeParams,signal,undefined,session);
  if(hello.protocolVersion!=='2025-06-18')throw Error('Unsupported MCP protocol');
  await mcpRpc(target,'notifications/initialized',{},signal,undefined,session,false);
+ session.lost=false;
  return hello;
 }
-const endpointSecrets=(endpoint:McpEndpoint)=>'socket' in endpoint?[]:endpoint.oauth?endpoint.oauth.secrets():endpoint.token?[endpoint.token]:[];
+const endpointSecrets=(endpoint:McpEndpoint)=>'socket' in endpoint?[]:endpoint.oauth?endpoint.oauth.secrets():endpoint.token?staticSecrets(endpoint.token):[];
 export class McpConnector{
  private registered=new Map<string,Registered>();
  private servers=new Map<string,McpServerConfig>();
@@ -160,6 +187,8 @@ export class McpConnector{
  private again=false;
  /** Called when a server drops out at run time (its login ended), so the owner can schedule reconnection. */
  onFailed:(()=>void)|undefined;
+ /** Builds a server's endpoint from the credentials as they are now, so a retry sees a repaired or replaced credential. */
+ endpointFor:((config:McpServerConfig)=>McpEndpoint)|undefined;
  private constructor(){}
  static async discover(target:string|McpEndpoint,signal?:AbortSignal,session:McpSession={}){
    const hello=await mcpInitialize(target,session,signal);
@@ -231,7 +260,10 @@ export class McpConnector{
   try{do{
    this.again=false;
    await Promise.all([...this.failures.values()].map(async f=>{
-    try{const publish=await this.prepare(f.config,f.endpoint,signal);if(!this.retired)publish();}
+    try{
+     try{f.endpoint=this.endpointFor?.(f.config)??f.endpoint;}catch{}
+     const publish=await this.prepare(f.config,f.endpoint,signal);if(!this.retired)publish();
+    }
     catch(error){const current=this.failures.get(f.config.id);if(current)current.reason=McpConnector.reason(error);}
    }));
   }while(this.again&&!this.retired);}finally{this.retrying=false;}
@@ -249,7 +281,8 @@ export class McpConnector{
   if(!Array.isArray(result.content)||result.content.length>100)throw Error('Invalid MCP result');
   // A remote server may echo its credential back; the model never sees it.
   // Tokens renewed during the call count as well as the one that was sent.
-  for(const secret of new Set([...sent,...endpointSecrets(endpoint)]))if(secret&&JSON.stringify(result).includes(secret))result=JSON.parse(JSON.stringify(result).split(secret).join('[REDACTED]')) as JsonObject;
+  const secrets=[...new Set([...sent,...endpointSecrets(endpoint)])].filter(secret=>secret.length>0);
+  if(secrets.length)result=scrub(result,secrets) as JsonObject;
   return {...result,untrusted:true};
  }
  async resource(server:string,uri:string,scope:string){

@@ -17,11 +17,15 @@ function read(file:string){
   return value;
  }finally{closeSync(fd);}
 }
-/** Remote MCP credentials live beside other product secrets (0600, never in config/state or backups), one file per server id. */
-export function readMcpTokens(secrets:string){
+/** Remote MCP credentials live beside other product secrets (0600, never in config/state or backups), one file per server id.
+ * A bad file only loses its own server's credential: with `bad` the id is reported there and reading goes on, without it the error is thrown. */
+export function readMcpTokens(secrets:string,bad?:string[]){
  assertDirectoryPath(secrets);const tokens:Record<string,string>={};
  let names:string[];try{names=readdirSync(secrets);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return tokens;throw error;}
- for(const name of names){const id=fileName.exec(name)?.[1];if(id)tokens[id]=read(join(secrets,name));}
+ for(const name of names){
+  const id=fileName.exec(name)?.[1];if(!id)continue;
+  try{tokens[id]=read(join(secrets,name));}catch(error){if(!bad)throw error;bad.push(id);}
+ }
  return tokens;
 }
 /** Atomically replaces (or with undefined removes) one server's credential. */

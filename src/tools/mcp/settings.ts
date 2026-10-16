@@ -41,8 +41,9 @@ export class McpSettings{
   return settings;
  }
  private source=(config:McpServerConfig):McpOAuthSource=>this.oauth.source(config.id,config.url!);
- /** A server that drops out at run time (its login ended) is retried like one that failed to connect. */
+ /** A server that drops out at run time (its login ended) is retried like one that failed to connect. Retries read credentials afresh. */
  private watch(connector:McpConnector){
+  connector.endpointFor=config=>mcpEndpoint(config,config.url===undefined||config.oauth?undefined:this.tokens()[config.id],config.oauth?this.source(config):undefined);
   connector.onFailed=()=>{if(this.closed||this.connector!==connector)return;this.applied='';if(!this.timer)this.delay=this.retry.initial;this.schedule();};
  }
  /** A login just completed: servers waiting for it connect now instead of after the backoff. */
@@ -71,7 +72,7 @@ export class McpSettings{
   this.schedule();
  }
  /** An unreadable credential leaves that server unauthenticated; its connection failure is reported instead. */
- private tokens(){try{return readMcpTokens(this.secrets);}catch{return {};}}
+ private tokens(){try{return readMcpTokens(this.secrets,[]);}catch{return {};}}
  read(){
   const servers=readInstallation(this.root).mcpServers??[],revision=mcpConfigRevision(servers),failed=this.connector.failed().map(({id,reason})=>({id,reason})),stored=this.tokens();
   // Only which servers have a credential is reported; the value never leaves the server.
@@ -112,8 +113,11 @@ export class McpSettings{
    const target=input.servers.find(s=>s.id===token.id);
    if(changes.has(token.id)||target?.url===undefined||target.oauth)throw new DomainError('invalid','Tokens apply only to URL connections without OAuth');changes.set(token.id,token.value);
   }
-  let stored:Record<string,string>;
-  try{stored=readMcpTokens(this.secrets);}catch{return {ok:false,message:'保存済みの認証トークンを読み込めません。secretsフォルダーの mcp-token-* の権限と内容を確認してください。'};}
+  let stored:Record<string,string>;const unreadable:string[]=[];
+  try{stored=readMcpTokens(this.secrets,unreadable);}catch{return {ok:false,message:'保存済みの認証トークンを読み込めません。secretsフォルダーの mcp-token-* の権限と内容を確認してください。'};}
+  // An unreadable file blocks only the connections that would have kept its token; others, and ones given a new value, replace or remove it.
+  const kept=unreadable.filter(key=>input.servers.some(s=>s.id===key&&s.url!==undefined&&!s.oauth)&&!changes.has(key));
+  if(kept.length)return {ok:false,message:`保存済みの認証トークンを読み込めません（${kept.join(', ')}）。secretsフォルダーの mcp-token-* の権限と内容を確認するか、トークンを入力し直してください。`};
   const previous=this.status().servers,tokens:Record<string,string>={};
   for(const server of input.servers){
    if(server.url===undefined||server.oauth)continue;
@@ -138,7 +142,7 @@ export class McpSettings{
    }}catch{}
    // Credentials first (removed servers' too), then the configuration; a failure restores the previous credentials.
    try{
-    for(const key of new Set([...Object.keys(stored),...Object.keys(tokens)]))if(tokens[key]!==stored[key]){written.push(key);writeMcpToken(this.secrets,key,tokens[key]);}
+    for(const key of new Set([...Object.keys(stored),...Object.keys(tokens),...unreadable]))if(tokens[key]!==stored[key]||unreadable.includes(key)){written.push(key);writeMcpToken(this.secrets,key,tokens[key]);}
     for(const key of dropped.keys()){removed.push(key);writeMcpOAuth(this.secrets,key,undefined);}
     servers=saveMcpInstallation(this.root,input.servers,input.revision);
    }catch(error){
