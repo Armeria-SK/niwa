@@ -1,11 +1,11 @@
 import {useEffect,useRef,useState} from 'react';
 import {api} from './api.js';
 import {origin,savedToken,tokenCleared,probeToken,tokenChanges} from './mcp-tokens.js';
-import {loginEntry,loginFor,loggedIn,loginNote,loginFailure,loginUnsaved,loginState,connectionState,connectionError} from './mcp-login.js';
-import {rememberTools,mergeCatalog} from './mcp-tools.js';
+import {hrefOf,loginEntry,loginFor,loggedIn,loginNote,loginFailure,loginUnsaved,loginState,connectionState,connectionError} from './mcp-login.js';
+import {carryTools,resetTools,mergeCatalog} from './mcp-tools.js';
 import './McpConnections.css';
 
-const draftServer=(server,tokens)=>({...server,auth:server.oauth?'oauth':server.url!==undefined&&tokens?.includes(server.id)?'token':'none',savedOAuth:server.oauth===true,remembered:{},clientId:'',clientSecret:'',needClient:false,loginLink:'',transport:server.url!==undefined?'url':'socket',socket:server.socket??'',url:server.url??'',savedId:server.id,savedUrl:server.url,token:'',clearToken:false,enabled:server.enabled!==false,key:crypto.randomUUID(),catalog:server.tools.map(tool=>({...tool,selected:true,description:'保存済みのツール'})),checked:false});
+const draftServer=(server,tokens)=>({...server,auth:server.oauth?'oauth':server.url!==undefined&&tokens?.includes(server.id)?'token':'none',savedOAuth:server.oauth===true,remembered:{},toolsOrigin:origin(server.url??''),clientId:'',clientSecret:'',needClient:false,loginLink:'',transport:server.url!==undefined?'url':'socket',socket:server.socket??'',url:server.url??'',savedId:server.id,savedUrl:server.url,token:'',clearToken:false,enabled:server.enabled!==false,key:crypto.randomUUID(),catalog:server.tools.map(tool=>({...tool,selected:true,description:'保存済みのツール'})),checked:false});
 const address=server=>server.transport==='url'?/^https?:\/\/./.test(server.url):server.socket.startsWith('/');
 const idValid=id=>/^[a-z][a-z0-9_]{0,19}$/.test(id);
 export function McpConnections(){
@@ -51,7 +51,7 @@ export function McpConnections(){
   const value=await api('/mcp');setStatus(current=>current&&value.revision===current.revision?value:current);
  });}
  function logout(server){return run(async()=>{
-  await api('/mcp/oauth/logout','POST',{id:server.id,url:server.url});local(server.key,{loginLink:'',checked:false});
+  await api('/mcp/oauth/logout','POST',{id:server.id,url:hrefOf(server.url)});local(server.key,{loginLink:'',checked:false});
   const value=await api('/mcp');setStatus(current=>current&&value.revision===current.revision?value:current);setNotice('ログアウトしました。');
  });}
  function check(server){return run(async()=>{
@@ -59,7 +59,7 @@ export function McpConnections(){
   const result=await api('/mcp/probe','POST',server.transport!=='url'?{socket:server.socket}:server.auth==='oauth'?{url:server.url,id:server.id,oauth:true}:{url:server.url,...probeToken(server,status)});
   if(!result.ok)throw Error(result.message);
   const catalog=mergeCatalog(result.tools,server);
-  setServers(current=>current.map(s=>s.key===server.key?{...s,catalog,checked:true,conversationIsolation:result.conversationIsolation}:s));
+  setServers(current=>current.map(s=>s.key===server.key?{...s,catalog,toolsOrigin:origin(server.url),checked:true,conversationIsolation:result.conversationIsolation}:s));
   if(server.catalog.some(tool=>tool.selected&&!catalog.some(t=>t.name===tool.name)))touch(server.key);
   setNotice('接続できました。Botに公開するツールを選んで保存してください。');
  });}
@@ -90,8 +90,8 @@ export function McpConnections(){
     <div className="connection-row"><label className="mcp-enabled"><input type="checkbox" checked={server.enabled} onChange={e=>change(server.key,{enabled:e.target.checked})}/>Botに公開する</label><span className="connection-state">{connectionState(server,status,dirty.has(server.key))}</span></div>
     <div className="field-pair"><label className="field"><span>接続ID</span><input aria-label="接続ID" aria-describedby={`${server.key}-id-hint`} value={server.id} pattern="[a-z][a-z0-9_]{0,19}" maxLength={20} required onChange={e=>change(server.key,{id:e.target.value})} placeholder="local"/><small id={`${server.key}-id-hint`}>英小文字で始め、英数字・_で20文字まで。</small></label>
     <label className="field"><span>利用する会話</span><select value={server.scope} onChange={e=>change(server.key,{scope:e.target.value})}><option value="conversation">会話ごとに分離</option><option value="shared">共有会話のみ</option></select></label></div>
-    <label className="field"><span>接続方法</span><select value={server.transport} onChange={e=>change(server.key,{transport:e.target.value,catalog:[],remembered:rememberTools(server),checked:false,conversationIsolation:undefined})}><option value="socket">このPCのソケット</option><option value="url">URL（HTTPS）</option></select></label>
-    {server.transport==='url'?<><label className="field"><span>URL</span><input type="url" value={server.url} maxLength={500} pattern="https?://.+" required onChange={e=>change(server.key,{url:e.target.value,catalog:[],remembered:rememberTools(server),checked:false,conversationIsolation:undefined})} placeholder="https://example.com/mcp" spellCheck={false}/><small>https:// で始まるURLを入力します（このPCのサービスなら http://127.0.0.1 も使えます）。ユーザー名・パスワード・#は含められません。</small></label>
+    <label className="field"><span>接続方法</span><select value={server.transport} onChange={e=>change(server.key,{transport:e.target.value,...resetTools,checked:false,conversationIsolation:undefined})}><option value="socket">このPCのソケット</option><option value="url">URL（HTTPS）</option></select></label>
+    {server.transport==='url'?<><label className="field"><span>URL</span><input type="url" value={server.url} maxLength={500} pattern="https?://.+" required onChange={e=>change(server.key,{url:e.target.value,...carryTools(server,e.target.value),checked:false,conversationIsolation:undefined})} placeholder="https://example.com/mcp" spellCheck={false}/><small>https:// で始まるURLを入力します（このPCのサービスなら http://127.0.0.1 も使えます）。ユーザー名・パスワード・#は含められません。</small></label>
      <label className="field"><span>認証の方法</span><select value={server.auth} onChange={e=>change(server.key,{auth:e.target.value,token:'',clearToken:false})}><option value="none">なし</option><option value="token">認証トークン</option><option value="oauth">OAuthでログイン</option></select></label>
      {status?.token_errors?.includes(server.id)&&server.auth!=='oauth'?<p className="field-error">保存済みの認証トークンのファイルを読み込めません。トークンを入力し直すか、認証の方法を「なし」にして保存してください。</p>:null}
      {server.auth==='token'?<>

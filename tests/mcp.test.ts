@@ -345,18 +345,35 @@ test('an unreadable saved token is reported by name and \"none\" removes it',asy
  assert.deepEqual(tokenChanges([{...card('token'),token:'new-token-123456'}],status),[{id:'remote',value:'new-token-123456'}]);
  assert.deepEqual(tokenChanges([card('none')],{tokens:[],token_errors:[]}),[]);
 });
-test('tool choices survive an edited URL and a new check; only tools that no longer exist are dropped',async()=>{
- const {rememberTools,mergeCatalog}=await import(pathToFileURL(resolve('web/src/mcp-tools.js')).href);
- const card={catalog:[{name:'read',selected:true,readOnly:true},{name:'send',selected:true,readOnly:false,approval:true},{name:'gone',selected:true,readOnly:false}],remembered:{}};
- // The URL is edited: the list is cleared but the choices are remembered, also over a second edit.
- const edited={...card,catalog:[],remembered:rememberTools(card)};
- const again={...edited,catalog:[],remembered:rememberTools(edited)};
+test('tool choices survive edits of the same server only; another server starts from the defaults',async()=>{
+ const {carryTools,resetTools,mergeCatalog}=await import(pathToFileURL(resolve('web/src/mcp-tools.js')).href);
  const tools=[{name:'read',readOnlyHint:true},{name:'send'},{name:'extra'}];
- for(const source of [card,edited,again]){
-  const merged=mergeCatalog(tools,source);
-  assert.deepEqual(merged.map((t:{name:string;selected:boolean;readOnly:boolean;approval?:boolean})=>[t.name,t.selected,t.readOnly,t.approval]),[['read',true,true,undefined],['send',true,false,true],['extra',false,false,undefined]]);
-  assert.equal(merged[0].hint,true);
- }
- // A tool that came back after a check without it is still remembered until the card is saved.
- assert.deepEqual(Object.keys(rememberTools({...edited,catalog:mergeCatalog(tools,edited)})).sort(),['extra','gone','read','send']);
+ const summary=(merged:{name:string;selected:boolean;readOnly:boolean;approval?:boolean}[])=>merged.map(t=>[t.name,t.selected,t.readOnly,t.approval]);
+ const card={url:'https://a.example.com/mcp',toolsOrigin:'https://a.example.com',catalog:[{name:'read',selected:true,readOnly:true},{name:'send',selected:true,readOnly:false,approval:true},{name:'gone',selected:true,readOnly:false}],remembered:{}};
+ const kept=[['read',true,true,undefined],['send',true,false,true],['extra',false,false,undefined]];
+ const defaults=[['read',false,false,undefined],['send',false,false,undefined],['extra',false,false,undefined]];
+ assert.deepEqual(summary(mergeCatalog(tools,card)),kept);
+ // The path or query changes: the same server, the choices follow, also over several edits.
+ const path={...card,...carryTools(card,'https://a.example.com/v2/mcp'),url:'https://a.example.com/v2/mcp'};
+ const again={...path,...carryTools(path,'https://a.example.com/v2/mcp?x=1'),url:'https://a.example.com/v2/mcp?x=1'};
+ assert.deepEqual(summary(mergeCatalog(tools,path)),kept);assert.deepEqual(summary(mergeCatalog(tools,again)),kept);
+ // The URL is half typed: nothing is lost, and typing the same server again brings the choices back.
+ const typing={...again,...carryTools(again,'https:/'),url:'https:/'};
+ const back={...typing,...carryTools(typing,'https://a.example.com/mcp'),url:'https://a.example.com/mcp'};
+ assert.deepEqual(summary(mergeCatalog(tools,back)),kept);
+ // Another origin: a tool with the same name is another tool, whatever was chosen before, and going back does not revive the old choices.
+ const other={...card,...carryTools(card,'https://b.example.com/mcp'),url:'https://b.example.com/mcp'};
+ assert.deepEqual(summary(mergeCatalog(tools,other)),defaults);
+ const home={...other,...carryTools(other,'https://a.example.com/mcp'),url:'https://a.example.com/mcp'};
+ assert.deepEqual(summary(mergeCatalog(tools,home)),defaults);
+ // The same host on another port or scheme is another origin as well.
+ for(const next of ['https://a.example.com:8443/mcp','http://127.0.0.1/mcp'])assert.deepEqual(summary(mergeCatalog(tools,{...card,...carryTools(card,next),url:next})),defaults);
+ // A changed connection method forgets everything.
+ assert.deepEqual(summary(mergeCatalog(tools,{...card,...resetTools,url:'https://a.example.com/mcp'})),defaults);
+ // A remembered choice that does not belong to the URL in the form is not used even if it is still stored.
+ assert.deepEqual(summary(mergeCatalog(tools,{...card,catalog:[],remembered:{read:{selected:true,readOnly:true}},toolsOrigin:'https://a.example.com',url:'https://z.example.com/mcp'})),defaults);
+});
+test('the screen sends the logout URL in canonical form',async()=>{
+ const {hrefOf}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
+ assert.equal(hrefOf('HTTPS://Mcp.Example.COM:443/mcp'),'https://mcp.example.com/mcp');assert.equal(hrefOf('http://127.0.0.1:8080'),'http://127.0.0.1:8080/');assert.equal(hrefOf('not a url'),'');
 });

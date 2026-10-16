@@ -17,7 +17,7 @@ export const mcpOAuthSchema=Type.Object({version:Type.Literal(1),resource:Type.S
 export type McpOAuthCredential=Static<typeof mcpOAuthSchema>;
 /** The client a login was made with, kept after logout so the next login needs neither a form nor a new registration. */
 export const mcpOAuthClientSchema=Type.Object({version:Type.Literal(1),issuer:Type.String({maxLength:2048}),redirect_uri:Type.String({pattern:'^[\\x21-\\x7e]+$',maxLength:2048}),
- client_id:Type.String({pattern:'^[\\x21-\\x7e]{1,512}$'}),client_secret:Type.Optional(Type.String({pattern:'^[\\x21-\\x7e]{1,4096}$'})),token_endpoint_auth_method:method},{additionalProperties:false});
+ client_id:Type.String({pattern:'^[\\x21-\\x7e]{1,512}$'}),client_secret:Type.Optional(Type.String({pattern:'^[\\x21-\\x7e]{1,4096}$'})),token_endpoint_auth_method:method,origin:Type.Optional(Type.Union([Type.Literal('manual'),Type.Literal('registered')]))},{additionalProperties:false});
 export type McpOAuthClient=Static<typeof mcpOAuthClientSchema>;
 /** One file per connection ID and URL: a login made for another URL never replaces the one the saved connection uses. */
 export const mcpOAuthFile=(id:string,resource:string)=>`${prefix}${id}-${createHash('sha256').update(resource).digest('hex').slice(0,16)}.json`;

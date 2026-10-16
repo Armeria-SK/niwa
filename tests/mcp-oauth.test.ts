@@ -33,7 +33,7 @@ async function listen(t:After,handler:(req:IncomingMessage,res:ServerResponse)=>
 async function authorizationServer(t:After){
  const s={url:'',overrides:{} as Record<string,unknown>,codes:new Map<string,{challenge:string;redirect:string;client:string;resource:string}>(),refreshTokens:new Set<string>(),accepted:new Set<string>(),
   tokens:[] as {form:URLSearchParams;auth:string|undefined}[],registrations:[] as Record<string,any>[],revoked:[] as {form:URLSearchParams;auth:string|undefined}[],hits:new Map<string,number>(),redirects:new Set<string>(),
-  expiresIn:3600 as number|undefined,omitRefresh:false,omitInitialRefresh:false,tokenLength:0,clientGone:undefined as string|undefined,metadataDelay:0,onRefresh:undefined as (()=>void)|undefined,refreshFailure:undefined as string|undefined,secret:undefined as string|undefined,method:'client_secret_post',delay:0,counter:0,latestRefresh:'',registerStatus:201,revokeStatus:200,tokenType:'Bearer',registration:{} as Record<string,unknown>,
+  expiresIn:3600 as number|undefined,omitRefresh:false,omitInitialRefresh:false,tokenLength:0,clientGone:undefined as string|undefined,metadataDelay:0,revokeAll:false,owner:new Map<string,string>(),onRefresh:undefined as (()=>void)|undefined,refreshFailure:undefined as string|undefined,secret:undefined as string|undefined,method:'client_secret_post',delay:0,counter:0,latestRefresh:'',registerStatus:201,revokeStatus:200,tokenType:'Bearer',registration:{} as Record<string,unknown>,
   refreshes:()=>s.tokens.filter(r=>r.form.get('grant_type')==='refresh_token'),
   metadata:()=>{
    const base:Record<string,unknown>={issuer:s.url,authorization_endpoint:`${s.url}/authorize`,token_endpoint:`${s.url}/token`,registration_endpoint:`${s.url}/register`,revocation_endpoint:`${s.url}/revoke`,
@@ -47,11 +47,11 @@ async function authorizationServer(t:After){
    s.codes.set(code,{challenge:u.searchParams.get('code_challenge')!,redirect:u.searchParams.get('redirect_uri')!,client:u.searchParams.get('client_id')!,resource:u.searchParams.get('resource')!});
    return {code,state:u.searchParams.get('state')!};
   }};
- const issue=(res:ServerResponse,initial:boolean)=>{
+ const issue=(res:ServerResponse,initial:boolean,client:string)=>{
   const pad='a'.repeat(s.tokenLength);
   const access=`at-${++s.counter}-${randomBytes(6).toString('hex')}${pad}`;s.accepted.add(access);
   const omit=initial?s.omitInitialRefresh:s.omitRefresh,next=`rt-${s.counter}-${randomBytes(6).toString('hex')}${pad}`;
-  if(!omit){s.refreshTokens.add(next);s.latestRefresh=next;}
+  s.owner.set(access,client);if(!omit){s.refreshTokens.add(next);s.latestRefresh=next;s.owner.set(next,client);}
   send(res,200,{access_token:access,token_type:s.tokenType,...(s.expiresIn!==undefined?{expires_in:s.expiresIn}:{}),...(omit?{}:{refresh_token:next}),scope:'mail.read'});
  };
  s.url=await listen(t,async(req,res)=>{
@@ -62,7 +62,12 @@ async function authorizationServer(t:After){
    const value=JSON.parse(await body(req));s.registrations.push(value);
    send(res,s.registerStatus,{client_id:`client-${s.registrations.length}`,redirect_uris:value.redirect_uris,token_endpoint_auth_method:'none',...s.registration});return;
   }
-  if(path==='/revoke'){s.revoked.push({form:new URLSearchParams(await body(req)),auth:req.headers.authorization});res.writeHead(s.revokeStatus);res.end();return;}
+  if(path==='/revoke'){
+   const form=new URLSearchParams(await body(req));s.revoked.push({form,auth:req.headers.authorization});
+   // Some providers end every token of the client when one is revoked.
+   if(s.revokeAll){const client=s.owner.get(form.get('token')!);for(const [token,owner] of s.owner)if(owner===client){s.accepted.delete(token);s.refreshTokens.delete(token);}}
+   res.writeHead(s.revokeStatus);res.end();return;
+  }
   if(path==='/token'){
    const form=new URLSearchParams(await body(req));s.tokens.push({form,auth:req.headers.authorization});
    if(s.delay)await sleep(s.delay);
@@ -75,7 +80,7 @@ async function authorizationServer(t:After){
     const known=s.codes.get(form.get('code')!);s.codes.delete(form.get('code')!);
     const challenge=createHash('sha256').update(form.get('code_verifier')??'').digest('base64url');
     if(!known||known.challenge!==challenge||known.redirect!==form.get('redirect_uri')||known.client!==form.get('client_id')||known.resource!==form.get('resource')){send(res,400,{error:'invalid_grant'});return;}
-    issue(res,true);return;
+    issue(res,true,form.get('client_id')!);return;
    }
    if(form.get('grant_type')==='refresh_token'){
     s.onRefresh?.();
@@ -83,7 +88,7 @@ async function authorizationServer(t:After){
     const old=form.get('refresh_token')!;
     if(!s.refreshTokens.has(old)){send(res,400,{error:'invalid_grant'});return;}
     if(!s.omitRefresh)s.refreshTokens.delete(old);
-    issue(res,false);return;
+    issue(res,false,form.get('client_id')!);return;
    }
   }
   res.writeHead(404);res.end();
@@ -657,7 +662,7 @@ test('OAuth connections work with McpConnector directly: strict connect fails fa
  assert.ok(mcp.calls.every(c=>c.auth===undefined||c.auth.startsWith('Bearer at-')));
 });
 
-test('a login for an edited, unsaved URL is kept apart: the saved connection keeps working, the screen sees both, and saving cleans up',async t=>{
+test('a login for an edited, unsaved URL is kept apart: the saved connection keeps working, the screen sees both, and saving cleans up without revoking what stays',async t=>{
  const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),{loggedIn,loginNote}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
  await signIn(f,as,mcp.url);
  assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[remoteConfig(mcp.url)]})).json.ok,true);
@@ -684,8 +689,8 @@ test('a login for an edited, unsaved URL is kept apart: the saved connection kee
  const saved=await f.call('/api/mcp','PUT',{revision:status.revision,servers:[remoteConfig(other)]});
  assert.equal(saved.json.ok,true,saved.text);
  assert.deepEqual(listMcpOAuth(join(f.root,'secrets')).map(e=>e.credential?.resource),[other]);
- await until(()=>as.revoked.length>=2);
- assert.deepEqual(as.revoked.map(r=>r.form.get('token')).sort(),[firstLogin.refresh_token,thirdLogin.refresh_token].sort());
+ // The login that stays shares its client with the ones that went, so the provider is not asked to revoke anything.
+ await sleep(150);assert.equal(as.revoked.length,0);assert.ok(as.accepted.has(stored(f,'remote',other).access_token));void firstLogin;void thirdLogin;
  assert.deepEqual(f.manager.status().connected,['remote']);
  assert.equal(loggedIn(draft(other),(await f.call('/api/mcp')).json),true);
  // A login the provider ended is still reported as needing a new one.
@@ -928,34 +933,34 @@ test('unreadable credentials in a failing renewal keep the screen informed: the 
  assert.equal(loginUnsaved(card,{oauth:[{id:'remote',status:'signed_in'}]}),false);assert.equal(loginUnsaved(card,undefined),false);
 });
 
-test('logout removes only the login of the URL in the form; the client stays on file and deleting the connection removes everything',async t=>{
+test('logout removes only the login of the URL in the form; a typed-in client stays on file, an automatically registered one does not, and deleting the connection removes and revokes everything',async t=>{
  const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),secrets=join(f.root,'secrets'),other=mcp.url+'?team=b';
  await signIn(f,as,mcp.url);
  assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[remoteConfig(mcp.url)]})).json.ok,true);
  mcp.resource=other;await signIn(f,as,other);
  // Registered once, reused for the second URL.
  assert.equal(as.registrations.length,1);assert.equal(stored(f,'remote',other).client_id,stored(f,'remote',mcp.url).client_id);
- // Logging out of the edited URL leaves the live connection alone and revokes only that login.
- const draftLogin=stored(f,'remote',other);
- assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote',url:other})).json.ok,true);
+ // Logging out of the edited URL (spelled with another case) leaves the live connection alone; the client is shared with it, so nothing is revoked at the provider.
+ assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote',url:other.replace('http://','HTTP://')})).json.ok,true);
  assert.deepEqual(listMcpOAuth(secrets).map(e=>e.credential?.resource),[mcp.url]);assert.deepEqual(f.manager.status().connected,['remote']);
- assert.deepEqual(as.revoked.map(r=>r.form.get('token')),[draftLogin.refresh_token]);
+ assert.equal(as.revoked.length,0);assert.ok(as.accepted.has(stored(f).access_token));
  // Logging out of the saved URL stops the connection.
  const liveLogin=stored(f);
  assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote',url:mcp.url})).json.ok,true);
  assert.deepEqual(listMcpOAuth(secrets),[]);assert.deepEqual(f.manager.status().failed,[{id:'remote',reason:'login_required'}]);assert.equal(as.revoked.at(-1)!.form.get('token'),liveLogin.refresh_token);
- // The client is still on file, so the next login registers nothing and the server comes back.
- assert.equal(readMcpOAuthClient(secrets,'remote')?.client_id,liveLogin.client_id);
+ // A client that was registered automatically is registered again next time; the server comes back.
+ assert.equal(readMcpOAuthClient(secrets,'remote'),undefined);
  mcp.resource=undefined;await signIn(f,as,mcp.url);
- assert.equal(as.registrations.length,1);assert.equal(stored(f).client_id,liveLogin.client_id);
+ assert.equal(as.registrations.length,2);assert.notEqual(stored(f).client_id,liveLogin.client_id);
  await until(()=>f.manager.status().connected.includes('remote'));
  // A bare logout removes every login of the connection.
  mcp.resource=other;await signIn(f,as,other);mcp.resource=undefined;
- assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote'})).json.ok,true);assert.deepEqual(listMcpOAuth(secrets),[]);assert.ok(readMcpOAuthClient(secrets,'remote'));
- // Deleting the connection takes the client too.
- await signIn(f,as,mcp.url);
+ assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote'})).json.ok,true);assert.deepEqual(listMcpOAuth(secrets),[]);
+ // Deleting the connection revokes its login and takes everything else too.
+ await signIn(f,as,mcp.url);const doomed=stored(f).refresh_token;
  assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[]})).json.ok,true);
  assert.deepEqual(listMcpOAuth(secrets),[]);assert.equal(readMcpOAuthClient(secrets,'remote'),undefined);assert.deepEqual(readdirSync(secrets).filter(n=>n.startsWith('mcp-oauth')),[]);
+ await until(()=>as.revoked.some(r=>r.form.get('token')===doomed));
  // A client typed by hand is kept the same way.
  as.overrides={registration_endpoint:null};await signIn(f,as,mcp.url,{client_id:'typed-client'});
  await f.call('/api/mcp/oauth/logout','POST',{id:'remote'});
@@ -1054,4 +1059,87 @@ test('a card that waits for its login says so once, however many places could re
  assert.match(connectionError({...card,auth:'token'},status,false),/ログインが必要です/);
  assert.equal(connectionState(card,{...status,connected:['remote']},false),'接続済み');assert.equal(connectionState(card,status,true),'未保存の変更あり');
  assert.equal(loginState(card,{oauth:[{id:'remote',pending:true,logins:[]}]}),'ログインを待っています');
+});
+
+test('a renewal that is out when the saved URL moves is discarded: nothing of the old URL comes back',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),secrets=join(f.root,'secrets'),other=mcp.url+'?team=b';
+ as.expiresIn=0;await signIn(f,as,mcp.url);
+ assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[remoteConfig(mcp.url)]})).json.ok,true);
+ as.expiresIn=3600;mcp.resource=other;await signIn(f,as,other);
+ // The live connection renews (the provider is slow) while the administrator saves the other URL.
+ as.delay=300;const before=as.refreshes().length;
+ const running=f.manager.connector.call('mcp_remote_mail_search',{},toolCtx()).then(()=>'done',e=>(e as Error).message);
+ await until(()=>as.refreshes().length>before);
+ const saved=await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[remoteConfig(other)]});
+ assert.equal(saved.json.ok,true,saved.text);
+ assert.equal(await running,'login_required');await sleep(100);
+ assert.deepEqual(listMcpOAuth(secrets).map(e=>e.credential?.resource),[other]);
+ const status=(await f.call('/api/mcp')).json.oauth[0];
+ assert.deepEqual(status.logins,[{resource:other,status:'signed_in'}]);assert.equal(status.unsaved,undefined);
+});
+
+test('a client the provider no longer knows is forgotten on disk, so it is not tried again after a restart; automatically registered clients are dropped on logout, typed ones stay',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),secrets=join(f.root,'secrets');
+ const fresh=()=>new McpOAuth(secrets);
+ const login=async(oauth:McpOAuth,manual?:{client_id:string})=>{const s=await oauth.start('remote',mcp.url,manual,f.callback);if(!s.ok)return s;return {...s,client:new URL(s.url).searchParams.get('client_id')!,done:await oauth.finish(as.authorize(s.url))};};
+ // (a) refused when renewing.
+ let oauth=fresh();as.expiresIn=0;const first=await login(oauth) as {client:string};as.expiresIn=3600;
+ assert.equal(readMcpOAuthClient(secrets,'remote')?.origin,'registered');
+ as.clientGone=first.client;
+ await assert.rejects(mcpRpc({url:mcp.url,oauth:oauth.source('remote',mcp.url)},'tools/list'),McpLoginRequired);
+ assert.equal(readMcpOAuthClient(secrets,'remote'),undefined);
+ oauth=fresh();const second=await login(oauth) as {client:string;done:unknown};
+ assert.notEqual(second.client,first.client);assert.ok(second.done);assert.equal(as.registrations.length,2);
+ // (a) refused at the token endpoint of a new login, with a fresh instance each time.
+ as.clientGone=second.client;
+ const refused=await login(fresh()) as {client:string;done:unknown};assert.equal(refused.client,second.client);assert.equal(refused.done,undefined);
+ assert.equal(readMcpOAuthClient(secrets,'remote'),undefined);
+ const third=await login(fresh()) as {client:string;done:unknown};assert.notEqual(third.client,second.client);assert.ok(third.done);
+ // (b) an automatically registered client goes with the logout, also for a fresh instance.
+ as.clientGone=undefined;assert.ok(readMcpOAuthClient(secrets,'remote'));
+ await fresh().logout('remote');assert.equal(readMcpOAuthClient(secrets,'remote'),undefined);
+ const registrations=as.registrations.length;await login(fresh());assert.equal(as.registrations.length,registrations+1);
+ // (b) a client typed by hand stays, also across instances, and a record without origin is kept like one.
+ as.overrides={registration_endpoint:null};await fresh().logout('remote');
+ assert.ok((await login(fresh(),{client_id:'typed-client'}) as {done:unknown}).done);assert.equal(readMcpOAuthClient(secrets,'remote')?.origin,'manual');
+ await fresh().logout('remote');assert.equal(readMcpOAuthClient(secrets,'remote')?.client_id,'typed-client');
+ const again=await login(fresh()) as {client:string;done:unknown};assert.equal(again.client,'typed-client');assert.ok(again.done);
+});
+
+test('revoking a login that goes does not end the login that stays when both use the same client',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),secrets=join(f.root,'secrets'),other=mcp.url+'?team=b';
+ as.revokeAll=true;
+ await signIn(f,as,mcp.url);mcp.resource=other;await signIn(f,as,other);
+ assert.equal(stored(f,'remote',mcp.url).client_id,stored(f,'remote',other).client_id);
+ const keep=stored(f,'remote',other);
+ // Saving the edited URL drops the old login.
+ assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[remoteConfig(other)]})).json.ok,true);
+ await sleep(150);assert.equal(as.revoked.length,0);assert.ok(as.accepted.has(keep.access_token));
+ assert.equal((await f.call('/api/mcp/probe','POST',{url:other,id:'remote',oauth:true})).json.ok,true);
+ // Logging out of a draft URL is the same.
+ mcp.resource=mcp.url+'?team=c';await signIn(f,as,mcp.url+'?team=c');
+ assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote',url:mcp.url+'?team=c'})).json.ok,true);
+ assert.equal(as.revoked.length,0);assert.ok(as.accepted.has(keep.access_token));
+ // With a client of its own the dropped login is revoked, and the one that stays is untouched.
+ rmSync(join(secrets,'mcp-oauth-remote.client.json'),{force:true});
+ const draft=mcp.url+'?team=d';mcp.resource=draft;await signIn(f,as,draft);
+ assert.notEqual(stored(f,'remote',draft).client_id,keep.client_id);const gone=stored(f,'remote',draft);
+ assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote',url:draft})).json.ok,true);
+ assert.deepEqual(as.revoked.map(r=>r.form.get('token')),[gone.refresh_token]);assert.ok(as.accepted.has(keep.access_token));
+ // Without any other login the last one is revoked.
+ assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote'})).json.ok,true);
+ assert.equal(as.revoked.length,2);assert.equal(as.revoked[1]!.form.get('token'),keep.refresh_token);
+});
+
+test('a failed save restores the newer file of a login, not an old-style file of the same login',{skip:process.platform==='win32'},async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),secrets=join(f.root,'secrets');
+ await signIn(f,as,mcp.url);const current=stored(f);
+ // The same login also exists in the old per-connection file, with older content.
+ const old={...current,access_token:'old-access-token-0123456789',refresh_token:'old-refresh-token-0123456789'};
+ writeFileSync(join(secrets,'mcp-oauth-remote.json'),JSON.stringify(old),{mode:0o600});
+ f.manager.status();
+ mkdirSync(join(f.root,'state/mcp.json'));
+ try{await assert.rejects(f.manager.save({revision:f.manager.status().revision,servers:[]}));}finally{rmSync(join(f.root,'state/mcp.json'),{recursive:true});}
+ assert.deepEqual(readMcpOAuth(secrets,'remote',mcp.url),current);
+ assert.deepEqual(listMcpOAuth(secrets).filter(e=>e.credential?.resource===mcp.url).map(e=>e.credential?.access_token).sort(),[current.access_token]);
 });
