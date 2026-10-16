@@ -1,4 +1,4 @@
-export const PROVIDER_LABELS = { openai_subscription: 'Codex', ollama: 'Ollama', openai_compatible: 'OpenAI互換API', anthropic: 'Claude（Anthropic API）' };
+export const PROVIDER_LABELS = { openai_subscription: 'Codex', ollama: 'Local LLM', openai_compatible: 'OpenAI互換API', anthropic: 'Claude（Anthropic API）' };
 export const providerLabel = provider => PROVIDER_LABELS[provider] || provider;
 /** 推論の強さを指定できるのはCodexとClaude。他はモデル既定の動作を使う。 */
 export const nativeReasoning = provider => provider === 'ollama' || provider === 'openai_compatible';

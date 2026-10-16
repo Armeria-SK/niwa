@@ -3,7 +3,7 @@ import { api } from './api.js';
 import { useAnthropicModels } from './anthropicModels.js';
 import { modelLabel } from './providers.js';
 
-const PROVIDERS = { ollama: 'Ollama', openai_compatible: 'OpenAI互換API', anthropic: 'Claude（Anthropic API）' };
+const PROVIDERS = { ollama: 'Local LLM', openai_compatible: 'OpenAI互換API', anthropic: 'Claude（Anthropic API）' };
 const SUGGESTED_CLAUDE = 'claude-opus-5-5';
 export function FallbackConnection({ savedUrl }) {
   const [settings, setSettings] = useState(null);
