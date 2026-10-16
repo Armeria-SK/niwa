@@ -1,7 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {api} from './api.js';
 import {origin,savedToken,tokenCleared,probeToken,tokenChanges} from './mcp-tokens.js';
-import {hrefOf,loginEntry,loginFor,loggedIn,loginNote,loginFailure,loginUnsaved,loginState,connectionState,connectionError} from './mcp-login.js';
+import {hrefOf,clientChoice,loginEntry,loginFor,loggedIn,loginNote,loginFailure,loginUnsaved,loginState,connectionState,connectionError} from './mcp-login.js';
 import {carryTools,resetTools,mergeCatalog} from './mcp-tools.js';
 import './McpConnections.css';
 
@@ -101,7 +101,7 @@ export function McpConnections(){
       <p className="field-hint mcp-oauth-state" role="status">{loginState(server,status)}{!loggedIn(server,status)&&loginNote(server,status)?` · ${loginNote(server,status)}`:''}</p>
       {loginFailure(server,status)?<p className="field-error">{loginFailure(server,status)}</p>:null}
       {loginUnsaved(server,status)?<p className="field-error">新しい鍵をまだ保存できていません。保存先の空き容量と権限を確認してください。</p>:null}
-      {!server.needClient?<p className="field-hint"><button className="button subtle" type="button" onClick={()=>local(server.key,{needClient:true})}>クライアントIDを入力する</button> 前回のログインで使ったクライアントは、入力しなくても再利用します。</p>:null}
+      {clientChoice(server,status)?<div className="mcp-client-toggle"><button className="button subtle" type="button" onClick={()=>local(server.key,server.needClient?{needClient:false,clientId:'',clientSecret:''}:{needClient:true})}>{server.needClient?'クライアントIDの入力を閉じる':'クライアントIDを入力する'}</button>{!server.needClient?<p className="field-hint">前回のログインで使ったクライアントは、入力しなくても再利用します。</p>:null}</div>:null}
       {server.needClient?<><p className="field-hint">この接続先は、クライアントの自動登録に対応していない場合があります。提供元の開発者向けの画面でアプリを登録し、発行されたクライアントIDを入力してください。登録するリダイレクトURL（コールバックURL）は <code>{location.origin}/api/mcp/oauth/callback</code> です。</p>
        <div className="field-pair mcp-client-fields"><label className="field"><span>クライアントID</span><input value={server.clientId} maxLength={512} autoComplete="off" spellCheck={false} onChange={e=>local(server.key,{clientId:e.target.value.trim()})}/></label>
        <label className="field"><span>クライアントシークレット（任意）</span><input type="password" value={server.clientSecret} maxLength={4096} autoComplete="off" spellCheck={false} onChange={e=>local(server.key,{clientSecret:e.target.value.trim()})}/></label></div></>:null}

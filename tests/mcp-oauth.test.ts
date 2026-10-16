@@ -1004,7 +1004,7 @@ test('a short-lived token is renewed when half of its lifetime is gone, not befo
 test('the reason of a failed login is kept per connection for the screen and logged without secrets',async t=>{
  const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),log=t.mock.method(console,'error',()=>{}),{loginFailure}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
  const failure=async()=>(await f.call('/api/mcp')).json.oauth.find((o:{id:string})=>o.id==='remote')?.failure;
- const card={id:'remote'};
+ const card={id:'remote',url:mcp.url};
  // The provider refuses.
  const start=async()=>{const url=(await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url})).json.url as string;return {...as.authorize(url),client:new URL(url).searchParams.get('client_id')!};};
  const denied=await start();
@@ -1142,4 +1142,66 @@ test('a failed save restores the newer file of a login, not an old-style file of
  try{await assert.rejects(f.manager.save({revision:f.manager.status().revision,servers:[]}));}finally{rmSync(join(f.root,'state/mcp.json'),{recursive:true});}
  assert.deepEqual(readMcpOAuth(secrets,'remote',mcp.url),current);
  assert.deepEqual(listMcpOAuth(secrets).filter(e=>e.credential?.resource===mcp.url).map(e=>e.credential?.access_token).sort(),[current.access_token]);
+});
+
+test('logging in again for the same URL revokes the login it replaces, unless the new one shares its client',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),secrets=join(f.root,'secrets');
+ as.revokeAll=true;
+ // Same provider and client: the provider would end both, so the old one is only overwritten.
+ await signIn(f,as,mcp.url);const first=stored(f);
+ await signIn(f,as,mcp.url);const second=stored(f);
+ assert.equal(second.client_id,first.client_id);assert.notEqual(second.refresh_token,first.refresh_token);
+ await sleep(150);assert.equal(as.revoked.length,0);assert.ok(as.accepted.has(second.access_token));
+ // Another client: the replaced login is revoked and the new one is not touched.
+ rmSync(join(secrets,'mcp-oauth-remote.client.json'));
+ await signIn(f,as,mcp.url);const third=stored(f);
+ assert.notEqual(third.client_id,second.client_id);
+ await until(()=>as.revoked.length>0);
+ assert.deepEqual(as.revoked.map(r=>r.form.get('token')),[second.refresh_token]);
+ assert.ok(as.accepted.has(third.access_token));assert.ok(!as.accepted.has(second.access_token));
+ // A first login has nothing to revoke.
+ rmSync(join(secrets,credFile(mcp.url)));await signIn(f,as,mcp.url);await sleep(100);assert.equal(as.revoked.length,1);
+});
+
+test('a login failure is shown only for its own URL and only until that URL is signed in again after it',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),{loginFailure,failureFor}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
+ const other=mcp.url+'?team=b',card=(url:string)=>({id:'remote',url});
+ as.expiresIn=0;await signIn(f,as,mcp.url);as.expiresIn=3600;
+ // A later attempt fails while the old login is still there.
+ await sleep(5);
+ const denied=as.authorize((await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url})).json.url);
+ await f.call(`/api/mcp/oauth/callback?state=${denied.state}&error=access_denied`,'GET',undefined,{cookie:false});
+ let status=(await f.call('/api/mcp')).json;
+ assert.equal(status.oauth[0].status,'signed_in');assert.equal(status.oauth[0].failure.code,'access_denied');assert.equal(status.oauth[0].failure.resource,mcp.url);
+ // The failure belongs to that URL: another draft URL does not show it.
+ assert.match(loginFailure(card(mcp.url),status),/access_denied/);
+ assert.equal(failureFor(card(other),status),undefined);assert.equal(loginFailure(card(other),status),'');
+ // The old login is renewed afterwards (a newer login for the same URL): the failure is no longer reported.
+ await sleep(5);
+ const oauthSource=new McpOAuth(join(f.root,'secrets')).source('remote',mcp.url);
+ await mcpRpc({url:mcp.url,oauth:oauthSource},'tools/list');
+ assert.ok(as.refreshes().length>=1);
+ status=(await f.call('/api/mcp')).json;
+ assert.equal(status.oauth[0].failure,undefined);assert.equal(loginFailure(card(mcp.url),status),'');
+ // A failure for a URL without any login stays until that URL is signed in.
+ mcp.resource=other;
+ const bad=await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:other});assert.equal(bad.json.ok,true);
+ const refused=as.authorize(bad.json.url);await f.call(`/api/mcp/oauth/callback?state=${refused.state}&error=access_denied`,'GET',undefined,{cookie:false});
+ status=(await f.call('/api/mcp')).json;assert.equal(status.oauth[0].failure.resource,other);
+ assert.match(loginFailure(card(other),status),/access_denied/);assert.equal(loginFailure(card(mcp.url),status),'');
+});
+
+test('the client ID form is offered when it may be needed and can be closed again',async()=>{
+ const {clientChoice}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
+ const card=(patch:Record<string,unknown>={})=>({id:'remote',url:'https://mcp.example.com/mcp',needClient:false,...patch});
+ const signedIn={oauth:[{id:'remote',logins:[{resource:'https://mcp.example.com/mcp',status:'signed_in'}]}]};
+ const signedOut={oauth:[{id:'remote',logins:[]}]};
+ assert.equal(clientChoice(card(),signedIn),false);
+ assert.equal(clientChoice(card(),signedOut),true);
+ assert.equal(clientChoice(card({url:'https://other.example.com/mcp'}),signedIn),true);
+ // Open forms can always be closed, and client trouble reopens the choice even for a signed-in URL.
+ assert.equal(clientChoice(card({needClient:true}),signedIn),true);
+ for(const code of ['invalid_client','client_registration_required'])assert.equal(clientChoice(card(),{oauth:[{...signedIn.oauth[0]!,failure:{code,at:1,resource:'https://mcp.example.com/mcp'}}]}),true);
+ assert.equal(clientChoice(card(),{oauth:[{...signedIn.oauth[0]!,failure:{code:'access_denied',at:1,resource:'https://mcp.example.com/mcp'}}]}),false);
+ assert.equal(clientChoice(card(),{oauth:[{...signedIn.oauth[0]!,failure:{code:'invalid_client',at:1,resource:'https://elsewhere.example.com/mcp'}}]}),false);
 });

@@ -12,7 +12,7 @@ const method=Type.Union([Type.Literal('none'),Type.Literal('client_secret_post')
 /** What a login leaves behind. Lives only in secrets/ (0600): tokens and the client secret never reach config, state, backups, logs or the browser. */
 export const mcpOAuthSchema=Type.Object({version:Type.Literal(1),resource:Type.String({maxLength:500}),audience:Type.Optional(Type.String({maxLength:500})),redirect_uri:Type.Optional(Type.String({pattern:'^[\\x21-\\x7e]+$',maxLength:2048})),issuer:Type.String({maxLength:2048}),token_endpoint:Type.String({maxLength:2048}),
  client_id:Type.String({pattern:'^[\\x21-\\x7e]{1,512}$'}),client_secret:Type.Optional(Type.String({pattern:'^[\\x21-\\x7e]{1,4096}$'})),token_endpoint_auth_method:method,
- access_token:mcpOAuthTokenSchema,refresh_token:Type.Optional(mcpOAuthTokenSchema),expires_at:Type.Optional(Type.Integer({minimum:0,maximum:8_000_000_000_000_000})),lifetime:Type.Optional(Type.Integer({minimum:0,maximum:315_360_000})),
+ access_token:mcpOAuthTokenSchema,refresh_token:Type.Optional(mcpOAuthTokenSchema),expires_at:Type.Optional(Type.Integer({minimum:0,maximum:8_000_000_000_000_000})),lifetime:Type.Optional(Type.Integer({minimum:0,maximum:315_360_000})),issued_at:Type.Optional(Type.Integer({minimum:0,maximum:8_000_000_000_000_000})),
  scope:Type.Optional(Type.String({maxLength:2048,pattern:'^[\\x20-\\x7e]*$'})),revocation_endpoint:Type.Optional(Type.String({maxLength:2048}))},{additionalProperties:false});
 export type McpOAuthCredential=Static<typeof mcpOAuthSchema>;
 /** The client a login was made with, kept after logout so the next login needs neither a form nor a new registration. */

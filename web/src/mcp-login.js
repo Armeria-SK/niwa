@@ -29,8 +29,10 @@ const failureHints={
  save_failed:'保存先の空き容量と権限を確認してください。',
 };
 /** The last failed login of this connection, as a line for the card. Empty when there is none, or when the card's own form already explains it. */
+/** The last failed login, if it was for the URL in the form: a failure of another URL says nothing about this one. */
+export const failureFor=(server,status)=>{const failure=loginEntry(server,status)?.failure;return failure&&(failure.resource===undefined||failure.resource===hrefOf(server.url))?failure:undefined;};
 export const loginFailure=(server,status)=>{
- const failure=loginEntry(server,status)?.failure;
+ const failure=failureFor(server,status);
  if(!failure||failure.code==='client_registration_required'||failure.code==='changed')return '';
  return `ログインに失敗しました（${failure.code}）。${failureHints[failure.code]??'もう一度ログインしてください。'}`;
 };
@@ -47,3 +49,5 @@ export const connectionError=(server,status,dirty)=>{
  const failed=failedOf(server,status);
  return !failed||dirty||(server.auth==='oauth'&&failed.reason==='login_required')?'':`接続できません: ${reasonText(failed.reason)}`;
 };
+/** Whether the card offers to type a client ID: not needed while the URL is signed in, unless the last failure points at the client. A form that is already open can always be closed. */
+export const clientChoice=(server,status)=>server.needClient===true||!loggedIn(server,status)||['invalid_client','client_registration_required'].includes(failureFor(server,status)?.code);
