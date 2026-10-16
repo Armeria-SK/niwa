@@ -23,3 +23,5 @@ export function tokenChanges(servers,status){
   return has&&(s.auth==='none'||tokenCleared(s,status)||!savedToken(s,status))?[{id:s.id,value:null}]:[];
  });
 }
+/** How a card starts out: an unreadable token file still counts as a token, so only an explicit choice of "none" removes it. */
+export const initialAuth=(server,status)=>server.oauth?'oauth':server.url!==undefined&&(status?.tokens?.includes(server.id)||status?.token_errors?.includes(server.id))?'token':'none';

@@ -6,7 +6,7 @@ import {productPaths} from '../../config/paths.ts';
 import {McpConnector,McpLoginRequired,mcpServerSchema,mcpTokenSchema,mcpEndpoint,mcpEndpointValid,mcpUrl,type McpOAuthSource,type McpServerConfig} from './client.ts';
 import {readMcpTokens,writeMcpToken} from './secrets.ts';
 import {McpOAuth} from './oauth.ts';
-import {listMcpOAuth,listMcpOAuthClients,mcpOAuthFile,readMcpOAuthClient,removeMcpOAuthFile,writeMcpOAuth,writeMcpOAuthClient,type McpOAuthClient,type McpOAuthCredential} from './oauth-store.ts';
+import {listMcpOAuth,listMcpOAuthClients,readMcpOAuthClient,removeMcpOAuthFile,writeMcpOAuth,writeMcpOAuthClient,type McpOAuthClient,type McpOAuthCredential} from './oauth-store.ts';
 
 const {id,socket,url}=mcpServerSchema.properties;
 /** Tokens travel only browser→server: a string sets, null removes, absence keeps the stored one while the URL origin is unchanged. */
@@ -154,18 +154,19 @@ export class McpSettings{
    }catch(error){
     next.retire();
     for(const key of written)try{writeMcpToken(this.secrets,key,stored[key]);}catch{}
-    // A file of the old kind is restored first, so the newer file of the same login is never overwritten by it.
-    const named=(entry:typeof dropped[number])=>entry.credential!==undefined&&entry.file===mcpOAuthFile(entry.id,entry.credential.resource);
-    for(const entry of [...removed].sort((a,b)=>Number(named(a))-Number(named(b))))if(entry.credential)try{writeMcpOAuth(this.secrets,entry.id,entry.credential);}catch{}
+    for(const entry of removed)if(entry.credential)try{writeMcpOAuth(this.secrets,entry.id,entry.credential);}catch{}
     for(const key of removedClients){const client=clients.get(key);if(client)try{writeMcpOAuthClient(this.secrets,key,client);}catch{}}
     if(['EACCES','EPERM','EROFS','ENOSPC','EDQUOT'].includes((error as NodeJS.ErrnoException).code??''))return {ok:false,message:storageMessage};
     throw error;
    }
    this.connector.retire();this.connector=next;this.watch(next);this.adopt(servers);this.saved(servers);
+   const held=this.oauth.forgetExcept(logins);
    for(const entry of dropped)if(!logins.has(entry.id))this.oauth.forget(entry.id);
-   this.oauth.forgetExcept(logins);
-   // The provider is told too, in the background; the logins are gone from here either way.
-   for(const entry of dropped)if(entry.credential)void this.oauth.revoke(entry.id,entry.credential);
+   // The provider is told too, in the background; the logins are gone from here either way. A renewed login that was only held in memory is the one to revoke, not the older copy on disk.
+   const revoking=new Map<string,McpOAuthCredential>();
+   for(const entry of dropped)if(entry.credential)revoking.set(`${entry.id}\n${entry.credential.resource}`,entry.credential);
+   for(const entry of held)revoking.set(`${entry.id}\n${entry.credential.resource}`,entry.credential);
+   for(const credential of revoking.values())void this.oauth.revoke(credential);
    return {ok:true,...this.status(),busy:false};
   }finally{this.busy=false;}
  }

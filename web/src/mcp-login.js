@@ -1,8 +1,8 @@
 // OAuth login rules of the MCP settings screen, kept free of React so they can be tested on their own.
 export const hrefOf=value=>{try{return new URL(value).href;}catch{return '';}};
 export const loginEntry=(server,status)=>status?.oauth?.find(o=>o.id===server.id);
-/** Every URL this connection ID has a login for. Older servers report only one. */
-export const loginsOf=(server,status)=>{const entry=loginEntry(server,status);return entry?.logins??(entry?.resource?[{resource:entry.resource,status:entry.status}]:[]);};
+/** Every URL this connection ID has a login for. */
+export const loginsOf=(server,status)=>loginEntry(server,status)?.logins??[];
 /** The login for exactly the URL in the form (not for the saved one): a login belongs to the URL it was made for. */
 export const loginFor=(server,status)=>loginsOf(server,status).find(login=>login.resource===hrefOf(server.url));
 export const loggedIn=(server,status)=>loginFor(server,status)?.status==='signed_in';
@@ -28,9 +28,9 @@ const failureHints={
  resource_mismatch:'接続先のログイン情報が一致しません。',
  save_failed:'保存先の空き容量と権限を確認してください。',
 };
-/** The last failed login of this connection, as a line for the card. Empty when there is none, or when the card's own form already explains it. */
 /** The last failed login, if it was for the URL in the form: a failure of another URL says nothing about this one. */
-export const failureFor=(server,status)=>{const failure=loginEntry(server,status)?.failure;return failure&&(failure.resource===undefined||failure.resource===hrefOf(server.url))?failure:undefined;};
+export const failureFor=(server,status)=>{const failure=loginEntry(server,status)?.failure;return failure?.resource===hrefOf(server.url)?failure:undefined;};
+/** The last failed login of this connection, as a line for the card. Empty when there is none, or when the card's own form already explains it. */
 export const loginFailure=(server,status)=>{
  const failure=failureFor(server,status);
  if(!failure||failure.code==='client_registration_required'||failure.code==='changed')return '';
@@ -51,3 +51,12 @@ export const connectionError=(server,status,dirty)=>{
 };
 /** Whether the card offers to type a client ID: not needed while the URL is signed in, unless the last failure points at the client. A form that is already open can always be closed. */
 export const clientChoice=(server,status)=>server.needClient===true||!loggedIn(server,status)||['invalid_client','client_registration_required'].includes(failureFor(server,status)?.code);
+/** What to do with the client ID form of a card once a login was started from it: leave it while the login is open, close it (and forget what was typed) when the login succeeded, keep it when it ended otherwise. Nothing when no login was started from the card. */
+export const settleClientForm=(server,status)=>{
+ if(!server.awaitingLogin)return undefined;
+ const entry=loginEntry(server,status);
+ if(entry?.pending)return undefined;
+ return loggedIn(server,status)&&!failureFor(server,status)?{awaitingLogin:false,needClient:false,clientId:'',clientSecret:''}:{awaitingLogin:false};
+};
+/** The hint that a client is reused is only true while one is on file. */
+export const clientOnFile=(server,status)=>loginEntry(server,status)?.client_saved===true;

@@ -377,3 +377,14 @@ test('the screen sends the logout URL in canonical form',async()=>{
  const {hrefOf}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
  assert.equal(hrefOf('HTTPS://Mcp.Example.COM:443/mcp'),'https://mcp.example.com/mcp');assert.equal(hrefOf('http://127.0.0.1:8080'),'http://127.0.0.1:8080/');assert.equal(hrefOf('not a url'),'');
 });
+test('a card with an unreadable token file starts as "token", so only choosing "none" removes the file',async()=>{
+ const {initialAuth,tokenChanges}=await import(pathToFileURL(resolve('web/src/mcp-tokens.js')).href);
+ const status={tokens:['saved'],token_errors:['broken']};
+ const server=(id:string,extra:Record<string,unknown>={})=>({id,url:'https://a.example.com/mcp',...extra});
+ assert.equal(initialAuth(server('saved'),status),'token');assert.equal(initialAuth(server('broken'),status),'token');
+ assert.equal(initialAuth(server('plain'),status),'none');assert.equal(initialAuth(server('o',{oauth:true}),status),'oauth');assert.equal(initialAuth({id:'s',socket:'/x'},status),'none');
+ const card=(id:string,auth:string)=>({id,transport:'url',auth,url:'https://a.example.com/mcp',savedId:id,savedUrl:'https://a.example.com/mcp',token:'',clearToken:false});
+ // Saving anything with the cards as they load leaves the file alone.
+ assert.deepEqual(tokenChanges([card('broken',initialAuth(server('broken'),status)),card('saved',initialAuth(server('saved'),status))],status),[]);
+ assert.deepEqual(tokenChanges([card('broken','none')],status),[{id:'broken',value:null}]);
+});

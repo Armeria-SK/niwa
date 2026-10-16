@@ -7,7 +7,7 @@ import {assertDirectoryPath} from '../../config/paths.ts';
 import {mcpOAuthTokenSchema,mcpUrl,oauthUrl} from './client.ts';
 
 const prefix='mcp-oauth-',limit=65536;
-const idPart='([a-z][a-z0-9_]{0,19})',legacyName=new RegExp(`^mcp-oauth-${idPart}\\.json$`),namedFile=new RegExp(`^mcp-oauth-${idPart}-([0-9a-f]{16})\\.json$`),clientFile=new RegExp(`^mcp-oauth-${idPart}\\.client\\.json$`);
+const idPart='([a-z][a-z0-9_]{0,19})',namedFile=new RegExp(`^mcp-oauth-${idPart}-([0-9a-f]{16})\\.json$`),clientFile=new RegExp(`^mcp-oauth-${idPart}\\.client\\.json$`);
 const method=Type.Union([Type.Literal('none'),Type.Literal('client_secret_post'),Type.Literal('client_secret_basic')]);
 /** What a login leaves behind. Lives only in secrets/ (0600): tokens and the client secret never reach config, state, backups, logs or the browser. */
 export const mcpOAuthSchema=Type.Object({version:Type.Literal(1),resource:Type.String({maxLength:500}),audience:Type.Optional(Type.String({maxLength:500})),redirect_uri:Type.Optional(Type.String({pattern:'^[\\x21-\\x7e]+$',maxLength:2048})),issuer:Type.String({maxLength:2048}),token_endpoint:Type.String({maxLength:2048}),
@@ -17,11 +17,11 @@ export const mcpOAuthSchema=Type.Object({version:Type.Literal(1),resource:Type.S
 export type McpOAuthCredential=Static<typeof mcpOAuthSchema>;
 /** The client a login was made with, kept after logout so the next login needs neither a form nor a new registration. */
 export const mcpOAuthClientSchema=Type.Object({version:Type.Literal(1),issuer:Type.String({maxLength:2048}),redirect_uri:Type.String({pattern:'^[\\x21-\\x7e]+$',maxLength:2048}),
- client_id:Type.String({pattern:'^[\\x21-\\x7e]{1,512}$'}),client_secret:Type.Optional(Type.String({pattern:'^[\\x21-\\x7e]{1,4096}$'})),token_endpoint_auth_method:method,origin:Type.Optional(Type.Union([Type.Literal('manual'),Type.Literal('registered')]))},{additionalProperties:false});
+ client_id:Type.String({pattern:'^[\\x21-\\x7e]{1,512}$'}),client_secret:Type.Optional(Type.String({pattern:'^[\\x21-\\x7e]{1,4096}$'})),token_endpoint_auth_method:method,origin:Type.Union([Type.Literal('manual'),Type.Literal('registered')])},{additionalProperties:false});
 export type McpOAuthClient=Static<typeof mcpOAuthClientSchema>;
 /** One file per connection ID and URL: a login made for another URL never replaces the one the saved connection uses. */
 export const mcpOAuthFile=(id:string,resource:string)=>`${prefix}${id}-${createHash('sha256').update(resource).digest('hex').slice(0,16)}.json`;
-const checked=(secrets:string,name:string)=>{if(!namedFile.test(name)&&!legacyName.test(name)&&!clientFile.test(name))throw Error('Invalid MCP server id');assertDirectoryPath(secrets);return join(secrets,name);};
+const checked=(secrets:string,name:string)=>{if(!namedFile.test(name)&&!clientFile.test(name))throw Error('Invalid MCP server id');assertDirectoryPath(secrets);return join(secrets,name);};
 /** Structure plus the rules the rest of the code relies on: canonical resource, safe endpoints, a secret exactly when the method needs one. */
 function check(value:unknown):asserts value is McpOAuthCredential{
  if(!Value.Check(mcpOAuthSchema,value))throw Error('Invalid MCP OAuth credential');
@@ -57,18 +57,17 @@ function replace(secrets:string,file:string,text:string|undefined){
  if(process.platform!=='win32'){const dir=openSync(secrets,'r');try{fsyncSync(dir);}finally{closeSync(dir);}}
 }
 const missing=(error:unknown)=>(error as NodeJS.ErrnoException).code==='ENOENT';
-/** The login of one server for one URL, or undefined when there is none. An unsafe or invalid file throws: the caller treats it as "not logged in". A file from before logins were kept per URL counts for the URL it records. */
+/** The login of one server for one URL, or undefined when there is none. An unsafe or invalid file throws: the caller treats it as "not logged in". */
 export function readMcpOAuth(secrets:string,id:string,resource:string){
- const file=checked(secrets,mcpOAuthFile(id,resource));
- try{const value=readCredential(file);if(value.resource!==resource)throw Error('Invalid MCP OAuth credential');return value;}catch(error){if(!missing(error))throw error;}
- try{const value=readCredential(checked(secrets,`${prefix}${id}.json`));return value.resource===resource?value:undefined;}catch(error){if(missing(error))return undefined;throw error;}
+ try{const value=readCredential(checked(secrets,mcpOAuthFile(id,resource)));if(value.resource!==resource)throw Error('Invalid MCP OAuth credential');return value;}
+ catch(error){if(missing(error))return undefined;throw error;}
 }
 /** Every login file (valid or not): which server it belongs to and, when readable, what it holds. */
 export function listMcpOAuth(secrets:string){
  assertDirectoryPath(secrets);
  let names:string[];try{names=readdirSync(secrets);}catch(error){if(missing(error))return [];throw error;}
  return names.flatMap(file=>{
-  const id=namedFile.exec(file)?.[1]??legacyName.exec(file)?.[1];if(!id)return [];
+  const id=namedFile.exec(file)?.[1];if(!id)return [];
   let credential:McpOAuthCredential|undefined;try{credential=readCredential(join(secrets,file));}catch{}
   return [{id,file,...(credential?{credential}:{})}];
  });
@@ -77,14 +76,10 @@ export function listMcpOAuth(secrets:string){
 export function writeMcpOAuth(secrets:string,id:string,value:McpOAuthCredential){
  check(value);const file=checked(secrets,mcpOAuthFile(id,value.resource));
  replace(secrets,file,JSON.stringify(value));
- // A file of the old, per-server kind that held this same login is superseded.
- try{if(readMcpOAuthLegacy(secrets,id)?.resource===value.resource)replace(secrets,checked(secrets,`${prefix}${id}.json`),undefined);}catch{}
 }
-function readMcpOAuthLegacy(secrets:string,id:string){try{return readCredential(checked(secrets,`${prefix}${id}.json`));}catch{return undefined;}}
 /** Removes the login of one server for one URL. */
 export function removeMcpOAuth(secrets:string,id:string,resource:string){
  replace(secrets,checked(secrets,mcpOAuthFile(id,resource)),undefined);
- if(readMcpOAuthLegacy(secrets,id)?.resource===resource)replace(secrets,checked(secrets,`${prefix}${id}.json`),undefined);
 }
 /** Removes a login file by name, readable or not. */
 export function removeMcpOAuthFile(secrets:string,file:string){replace(secrets,checked(secrets,file),undefined);}

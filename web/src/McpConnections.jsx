@@ -1,11 +1,11 @@
 import {useEffect,useRef,useState} from 'react';
 import {api} from './api.js';
-import {origin,savedToken,tokenCleared,probeToken,tokenChanges} from './mcp-tokens.js';
-import {hrefOf,clientChoice,loginEntry,loginFor,loggedIn,loginNote,loginFailure,loginUnsaved,loginState,connectionState,connectionError} from './mcp-login.js';
+import {origin,savedToken,tokenCleared,probeToken,tokenChanges,initialAuth} from './mcp-tokens.js';
+import {hrefOf,clientChoice,settleClientForm,clientOnFile,loginEntry,loginFor,loggedIn,loginNote,loginFailure,loginUnsaved,loginState,connectionState,connectionError} from './mcp-login.js';
 import {carryTools,resetTools,mergeCatalog} from './mcp-tools.js';
 import './McpConnections.css';
 
-const draftServer=(server,tokens)=>({...server,auth:server.oauth?'oauth':server.url!==undefined&&tokens?.includes(server.id)?'token':'none',savedOAuth:server.oauth===true,remembered:{},toolsOrigin:origin(server.url??''),clientId:'',clientSecret:'',needClient:false,loginLink:'',transport:server.url!==undefined?'url':'socket',socket:server.socket??'',url:server.url??'',savedId:server.id,savedUrl:server.url,token:'',clearToken:false,enabled:server.enabled!==false,key:crypto.randomUUID(),catalog:server.tools.map(tool=>({...tool,selected:true,description:'保存済みのツール'})),checked:false});
+const draftServer=(server,status)=>({...server,auth:initialAuth(server,status),awaitingLogin:false,savedOAuth:server.oauth===true,remembered:{},toolsOrigin:origin(server.url??''),clientId:'',clientSecret:'',needClient:false,loginLink:'',transport:server.url!==undefined?'url':'socket',socket:server.socket??'',url:server.url??'',savedId:server.id,savedUrl:server.url,token:'',clearToken:false,enabled:server.enabled!==false,key:crypto.randomUUID(),catalog:server.tools.map(tool=>({...tool,selected:true,description:'保存済みのツール'})),checked:false});
 const address=server=>server.transport==='url'?/^https?:\/\/./.test(server.url):server.socket.startsWith('/');
 const idValid=id=>/^[a-z][a-z0-9_]{0,19}$/.test(id);
 export function McpConnections(){
@@ -13,7 +13,7 @@ export function McpConnections(){
  const working=useRef(false);
  useEffect(()=>{
   let active=true;
-  api('/mcp').then(value=>{if(active){setStatus(value);setServers((value.servers??[]).map(server=>draftServer(server,value.tokens)));setDirty(new Set());setRemoved(false);setError('');}}).catch(e=>{if(active)setError(e.message);});
+  api('/mcp').then(value=>{if(active){setStatus(value);setServers((value.servers??[]).map(server=>draftServer(server,value)));setDirty(new Set());setRemoved(false);setError('');}}).catch(e=>{if(active)setError(e.message);});
   return()=>{active=false;};
  },[reload]);
  useEffect(()=>{
@@ -30,8 +30,8 @@ export function McpConnections(){
   return()=>clearInterval(timer);
  },[waiting]);
  useEffect(()=>{
-  // The client secret is only needed while the login is open; it leaves the form once the login is complete.
-  if(servers.some(s=>s.clientSecret&&loggedIn(s,status)))setServers(current=>current.map(s=>s.clientSecret&&loggedIn(s,status)?{...s,clientSecret:''}:s));
+  // The client ID form closes once the login that was started from it has succeeded.
+  if(servers.some(s=>settleClientForm(s,status)))setServers(current=>current.map(s=>({...s,...settleClientForm(s,status)})));
   // A tool list that was fetched with a login is out of date once that login (or the URL or ID it was for) is gone.
   if(servers.some(s=>s.checked&&s.transport==='url'&&s.auth==='oauth'&&!loggedIn(s,status)))setServers(current=>current.map(s=>s.checked&&s.transport==='url'&&s.auth==='oauth'&&!loggedIn(s,status)?{...s,checked:false}:s));
  },[status,servers]);
@@ -46,9 +46,10 @@ export function McpConnections(){
   const manual=server.needClient&&server.clientId?{client_id:server.clientId,...(server.clientSecret?{client_secret:server.clientSecret}:{})}:{};
   const result=await api('/mcp/oauth/start','POST',{id:server.id,url:server.url,...manual});
   // A refused start is shown on the card (the server keeps the reason), not as a message at the bottom of the form.
-  if(result.ok){local(server.key,{loginLink:result.url});window.open(result.url,'_blank','noopener,noreferrer');}
-  else if(result.code==='client_registration_required')local(server.key,{needClient:true});
   const value=await api('/mcp');setStatus(current=>current&&value.revision===current.revision?value:current);
+  // The server keeps what was typed for the login that is open, so the form does not hold the secret (or the ID) any longer.
+  if(result.ok){local(server.key,{loginLink:result.url,awaitingLogin:true,clientId:'',clientSecret:''});window.open(result.url,'_blank','noopener,noreferrer');}
+  else if(result.code==='client_registration_required')local(server.key,{needClient:true});
  });}
  function logout(server){return run(async()=>{
   await api('/mcp/oauth/logout','POST',{id:server.id,url:hrefOf(server.url)});local(server.key,{loginLink:'',checked:false});
@@ -73,7 +74,7 @@ export function McpConnections(){
   if(servers.some(s=>s.enabled&&s.scope==='conversation'&&s.checked&&!s.conversationIsolation))throw Error('この接続先は会話ごとの分離に対応していません。利用する会話の範囲を確認してください。');
   const result=await api('/mcp','PUT',{revision:status.revision,servers:configs,...(tokens.length?{tokens}:{})});
   if(!result.ok)throw Error(result.message);
-  setStatus(result);setServers(result.servers.map(server=>draftServer(server,result.tokens)));setDirty(new Set());setRemoved(false);setNotice('保存して反映しました。再起動は不要です。');
+  setStatus(result);setServers(result.servers.map(server=>draftServer(server,result)));setDirty(new Set());setRemoved(false);setNotice('保存して反映しました。再起動は不要です。');
  });}
  const ready=status?.available&&status.revision;
  return <form className="settings-form mcp-settings" onSubmit={save} aria-busy={busy}>
@@ -93,7 +94,7 @@ export function McpConnections(){
     <label className="field"><span>接続方法</span><select value={server.transport} onChange={e=>change(server.key,{transport:e.target.value,...resetTools,checked:false,conversationIsolation:undefined})}><option value="socket">このPCのソケット</option><option value="url">URL（HTTPS）</option></select></label>
     {server.transport==='url'?<><label className="field"><span>URL</span><input type="url" value={server.url} maxLength={500} pattern="https?://.+" required onChange={e=>change(server.key,{url:e.target.value,...carryTools(server,e.target.value),checked:false,conversationIsolation:undefined})} placeholder="https://example.com/mcp" spellCheck={false}/><small>https:// で始まるURLを入力します（このPCのサービスなら http://127.0.0.1 も使えます）。ユーザー名・パスワード・#は含められません。</small></label>
      <label className="field"><span>認証の方法</span><select value={server.auth} onChange={e=>change(server.key,{auth:e.target.value,token:'',clearToken:false})}><option value="none">なし</option><option value="token">認証トークン</option><option value="oauth">OAuthでログイン</option></select></label>
-     {status?.token_errors?.includes(server.id)&&server.auth!=='oauth'?<p className="field-error">保存済みの認証トークンのファイルを読み込めません。トークンを入力し直すか、認証の方法を「なし」にして保存してください。</p>:null}
+     {status?.token_errors?.includes(server.id)&&server.auth!=='oauth'?<p className="field-error">保存済みの認証トークンのファイルを読み込めません。トークンを入力し直すか、認証の方法を「なし」にして保存するとこのファイルを削除します。それまで保存はできません。</p>:null}
      {server.auth==='token'?<>
      <label className="field"><span>認証トークン</span><input type="password" autoComplete="off" value={server.token} maxLength={4096} disabled={tokenCleared(server,status)} onChange={e=>change(server.key,{token:e.target.value})} placeholder={savedToken(server,status)?'設定済み（変更するときだけ入力）':'未設定'} spellCheck={false}/><small>トークンだけを入力すると「Bearer」を付けて送ります。保存したトークンは画面に表示しません。{server.savedUrl&&server.url&&origin(server.url)!==origin(server.savedUrl)&&status?.tokens?.includes(server.savedId)?' 接続先が変わったため、保存済みのトークンは使いません。':''}</small></label>
      {savedToken(server,status)?<label className="mcp-enabled"><input type="checkbox" checked={server.clearToken} onChange={e=>change(server.key,{clearToken:e.target.checked,token:''})}/>保存済みのトークンを削除する</label>:null}</>:null}
@@ -101,7 +102,7 @@ export function McpConnections(){
       <p className="field-hint mcp-oauth-state" role="status">{loginState(server,status)}{!loggedIn(server,status)&&loginNote(server,status)?` · ${loginNote(server,status)}`:''}</p>
       {loginFailure(server,status)?<p className="field-error">{loginFailure(server,status)}</p>:null}
       {loginUnsaved(server,status)?<p className="field-error">新しい鍵をまだ保存できていません。保存先の空き容量と権限を確認してください。</p>:null}
-      {clientChoice(server,status)?<div className="mcp-client-toggle"><button className="button subtle" type="button" onClick={()=>local(server.key,server.needClient?{needClient:false,clientId:'',clientSecret:''}:{needClient:true})}>{server.needClient?'クライアントIDの入力を閉じる':'クライアントIDを入力する'}</button>{!server.needClient?<p className="field-hint">前回のログインで使ったクライアントは、入力しなくても再利用します。</p>:null}</div>:null}
+      {clientChoice(server,status)?<div className="mcp-client-toggle"><button className="button subtle" type="button" onClick={()=>local(server.key,server.needClient?{needClient:false,clientId:'',clientSecret:''}:{needClient:true})}>{server.needClient?'クライアントIDの入力を閉じる':'クライアントIDを入力する'}</button>{!server.needClient&&clientOnFile(server,status)?<p className="field-hint">前回のログインで使ったクライアントは、入力しなくても再利用します。</p>:null}</div>:null}
       {server.needClient?<><p className="field-hint">この接続先は、クライアントの自動登録に対応していない場合があります。提供元の開発者向けの画面でアプリを登録し、発行されたクライアントIDを入力してください。登録するリダイレクトURL（コールバックURL）は <code>{location.origin}/api/mcp/oauth/callback</code> です。</p>
        <div className="field-pair mcp-client-fields"><label className="field"><span>クライアントID</span><input value={server.clientId} maxLength={512} autoComplete="off" spellCheck={false} onChange={e=>local(server.key,{clientId:e.target.value.trim()})}/></label>
        <label className="field"><span>クライアントシークレット（任意）</span><input type="password" value={server.clientSecret} maxLength={4096} autoComplete="off" spellCheck={false} onChange={e=>local(server.key,{clientSecret:e.target.value.trim()})}/></label></div></>:null}
@@ -120,7 +121,7 @@ export function McpConnections(){
      <select aria-label={`${tool.name} の操作区分`} disabled={!tool.selected} value={tool.readOnly?'read':tool.approval===true?'write-approval':'write'} onChange={e=>change(server.key,{catalog:server.catalog.map(t=>{if(t.name!==tool.name)return t;const {approval,...rest}=t;return {...rest,readOnly:e.target.value==='read',...(e.target.value==='write-approval'?{approval:true}:{})};})})}><option value="write">書き込みあり</option><option value="write-approval">書き込みあり（毎回承認）</option><option value="read">読み取りのみ</option></select>
     </div>)}</div>:<p className="field-hint">「接続を確認」でツール一覧を取得できます。</p>}
    </fieldset>)}
-   {ready?<button className="button secondary" type="button" disabled={busy||servers.length>=8} onClick={()=>{const added=draftServer({id:'',socket:'',scope:'conversation',enabled:true,tools:[]},[]);setServers(current=>[...current,added]);touch(added.key);setNotice('');}}>MCP接続を追加</button>:null}
+   {ready?<button className="button secondary" type="button" disabled={busy||servers.length>=8} onClick={()=>{const added=draftServer({id:'',socket:'',scope:'conversation',enabled:true,tools:[]},{});setServers(current=>[...current,added]);touch(added.key);setNotice('');}}>MCP接続を追加</button>:null}
    <p className="field-hint">共有会話のみの接続は、共有会話間でデータを共有します。実行中の処理は現在の接続で続きます。</p>
    {error?<p className="field-error" role="alert">{error}</p>:null}<p className="saved-inline" role="status">{busy?'接続を確認しています…':notice}</p>
   </section>
