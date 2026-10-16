@@ -22,7 +22,7 @@ const SUMMARY=`現在は完了前の引継ぎ整理です。保存済み事実�
 
 /** Descriptive filtering only. The existing runtime still checks every operation. */
 export function scopedPromptTools(tools:ModelToolDefinition[],state:State,initiatives:boolean){
- const blocked=new Set(['browser_request_submit','browser_form_submit','x_post','program_run','web_download','workspace_write','workspace_share','artifact_download','packages_install']);
+ const blocked=new Set(['browser_request_submit','browser_form_submit','program_run','web_download','workspace_write','workspace_share','artifact_download','packages_install']);
  return tools.filter(t=>!(state.independent_activity&&(blocked.has(t.name)||t.name.startsWith('environment_')||t.name.startsWith('execution_')))&&!(t.name.startsWith('initiative_')&&!initiatives)&&!(['quality_plan','artifact_manifest','artifact_evidence'].includes(t.name)&&!state.quality_enabled));
 }
 export function structuredPrompt(request:ModelRequest,input:{rules:{body:string;revision:number};agent:Agent;profile:unknown;members:unknown;memories:unknown;memoryRevision:number;environment:Record<string,unknown>;state:Omit<State,'external_operations'>&{external_operations:unknown};phase:string;repeating:boolean}):ModelRequest{

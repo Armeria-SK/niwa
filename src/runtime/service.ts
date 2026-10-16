@@ -21,10 +21,6 @@ import { braveSearch } from '../tools/web/search.ts';
 import { configuredWorkspaceReader, configuredWorkspaceWriter, configuredWorkspaceDownloader } from '../tools/files/client.ts';
 import { configuredProgramExecutor } from '../sandbox/client.ts';
 import { configuredBrowserExecutor } from '../tools/browser/client.ts';
-import { XOAuth } from '../auth/x-oauth.ts';
-import { readXClient } from '../auth/x-client.ts';
-import { XApi } from '../tools/x/api.ts';
-import { XPostLog } from '../tools/x/post-log.ts';
 import { configuredPackageExecutor } from '../tools/packages/client.ts';
 import { FormLog } from '../tools/browser/form-log.ts';
 import { submitPublicForm } from '../tools/browser/form.ts';
@@ -36,8 +32,6 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
   let runtime: Runtime | undefined; let scheduler: Scheduler | undefined; let server: Server | undefined;
   let backups: Backups | undefined;
   let subscription: Subscription | undefined;
-  let xPosts: XPostLog | undefined;
-  let xAuth: XOAuth | undefined;
   let forms: FormLog | undefined;
   let mcpSettings:McpSettings|undefined;
   let executionPoll:ReturnType<typeof setInterval>|undefined;let executionPending=Promise.resolve();
@@ -48,7 +42,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     mcpSettings?.close();
     clearInterval(workareaCleanup);clearInterval(executionPoll);await executionPending;await cleanupPending;
     const closed = server ? new Promise<void>(done => { server!.close(() => done()); server!.closeAllConnections(); }) : Promise.resolve();
-    xAuth?.close(); await scheduler?.stop(); await forms?.close(); await xPosts?.close(); await subscription?.close(); await backups?.stop(); await closed;
+    await scheduler?.stop(); await forms?.close(); await subscription?.close(); await backups?.stop(); await closed;
     runtime?.close(); unlock();
   })();
   try {
@@ -62,10 +56,6 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
       { key: new FileApiKeyStore(join(paths.secrets, 'anthropic-key.json')), reasoningSummary: config.reasoningSummary === true });
     backups = new Backups(runtime, paths, config);
     const searchKey = readSearchKey(paths.secrets);
-    const xClient = config.xAccountId ? readXClient(paths.secrets) : undefined;
-    xAuth = config.xAccountId && xClient ? new XOAuth(new FileCredentialStore(join(paths.secrets, 'x.json')), xClient, config.xAccountId) : undefined;
-    const xApi = xAuth ? new XApi(xAuth) : undefined;
-    if (xAuth && xApi) xPosts = new XPostLog(join(paths.runtime, 'x-posts.db'), xAuth.accountId, (post, signal) => xApi.post(post, signal));
     const workareas=config.workareasEnabled&&config.programExecutorUid ? workareaClient(join(paths.runtime,'sockets','program.sock'),config.programExecutorUid):undefined;
     if(workareas){
       await runtime.workareas.syncExecutions(workareas);
@@ -81,7 +71,6 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
       } : undefined)));
     scheduler = new Scheduler(runtime, new TurnRunner(runtime, resolve ?? models.resolve, {
       get mcp(){return mcpSettings!.connector;},
-      ...(xApi && xPosts ? { x: { api: xApi, posts: xPosts } } : {}),
       ...(forms ? { forms } : {}),
       ...(workareas ? {workareas}:{}),
       ...(config.browserExecutorUid ? { browser: configuredBrowserExecutor(join(paths.runtime, 'sockets', 'browser.sock'), config.browserExecutorUid) } : {}),
@@ -95,7 +84,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     },{promptVersion:config.promptVersion??'legacy-v4'}));
     server = createApiServer(runtime, auth, models, fileURLToPath(new URL('../client/', import.meta.url)), backups,
       config.workspaceExecutorUid ? { read: configuredWorkspaceReader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid),
-        download: configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid) } : undefined, xAuth, workareas, undefined, mcpSettings);
+        download: configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid) } : undefined, workareas, undefined, mcpSettings);
     await new Promise<void>((done, reject) => {
       server!.once('error', reject);
       server!.listen(portOverride ?? config.port, '127.0.0.1', () => { server!.removeListener('error', reject); done(); });

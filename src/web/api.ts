@@ -19,7 +19,6 @@ import { serveStatic } from './static.ts';
 import { profileSchema, creationProfileSchema } from '../domain/profile.ts';
 import type { Backups } from '../backup/backups.ts';
 import type { WorkspaceRead, WorkspaceDownload } from '../tools/files/client.ts';
-import type { XOAuth } from '../auth/x-oauth.ts';
 
 const string = Type.String({ minLength: 1, maxLength: 20_000 });
 const id = Type.String({ pattern: '^[0-9a-f-]{36}$' });
@@ -34,12 +33,6 @@ const scheduleFields = { agent_id: id, room_id: id, prompt: string,
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(JSON.stringify(body));
-}
-/** Landing page for the cross-site OAuth return. A link, not a redirect, so the Strict session cookie is sent when the person comes back. */
-function sendNotice(res: ServerResponse, status: number, message: string): void {
-  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" });
-  res.end(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Niwa</title><body style="font-family:sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.7"><p>${message}</p><p><a href="/#settings">Niwaの設定へ戻る</a></p></body></html>`);
 }
 /** Webhook bodies: at most 64 KiB of UTF-8 JSON or plain text. The content stays untrusted data for the next run. */
 async function readHook(req: IncomingMessage): Promise<{ type: string; text: string } | number> {
@@ -75,7 +68,7 @@ async function readBody(req: IncomingMessage, limit = 65_536): Promise<unknown> 
 
 /** This server exposes administrator routes only. Model tools use the separate actor-bound API. */
 export function createApiServer(runtime: Runtime, auth: WebAuth, models = new ModelGateway(runtime), webRoot?: string, backups?: Backups,
-  workspace?: { read: WorkspaceRead; download: WorkspaceDownload }, x?: XOAuth, workareas?:WorkareaTransport, mcp?:McpConnector, mcpSettings?:McpSettings) {
+  workspace?: { read: WorkspaceRead; download: WorkspaceDownload }, workareas?:WorkareaTransport, mcp?:McpConnector, mcpSettings?:McpSettings) {
   const admin = runtime.administrator();
   const live = new LiveStreams(runtime, admin, auth);
   type Route = { method: string; path: RegExp; schema?: TSchema; limit?: number; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL) => unknown };
@@ -118,11 +111,6 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       runtime.workareas.file(admin,m[1]!);
       if(bytes.revision!==file.sha256)throw new DomainError('conflict','Published file mismatch');return bytes;}},
 
-    { method: 'GET', path: /^\/api\/x$/, run: () => x ? x.status() : { available: false, connected: false, pending: false } },
-    { method: 'POST', path: /^\/api\/x\/login$/, schema: object({}), run: () => {
-      if (!x) throw new DomainError('conflict', 'X is not configured'); return x.begin(auth.origin + '/api/x/callback'); } },
-    { method: 'POST', path: /^\/api\/x\/logout$/, schema: object({}), run: async () => {
-      if (!x) throw new DomainError('conflict', 'X is not configured'); await x.disconnect(); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/workspace\/files$/, run: async (_m, _b, url) => workspace
       ? { available: true, ...await workspace.read('list', url.searchParams.get('path') ?? '') } : { available: false, entries: [], path: '', truncated: false } },
     { method: 'GET', path: /^\/api\/workspace\/file$/, run: (_m, _b, url) => {
@@ -275,16 +263,6 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       if (url.origin !== auth.origin) { send(res, 403, { error: 'origin_rejected' }); return; }
       if (!url.pathname.startsWith('/api/') && webRoot && serveStatic(webRoot, req, res)) return;
       if (!url.pathname.startsWith('/api/')) { send(res, 404, { error: 'not_found' }); return; }
-      // Cross-site OAuth redirects lack the Strict admin cookie. A state created by an authenticated POST is consumed once instead.
-      if (req.method === 'GET' && url.pathname === '/api/x/callback' && x) {
-        res.setHeader('Referrer-Policy', 'no-referrer');
-        try {
-          if (url.searchParams.has('error') || url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length !== 1) throw new Error('Invalid callback');
-          await x.finish(url.searchParams.get('state')!, url.searchParams.get('code')!);
-          sendNotice(res, 200, 'Xを接続しました。');
-        } catch { sendNotice(res, 400, 'Xの接続を完了できませんでした。Niwaの設定から接続をやり直してください。'); }
-        return;
-      }
       if (req.method === 'POST' && url.pathname === '/api/login') {
         const body = await readBody(req);
         if (!Value.Check(object({ key: Type.String({ maxLength: 128 }) }), body)) throw new DomainError('invalid', 'Invalid login');

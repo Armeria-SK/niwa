@@ -9,7 +9,6 @@ import { CompatibleConnection } from '../CompatibleConnection.jsx';
 import { AnthropicConnection } from '../AnthropicConnection.jsx';
 import { ModelDefaults } from '../ModelDefaults.jsx';
 import { ModelRoutes } from '../ModelRoutes.jsx';
-import { XConnection } from '../XConnection.jsx';
 import { McpConnections } from '../McpConnections.jsx';
 import { CheckIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 
@@ -44,7 +43,6 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
         <label className="field narrow-field"><span>同時に処理する依頼の数</span><div className="input-with-unit"><input type="number" min="1" max="8" value={draft.maxParallel} onChange={e => change('maxParallel', e.target.value)} required /><span>件</span></div><small>Local LLM（Ollama）の設定（OLLAMA_NUM_PARALLEL）に合わせてください。</small></label>
         <FallbackConnection key={settings.localLlmUrl} savedUrl={settings.localLlmUrl} />
         <ModelRoutes />
-        <XConnection />
       </section> : null}
       {tab === 'activity' ? <section className="settings-section"><h2>Botたちの活動</h2><p>人数と同時に活動できる数は、別々に設定できます。</p>
         <div className="pause-setting"><div><strong>{paused ? '活動を一時停止しています' : 'Botたちは活動中です'}</strong><small>一時停止中も、会話や設定を確認できます。</small></div><button className="button secondary" type="button" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? '再開' : '一時停止'}</button></div>

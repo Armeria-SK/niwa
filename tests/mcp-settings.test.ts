@@ -143,7 +143,7 @@ test('a model response obtained before settings changed cannot dispatch to the r
 });
 test('MCP settings and probing require administrator authentication and same-origin writes',async t=>{
  const f=await fixture(t),r=new Runtime(join(f.root,'state')),origin='https://niwa.test',key='k'.repeat(43);r.bootstrap(r.administrator());
- const server=createApiServer(r,new WebAuth(origin,key),undefined,undefined,undefined,undefined,undefined,undefined,undefined,f.manager);server.listen(0,'127.0.0.1');await once(server,'listening');
+ const server=createApiServer(r,new WebAuth(origin,key),undefined,undefined,undefined,undefined,undefined,undefined,f.manager);server.listen(0,'127.0.0.1');await once(server,'listening');
  t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));r.close();});
  const port=(server.address() as {port:number}).port;let cookie='';
  const call=(path:string,method='GET',body?:unknown,requestOrigin=origin)=>new Promise<{status:number;body:any;cookie:string}>((resolve,reject)=>{
