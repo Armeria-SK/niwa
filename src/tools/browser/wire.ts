@@ -1,5 +1,6 @@
 import type { Readable, Writable } from 'node:stream';
 import { BrowserRequestBlocked } from './requests.ts';
+import { BrowserActionError, isActionCode } from './action-error.ts';
 
 type Handler = (method: string, input: unknown, signal: AbortSignal) => Promise<unknown>;
 /** Private parent/worker pipe. No socket discovery and no JavaScript or shell evaluation. */
@@ -48,7 +49,8 @@ export class BrowserWire {
           this.#handling.add(frame.id); void this.#handle(frame.id, frame.method, frame.input);
         } else if (typeof frame.ok === 'boolean') {
           const error = ['approval_required', 'request_limit', 'response_limit'].includes(frame.reason) ?
-            new BrowserRequestBlocked(frame.reason) : new Error('Browser worker rejected request');
+            new BrowserRequestBlocked(frame.reason) : frame.reason === 'action' && isActionCode(frame.code) ?
+            new BrowserActionError(frame.code) : new Error('Browser worker rejected request');
           this.#pending.get(frame.id)?.finish(frame.ok ? undefined : error, frame.value);
         } else throw new Error('Invalid worker response');
       } catch { this.close(); return; }
@@ -57,7 +59,8 @@ export class BrowserWire {
   };
   async #handle(id: number, method: string, input: unknown) {
     try { this.#write({ id, ok: true, value: await this.handler(method, input, this.#lifetime.signal) }); }
-    catch (error) { try { this.#write({ id, ok: false, ...(error instanceof BrowserRequestBlocked ? { reason: error.reason } : {}) }); } catch { this.close(); } }
+    catch (error) { try { this.#write({ id, ok: false, ...(error instanceof BrowserRequestBlocked ? { reason: error.reason } :
+      error instanceof BrowserActionError ? { reason: 'action', code: error.code } : {}) }); } catch { this.close(); } }
     finally { this.#handling.delete(id); }
   }
   close = () => {

@@ -2,7 +2,8 @@ import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { createHash, randomUUID } from 'node:crypto';
 import { request } from 'node:https';
-import { pageUrl, publicAddress } from '../web/public-page.ts';
+import type { IncomingMessage } from 'node:http';
+import { decodeText, pageUrl, publicAddress } from '../web/public-page.ts';
 
 export const formSchema = Type.Object({
   url: Type.String({ minLength: 1, maxLength: 1000 }), method: Type.Union([Type.Literal('GET'), Type.Literal('POST')]),
@@ -20,7 +21,7 @@ export const formSchema = Type.Object({
 }, { additionalProperties: false });
 export type PublicForm = Static<typeof formSchema>;
 export type FormFileReader=(path:string,signal?:AbortSignal,area?:string)=>Promise<{data:string;revision:string}>;
-export interface FormResponse { url: string; status: number; text: string; truncated: boolean; untrusted: true; content_type?: string }
+export interface FormResponse { url: string; status: number; text: string; truncated: boolean; untrusted: true; content_type?: string; location?: string }
 
 /** This value is also the complete human-readable approval payload. No hidden caller-selected headers. */
 export function normalizeForm(input: unknown): PublicForm {
@@ -40,25 +41,33 @@ export function normalizeForm(input: unknown): PublicForm {
   return form;
 }
 
+/** Response handling for the approved form request; exported so redirect and charset handling can be tested without TLS. */
+export const formResponse = (url: URL, resolve: (value: FormResponse) => void, reject: (error: Error) => void) => (response: IncomingMessage) => {
+  // Never follow redirects: a new destination or repeated POST is a separate operation.
+  const status = response.statusCode ?? 0; const type = response.headers['content-type'] ?? '';
+  if (status >= 300 && status < 400 || status === 204) {
+    response.destroy();
+    // The target is only reported, never followed; it must pass the same public-page rules or it is omitted.
+    let location: string | undefined;
+    try { const raw = response.headers.location; if (status !== 204 && raw) location = pageUrl(new URL(raw, url).href).href; } catch { /* Unusable target. */ }
+    resolve({ url: url.href, status, text: '', truncated: false, untrusted: true, ...(location ? { location } : {}) }); return;
+  }
+  if (!/^(text\/(html|plain)|application\/json)(;|$)/i.test(type) ||
+    (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') || Number(response.headers['content-length']) > 256 * 1024) {
+    response.destroy(); reject(new Error('Form response unsupported; outcome unknown')); return;
+  }
+  const chunks: Buffer[] = []; let size = 0;
+  response.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 256 * 1024) response.destroy(new Error('Form response too large')); else chunks.push(chunk); });
+  response.on('error', reject);
+  response.on('end', () => { const text = decodeText(Buffer.concat(chunks), type); resolve({ url: url.href, status, text: text.slice(0, 20000), truncated: text.length > 20000, untrusted: true, content_type: type.split(';')[0]!.toLowerCase() }); });
+};
 export type FormTransport = (url: URL, method: 'GET' | 'POST', body: string | Buffer, address: string, signal: AbortSignal, contentType?: string) => Promise<FormResponse>;
 const transport: FormTransport = (url, method, body, address, signal, contentType) => new Promise((resolve, reject) => {
   const req = request(url, { method, agent: false, signal, family: 4,
     lookup: (_host, _options, callback) => callback(null, address, 4),
     headers: { accept: 'text/html,text/plain,application/json', 'accept-encoding': 'identity', 'user-agent': 'Niwa/0.1 (approved form)',
       ...(method === 'POST' ? { 'content-type': contentType ?? 'application/x-www-form-urlencoded', 'content-length': Buffer.byteLength(body) } : {}) },
-  }, response => {
-    // Never follow redirects: a new destination or repeated POST is a separate operation.
-    const status = response.statusCode ?? 0; const type = response.headers['content-type'] ?? '';
-    if (status >= 300 && status < 400 || status === 204) { response.destroy(); resolve({ url: url.href, status, text: '', truncated: false, untrusted: true }); return; }
-    if (!/^(text\/(html|plain)|application\/json)(;|$)/i.test(type) ||
-      (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') || Number(response.headers['content-length']) > 256 * 1024) {
-      response.destroy(); reject(new Error('Form response unsupported; outcome unknown')); return;
-    }
-    const chunks: Buffer[] = []; let size = 0;
-    response.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 256 * 1024) response.destroy(new Error('Form response too large')); else chunks.push(chunk); });
-    response.on('error', reject);
-    response.on('end', () => { const text = Buffer.concat(chunks).toString('utf8'); resolve({ url: url.href, status, text: text.slice(0, 20000), truncated: text.length > 20000, untrusted: true, content_type: type.split(';')[0]!.toLowerCase() }); });
-  });
+  }, formResponse(url, resolve, reject));
   req.on('error', reject); req.end(method === 'POST' ? body : undefined);
 });
 

@@ -5,6 +5,7 @@ import { Value } from '@sinclair/typebox/value';
 import { verifyExecutorEndpoint } from '../../config/executor-endpoint.ts';
 import { snapshotSchema } from './session.ts';
 import { requestCompletionSchema } from './pending-request.ts';
+import { BrowserActionError, isActionCode } from './action-error.ts';
 
 const identity = Type.String({ minLength: 1, maxLength: 100, pattern: '^[A-Za-z0-9_-]+$' });
 export const formPreparationSchema = Type.Object({ revision: Type.String({ minLength: 1, maxLength: 64 }), ref: Type.Integer({ minimum: 0, maximum: 99 }),
@@ -32,6 +33,15 @@ export function browserExecutor(socketPath: string, verifySocket: () => void): B
       const req = request({ socketPath, method: 'POST', path: '/browser', agent: false, signal: cancellation,
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, response => {
         if (response.statusCode !== 200 || !response.headers['content-type']?.startsWith('application/json')) {
+          if (response.statusCode === 400 && response.headers['content-type']?.startsWith('application/json')) {
+            // Only a fixed model-correctable code is trusted; anything else stays the generic failure.
+            const chunks: Buffer[] = []; let size = 0;
+            response.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 1024) response.destroy(); else chunks.push(chunk); });
+            response.on('error', () => reject(new Error('Browser service unavailable or reference expired')));
+            response.on('close', () => { let code: unknown; try { code = JSON.parse(Buffer.concat(chunks).toString('utf8')).error; } catch {}
+              reject(isActionCode(code) ? new BrowserActionError(code) : new Error('Browser service unavailable or reference expired')); });
+            return;
+          }
           response.destroy(); reject(new Error('Browser service unavailable or reference expired')); return;
         }
         const chunks: Buffer[] = []; let size = 0;
