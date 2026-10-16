@@ -2,22 +2,23 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {mkdirSync,rmSync,chmodSync} from 'node:fs';
 import {join} from 'node:path';
 import {programArguments,type ProgramEnvironment,type ProgramOutput,type PodmanCall} from './program.ts';
-import {Workspace} from '../tools/files/workspace.ts';
+import {Workspace,outputRejection} from '../tools/files/workspace.ts';
 import type {ResourceProfile} from './resources.ts';
 
 const supervisor=String.raw`
-import os,sys,json,time,shutil,subprocess,threading
+import os,sys,json,time,shutil,subprocess,threading,codecs
 for name in os.listdir('/input'):
  source=os.path.join('/input',name);target=os.path.join('/workspace',name)
  if os.path.isdir(source):shutil.copytree(source,target)
  else:shutil.copy2(source,target)
 commands=json.loads(sys.argv[1]); out={'code':0,'stdout':'','stderr':''}
 def drain(pipe,key):
+ decoder=codecs.getincrementaldecoder('utf-8')(errors='replace')
  while True:
   chunk=os.read(pipe.fileno(),4096)
+  text=decoder.decode(chunk,not chunk)
+  if text:out[key]=(out[key]+text)[-16000:];publish(False)
   if not chunk: break
-  out[key]=(out[key]+chunk.decode('utf8','replace'))[-16000:]
-  publish(False)
 def publish(done):
  data=dict(out);data['done']=done
  with open('/tmp/niwa-status','w') as f: json.dump(data,f)
@@ -36,28 +37,37 @@ while True:time.sleep(1)
 const collect=String.raw`
 import os,stat,json,base64
 items=[];total=0
+def reject(rule,path):
+ print(json.dumps({'rejected':{'rule':rule,'path':path[:200]}}));raise SystemExit(0)
 for directory,dirs,files in os.walk('/workspace',followlinks=False):
  for name in dirs+files:
   path=os.path.join(directory,name);s=os.lstat(path);relative=os.path.relpath(path,'/workspace')
-  assert len(items)<1000 and not stat.S_ISLNK(s.st_mode)
+  if len(items)>=1000:reject('too_many_entries',relative)
+  if stat.S_ISLNK(s.st_mode):reject('symlink',relative)
   if stat.S_ISDIR(s.st_mode):items.append({'path':relative,'directory':True});continue
-  assert stat.S_ISREG(s.st_mode) and s.st_nlink==1 and s.st_size<=8388608
+  if not stat.S_ISREG(s.st_mode):reject('not_regular_file',relative)
+  if s.st_nlink!=1:reject('hardlink',relative)
+  if s.st_size>8388608:reject('file_too_large',relative)
   fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
   try:
-   current=os.fstat(fd);assert current.st_ino==s.st_ino and current.st_dev==s.st_dev and current.st_nlink==1
+   current=os.fstat(fd)
+   if current.st_ino!=s.st_ino or current.st_dev!=s.st_dev or current.st_nlink!=1:reject('changed_during_read',relative)
    with os.fdopen(fd,'rb',closefd=False) as f:data=f.read(8388609)
   finally:os.close(fd)
-  total+=len(data);assert len(data)<=8388608 and total<=67108864
+  total+=len(data)
+  if len(data)>8388608:reject('file_too_large',relative)
+  if total>67108864:reject('total_too_large',relative)
   items.append({'path':relative,'data':base64.b64encode(data).decode(),'executable':bool(s.st_mode&64)})
 print(json.dumps(items))
 `;
+const rules=['too_many_entries','symlink','not_regular_file','hardlink','file_too_large','total_too_large','changed_during_read'] as const;
 export function managedProgramRunner(environment:Omit<ProgramEnvironment,'workspace'|'image'>,call:PodmanCall){
  const startedContainers=new Set<string>();
  const status=async(name:string)=>{
   if(!/^niwa-program-[a-f0-9-]{36}$/.test(name))throw Error('Invalid container');
   if(!startedContainers.has(name))return null;
   // A lost read response is retryable; never restart the underlying execution.
-  const result=await call(['exec',name,'python','-c',"import pathlib;print(pathlib.Path('/tmp/niwa-status').read_text())"],5).catch(()=>null);
+  const result=await call(['exec',name,'python','-c',"import pathlib;print(pathlib.Path('/tmp/niwa-status').read_text())"],5,undefined,512*1024).catch(()=>null);
   if(!result)return null;
   if(result.code!==0)return null;
   try{const value=JSON.parse(result.stdout);if(typeof value.done!=='boolean'||!Number.isInteger(value.code)||typeof value.stdout!=='string'||typeof value.stderr!=='string')return null;return {done:value.done,code:value.code,stdout:value.stdout.slice(-16000),stderr:value.stderr.slice(-16000)};}catch{return null;}
@@ -72,14 +82,25 @@ export function managedProgramRunner(environment:Omit<ProgramEnvironment,'worksp
   args.splice(mount,0,`--tmpfs=/workspace:rw,nosuid,nodev,size=${profile.disk_mib}m,mode=1777`);
   try{
    signal.throwIfAborted();const started=await call(args,15,signal);if(started.code!==0)throw Error(`Managed container start failed: ${started.stderr.slice(-1000)}`);startedContainers.add(name);
-   let output:Awaited<ReturnType<typeof status>>;
-   while(true){signal.throwIfAborted();output=await status(name);if(output?.done)break;
-    const alive=await call(['inspect','--format={{.State.Running}}',name],5).catch(()=>null);if(alive&&(alive.code!==0||alive.stdout.trim()!=='true'))throw Error('Managed container exited without a result');
-    await delay(250,undefined,{signal});
+   let output:Awaited<ReturnType<typeof status>>,seen:NonNullable<typeof output>|undefined;
+   try{
+    while(true){signal.throwIfAborted();output=await status(name);if(output)seen=output;if(output?.done)break;
+     const alive=await call(['inspect','--format={{.State.Running}}',name],5).catch(()=>null);if(alive&&(alive.code!==0||alive.stdout.trim()!=='true'))throw Error('Managed container exited without a result');
+     await delay(250,undefined,{signal});
+    }
+   }catch(error){
+    // Our own time limit is not an unknown outcome: report the last logs, without collecting files from the disposable guest.
+    if(signal.aborted&&(signal.reason as Error|undefined)?.name==='TimeoutError')return {code:124,stdout:seen?.stdout??'',stderr:seen?.stderr??'',timed_out:true};
+    throw error;
    }
    signal.throwIfAborted();const files=await call(['exec',name,'python','-c',collect],30,signal,96*1024*1024);
    if(files.code!==0)throw Error('Managed output rejected');
-   const items:unknown=JSON.parse(files.stdout);if(!Array.isArray(items)||items.length>1000)throw Error('Invalid output manifest');
+   const manifest:unknown=JSON.parse(files.stdout),rejected=(manifest as {rejected?:{rule?:unknown;path?:unknown}}|null)?.rejected;
+   if(rejected&&!Array.isArray(manifest)){
+    const rule=rules.find(r=>r===rejected.rule);if(!rule||typeof rejected.path!=='string')throw Error('Invalid output manifest');
+    throw outputRejection(rule,rejected.path,{code:output.code,stdout:output.stdout,stderr:output.stderr});
+   }
+   const items=manifest;if(!Array.isArray(items)||items.length>1000)throw Error('Invalid output manifest');
    let bytes=0;const names=new Set<string>();
    for(const item of items){if(!item||typeof item.path!=='string'||item.path.startsWith('/')||item.path.includes('\\')||/[\x00-\x1f]/.test(item.path)||item.path.split('/').some((p:string)=>!p||p==='.'||p==='..')||names.has(item.path))throw Error('Invalid output path');names.add(item.path);
     if(item.directory!==true){if(typeof item.data!=='string')throw Error('Invalid output bytes');const data=Buffer.from(item.data,'base64');bytes+=data.length;if(data.length>8*1024*1024||bytes>64*1024*1024||data.toString('base64')!==item.data)throw Error('Output quota exceeded');}
@@ -102,4 +123,5 @@ print(json.dumps({'status':r.status,'content_type':r.getheader('Content-Type','a
  };
  return {run,status,cleanup,preview};
 }
+export const managedScripts={supervisor,collect};
 export type ManagedRunner=ReturnType<typeof managedProgramRunner>;

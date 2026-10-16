@@ -21,7 +21,7 @@ export const environmentDefinitionSchema=object({
  profile:Type.String({pattern:'^[a-z][a-z0-9_-]{0,31}$'}),
 });
 export type EnvironmentDefinition=Static<typeof environmentDefinitionSchema>;
-export interface EnvironmentVersion {id:string;area:string;epoch:string;definition:EnvironmentDefinition;image:string|null;state:'preparing'|'ready'|'failed'|'outcome_unknown'|'retired';tested_revision:string|null;resources:ResourceProfile}
+export interface EnvironmentVersion {id:string;area:string;epoch:string;definition:EnvironmentDefinition;image:string|null;state:'preparing'|'ready'|'failed'|'outcome_unknown'|'retired';tested_revision:string|null;resources:ResourceProfile;hint?:string}
 type Installer=(image:string,name:string,entries:ApprovedPackage[],signal?:AbortSignal)=>Promise<PackageResult>;
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 
@@ -62,7 +62,8 @@ export class EnvironmentRegistry {
  get(area:string,epoch:string,id:string):EnvironmentVersion{
   const row=this.db.prepare('SELECT * FROM versions WHERE id=? AND area=? AND epoch=?').get(id,area,epoch);
   if(!row)throw new WorkspaceError('invalid_path');
-  return {id,area,epoch,definition:JSON.parse(String(row.definition)),image:row.image as string|null,state:row.state as EnvironmentVersion['state'],tested_revision:row.tested_revision as string|null,resources:JSON.parse(String(row.resources))};
+  const state=row.state as EnvironmentVersion['state'];
+  return {id,area,epoch,definition:JSON.parse(String(row.definition)),image:row.image as string|null,state,tested_revision:row.tested_revision as string|null,resources:JSON.parse(String(row.resources)),...(state==='failed'||state==='outcome_unknown'?{hint:'この準備は完了していません。同じ定義でenvironment_prepareを新しく呼ぶと再試行できます(別の定義でも可)。'}:{})};
  }
  active(area:string,epoch:string){return this.db.prepare('SELECT version FROM selections WHERE area=? AND epoch=?').get(area,epoch)?.version as string??null;}
  async prepare(area:string,epoch:string,input:unknown,allowStart:boolean,signal?:AbortSignal){
@@ -71,8 +72,11 @@ export class EnvironmentRegistry {
   if(definition.base_image!==this.baseImage||new Set(definition.dependencies.map(d=>d.name)).size!==definition.dependencies.length||new Set(definition.lockfiles.map(f=>f.path)).size!==definition.lockfiles.length||definition.lockfiles.some(f=>f.path.startsWith('/')||f.path.includes('\\')||f.path.split('/').some(p=>!p||p==='.'||p==='..')||/[\x00-\x1f]/.test(f.path)))throw new WorkspaceError('invalid_path');
   const resources=this.profiles[definition.profile];if(!resources)throw new WorkspaceError('unsupported');
   const encoded=JSON.stringify({name:definition.name,base_image:definition.base_image,catalog_revision:definition.catalog_revision,dependencies:definition.dependencies.map(({name,version})=>({name,version})),lockfiles:definition.lockfiles.map(({path,sha256})=>({path,sha256})),workdir:definition.workdir,prepare:definition.prepare,run:definition.run,verify:definition.verify,profile:definition.profile}),id=hash(JSON.stringify([area,epoch,encoded,resources]));
-  const prior=this.db.prepare('SELECT id FROM versions WHERE id=? OR (area=? AND epoch=? AND definition=? AND resources=?) ORDER BY rowid LIMIT 1').get(id,area,epoch,encoded,JSON.stringify(resources));
-  if(prior)return this.get(area,epoch,String(prior.id));
+  // The newest attempt wins. A failed or unknown attempt only blocks while no explicit new attempt is allowed.
+  const prior=this.db.prepare('SELECT id FROM versions WHERE id=? OR (area=? AND epoch=? AND definition=? AND resources=?) ORDER BY rowid DESC LIMIT 1').get(id,area,epoch,encoded,JSON.stringify(resources));
+  const previous=prior?this.get(area,epoch,String(prior.id)):undefined;
+  const retry=allowStart&&!!previous&&['failed','outcome_unknown'].includes(previous.state);
+  if(previous&&!retry)return previous;
   if(!allowStart)return {error:'outcome_unknown'};
   const available=this.catalog.list();
   const missing=definition.dependencies.filter(d=>!available.some(e=>e.name===d.name&&e.version===d.version));
@@ -80,21 +84,21 @@ export class EnvironmentRegistry {
   if(this.busy)return {error:'preparation_busy'};
   signal?.throwIfAborted();
   const entries=definition.dependencies.length?this.catalog.select(definition.dependencies.map(d=>d.name)):[];
-  const name=`niwa-package-${randomUUID()}`;
-  this.db.prepare("INSERT INTO versions VALUES (?,?,?,?,NULL,'preparing',?,NULL,?,NULL)").run(id,area,epoch,encoded,name,JSON.stringify(resources));
+  const name=`niwa-package-${randomUUID()}`,attempt=retry?hash(JSON.stringify([id,name])):id;
+  this.db.prepare("INSERT INTO versions VALUES (?,?,?,?,NULL,'preparing',?,NULL,?,NULL)").run(attempt,area,epoch,encoded,name,JSON.stringify(resources));
   this.busy=true;
   try{
    if(!await this.exists(this.baseImage))throw Error('Base image missing');
    const result=entries.length?await this.install(this.baseImage,name,entries,signal):{image:this.baseImage,installed:[]};
    signal?.throwIfAborted();
-   if('error' in result)this.db.prepare("UPDATE versions SET state='failed' WHERE id=?").run(id);
+   if('error' in result)this.db.prepare("UPDATE versions SET state='failed' WHERE id=?").run(attempt);
    else {
     if(!/^sha256:[a-f0-9]{64}$/.test(result.image)||!await this.exists(result.image))throw Error('Prepared image missing');
-    this.db.prepare("UPDATE versions SET image=?,state='ready' WHERE id=?").run(result.image,id);
+    this.db.prepare("UPDATE versions SET image=?,state='ready' WHERE id=?").run(result.image,attempt);
    }
-  }catch{this.db.prepare("UPDATE versions SET state='outcome_unknown' WHERE id=?").run(id);}
+  }catch{this.db.prepare("UPDATE versions SET state='outcome_unknown' WHERE id=?").run(attempt);}
   finally{this.busy=false;}
-  return this.get(area,epoch,id);
+  return this.get(area,epoch,attempt);
  }
  async resolve(area:string,epoch:string,id?:string){
   const selected=id??this.active(area,epoch);

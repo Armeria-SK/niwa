@@ -2,12 +2,27 @@ import type { XOAuth } from '../../auth/x-oauth.ts';
 import { xJson } from './http.ts';
 
 export interface XPost { text: string; reply_to?: string }
-export type XPostResult = { id: string; url: string } | { error: 'outcome_unknown' | 'not_connected' | 'cancelled' | 'x_rejected'; status?: number };
+export type XPostResult = { id: string; url: string } | { error: 'outcome_unknown' | 'not_connected' | 'cancelled' | 'x_rejected'; status?: number; title?: string; detail?: string };
 const id = (value: unknown): value is string => typeof value === 'string' && /^[0-9]{1,19}$/.test(value);
+export const X_MAX_WEIGHT = 280;
+const urlPattern = /https?:\/\/[^\s<>"]+/g, trailing = /[.,;:!?)\]}'"”’。、]+$/u;
+const emoji = /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator})/u;
+const light = (code: number) => code <= 0x10ff || (code >= 0x2000 && code <= 0x200d) || (code >= 0x2010 && code <= 0x201f) || (code >= 0x2032 && code <= 0x2037);
+/** X's counting (twitter-text v3): URLs weigh 23, Latin-range and general punctuation 1, everything else (CJK, emoji) 2. Approximate for unusual URLs. */
+export function xWeightedLength(text: string): number {
+  let weight = 0;
+  const rest = text.normalize('NFC').replace(urlPattern, match => { weight += 23; return trailing.exec(match)?.[0] ?? ''; });
+  for (const { segment } of new Intl.Segmenter().segment(rest)) {
+    if (emoji.test(segment)) { weight += 2; continue; }
+    for (const char of segment) weight += light(char.codePointAt(0)!) ? 1 : 2;
+  }
+  return weight;
+}
 export function validateXPost(input: XPost) {
-  if (!input || typeof input.text !== 'string' || !input.text.trim() || [...input.text].length > 280 || /[\x00-\x08\x0b-\x1f\x7f]/.test(input.text) ||
+  if (!input || typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4000 || xWeightedLength(input.text) > X_MAX_WEIGHT || /[\x00-\x08\x0b-\x1f\x7f]/.test(input.text) ||
     (input.reply_to !== undefined && !id(input.reply_to)) || Object.keys(input).some(key => !['text', 'reply_to'].includes(key))) throw new Error('Invalid X post');
 }
+const bounded = (value: unknown) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) : undefined;
 /** Fixed user-context endpoints for the dedicated shared account; no DM, account creation or arbitrary URL method. */
 export class XApi {
   constructor(private auth: Pick<XOAuth, 'access' | 'accountId'>, private fetcher: typeof fetch = fetch) {}
@@ -21,7 +36,12 @@ export class XApi {
         ...(signal ? { signal } : {}) }, this.fetcher);
       const post = (response.data as { data?: { id?: unknown } } | null)?.data;
       if (response.status === 201 && id(post?.id)) return { id: post.id, url: `https://x.com/i/web/status/${post.id}` };
-      if ([400, 401, 403, 404, 413, 422, 429].includes(response.status)) return { error: 'x_rejected', status: response.status };
+      if ([400, 401, 403, 404, 413, 422, 429].includes(response.status)) {
+        // X explains definite rejections (duplicate content, length, permissions); a bounded copy lets the model fix the cause.
+        const body = response.data as { title?: unknown; detail?: unknown; errors?: { message?: unknown }[] } | null;
+        const title = bounded(body?.title), detail = bounded(body?.detail ?? (Array.isArray(body?.errors) ? body.errors[0]?.message : undefined));
+        return { error: 'x_rejected', status: response.status, ...(title ? { title } : {}), ...(detail ? { detail } : {}) };
+      }
       return { error: 'outcome_unknown' };
     } catch { return { error: 'outcome_unknown' }; }
   }

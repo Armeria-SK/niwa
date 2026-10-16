@@ -6,8 +6,9 @@ import type { ProgramOperation, ProgramResult } from './program-log.ts';
 
 export type ProgramExecutor = (input: ProgramOperation, signal?: AbortSignal) => Promise<ProgramResult>;
 const responseSchema = Type.Object({ operation_id: Type.String(), result: Type.Union([
-  Type.Object({ code: Type.Integer(), stdout: Type.String(), stderr: Type.String() }, { additionalProperties: false }),
+  Type.Object({ code: Type.Integer(), stdout: Type.String(), stderr: Type.String(), timed_out: Type.Optional(Type.Literal(true)), output_truncated: Type.Optional(Type.Literal(true)) }, { additionalProperties: false }),
   Type.Object({ error: Type.Literal('outcome_unknown') }, { additionalProperties: false }),
+  Type.Object({ error: Type.Literal('busy'), retryable: Type.Literal(true) }, { additionalProperties: false }),
 ]) }, { additionalProperties: false });
 
 /** No automatic retry: losing an IPC reply cannot prove that the program did not change files. */
@@ -22,6 +23,14 @@ export function programExecutor(socketPath: string, verifySocket: () => void): P
     const output: unknown = await new Promise((resolve, reject) => {
       const req = request({ socketPath, method: 'POST', path: '/programs', agent: false, signal: cancellation,
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, response => {
+        if (response.statusCode === 503 && response.headers['content-type']?.startsWith('application/json')) {
+          // The executor refused before reading the request, so nothing ran and a later retry is safe.
+          const small: Buffer[] = []; let seen = 0;
+          response.on('data', (chunk: Buffer) => { if ((seen += chunk.length) <= 256) small.push(chunk); });
+          response.on('error', reject);
+          response.on('end', () => Buffer.concat(small).toString('utf8') === '{"error":"busy"}' && seen <= 256 ? resolve({ operation_id: operationId, result: { error: 'busy', retryable: true } }) : reject(new Error('Program request failed; outcome unknown')));
+          return;
+        }
         if (response.statusCode !== 200 || !response.headers['content-type']?.startsWith('application/json')) {
           response.destroy(); reject(new Error('Program request failed; outcome unknown')); return;
         }

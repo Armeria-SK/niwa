@@ -29,6 +29,9 @@ test('X tools enforce shared-room publication and reconcile unknown outcomes wit
     runtime.tasks.complete(admin, privateTask.id);
     const room = runtime.createRoom(admin, 'shared'), task = runtime.tasks.create(admin, leader.id, room.id, 'post'), lease = runtime.tasks.claim(admin)!;
     assert.ok((await executeAsyncTurnTool(runtime, actor, lease, { ...call, arguments: { ...call.arguments, account_id: 'other' } }, 'forged', undefined, external)).error);
+    // Known-too-long text is a plain error the model can fix, not an unknown outcome that parks the task.
+    const tooLong = await executeAsyncTurnTool(runtime, actor, lease, { ...call, arguments: { text: 'あ'.repeat(141), reply_to: null } }, 'long', undefined, external);
+    assert.equal(tooLong.error, 'text_too_long'); assert.equal(tooLong.weighted_length, 282); assert.equal(sends, 0); assert.notEqual(runtime.tasks.get(admin, task.id).state, 'waiting_user');
     assert.deepEqual(await executeAsyncTurnTool(runtime, actor, lease, { name: 'x_mentions', tool_call_id: 'read', arguments: { since_id: null } }, 'mentions', undefined, external), { posts: [], untrusted: true });
     assert.deepEqual(await executeAsyncTurnTool(runtime, actor, lease, call, 'post', undefined, external), { error: 'outcome_unknown' });
     assert.equal(runtime.tasks.get(admin, task.id).state, 'waiting_user'); runtime.tasks.resume(admin, task.id);

@@ -7,7 +7,7 @@ import { openDatabase } from '../storage/database.ts';
 import type { ProgramOutput, ProgramRequest } from './program.ts';
 
 export interface ProgramOperation extends ProgramRequest { operation_id: string; agent_id: string; room_id: string; task_id: string; allow_start: boolean }
-export type ProgramResult = ProgramOutput | { error: 'outcome_unknown' };
+export type ProgramResult = ProgramOutput | { error: 'outcome_unknown' } | { error: 'busy'; retryable: true };
 type Runner = (request: ProgramRequest, signal?: AbortSignal, name?: string) => Promise<ProgramOutput>;
 interface Receipt { input_hash: string; container: string; output: string | null }
 const identifier = /^[A-Za-z0-9:_-]{1,160}$/;

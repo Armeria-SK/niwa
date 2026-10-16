@@ -6,6 +6,13 @@ import type { JsonObject } from '../../contracts/model.ts';
 import { verifyExecutorEndpoint as verifyEndpoint } from '../../config/executor-endpoint.ts';
 import type { WorkspaceWrite } from './write-log.ts';
 
+/** A refusal from the broker. `code` is one of the broker's short lowercase codes; `busy` means nothing started and a later retry is safe. */
+export class WorkspaceRequestError extends Error {
+  constructor(readonly code: string, readonly status: number) { super(`Workspace request failed (${code})`); this.name = 'WorkspaceRequestError'; }
+  get retryable() { return this.code === 'busy'; }
+}
+/** Refusals issued before any work started; all other failures keep an unknown outcome. */
+export const definitiveRefusals = ['busy', 'unavailable', 'invalid_request', 'too_large', 'invalid_path', 'not_found', 'unsupported', 'conflict'];
 export type WorkspaceRead = (operation: 'list' | 'read', path: string, signal?: AbortSignal) => Promise<JsonObject>;
 export type WorkspaceWriter = (input: WorkspaceWrite, signal?: AbortSignal) => Promise<JsonObject>;
 export type WorkspaceDownload = (path: string, signal?: AbortSignal) => Promise<JsonObject>;
@@ -13,7 +20,7 @@ const downloadSchema = Type.Object({ path: Type.String(), data: Type.String({ ma
   revision: Type.String({ pattern: '^[a-f0-9]{64}$' }), shared: Type.Literal(true) }, { additionalProperties: false });
 const writeSchema = Type.Union([
   Type.Object({ path: Type.String(), revision: Type.String({ pattern: '^[a-f0-9]{64}$' }), shared: Type.Literal(true) }, { additionalProperties: false }),
-  Type.Object({ error: Type.Union(['invalid_path', 'not_found', 'conflict', 'unsupported', 'outcome_unknown'].map(value => Type.Literal(value))) }, { additionalProperties: false }),
+  Type.Object({ error: Type.Union(['invalid_path', 'not_found', 'conflict', 'unsupported', 'outcome_unknown', 'busy'].map(value => Type.Literal(value))), retryable: Type.Optional(Type.Literal(true)) }, { additionalProperties: false }),
 ]);
 const readSchema = Type.Object({ path: Type.String(), content: Type.String({ maxLength: 65536 }), revision: Type.String({ pattern: '^[a-f0-9]{64}$' }),
   shared: Type.Literal(true), untrusted: Type.Literal(true) }, { additionalProperties: false });
@@ -32,7 +39,15 @@ export async function callWorkspace(socketPath: string, verifySocket: () => void
       const req = request({ socketPath, method: 'POST', path: route, agent: false, signal: cancellation,
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, response => {
         if (response.statusCode !== 200 || !response.headers['content-type']?.startsWith('application/json')) {
-          response.destroy(); reject(new Error('Workspace request failed')); return;
+          const status = response.statusCode ?? 0, small: Buffer[] = []; let seen = 0;
+          if (!response.headers['content-type']?.startsWith('application/json')) { response.destroy(); reject(new Error('Workspace request failed')); return; }
+          response.on('data', (chunk: Buffer) => { if ((seen += chunk.length) <= 2048) small.push(chunk); });
+          response.on('error', () => reject(new Error('Workspace request failed')));
+          response.on('end', () => {
+            let code: unknown; try { if (seen <= 2048) code = (JSON.parse(Buffer.concat(small).toString('utf8')) as { error?: unknown }).error; } catch { /* opaque failure */ }
+            reject(typeof code === 'string' && /^[a-z_]{1,40}$/.test(code) ? new WorkspaceRequestError(code, status) : new Error('Workspace request failed'));
+          });
+          return;
         }
         const chunks: Buffer[] = []; let size = 0;
         response.on('data', (chunk: Buffer) => {
@@ -77,7 +92,9 @@ export function workspaceDownloader(socketPath: string, verifySocket: () => void
 }
 export function workspaceWriter(socketPath: string, verifySocket: () => void): WorkspaceWriter {
   return async (input, signal) => {
-    const output = await callWorkspace(socketPath, verifySocket, { ...input, operation: 'write' }, signal);
+    // A busy broker refused before touching any file, so this is a result the model may retry, not an unknown outcome.
+    const output = await callWorkspace(socketPath, verifySocket, { ...input, operation: 'write' }, signal)
+      .catch(error => { if (error instanceof WorkspaceRequestError && error.retryable) return { error: 'busy', retryable: true }; throw error; });
     if (!Value.Check(writeSchema, output)) throw new Error('Invalid workspace write response');
     const result = output as JsonObject;
     if (!result.error && (result.path !== input.path || result.revision !== createHash('sha256').update(Buffer.from(input.content, input.encoding ?? 'utf8')).digest('hex'))) {
