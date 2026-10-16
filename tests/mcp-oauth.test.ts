@@ -10,9 +10,9 @@ import {once} from 'node:events';
 import {createHash,randomBytes} from 'node:crypto';
 import {initializeInstallation,readInstallation} from '../src/config/installation.ts';
 import {McpSettings} from '../src/tools/mcp/settings.ts';
-import {McpConnector,McpLoginRequired,mcpRpc,mcpScope,mcpEndpointValid,oauthUrl,type McpEndpoint} from '../src/tools/mcp/client.ts';
+import {McpConnector,McpLoginRequired,mcpRpc,mcpScope,mcpEndpointValid,mcpUrl,oauthUrl,type McpEndpoint} from '../src/tools/mcp/client.ts';
 import {McpOAuth,parseChallenges} from '../src/tools/mcp/oauth.ts';
-import {readMcpOAuth,writeMcpOAuth,listMcpOAuth,type McpOAuthCredential} from '../src/tools/mcp/oauth-store.ts';
+import {readMcpOAuth,writeMcpOAuth,listMcpOAuth,mcpOAuthFile,removeMcpOAuth,readMcpOAuthClient,type McpOAuthCredential} from '../src/tools/mcp/oauth-store.ts';
 import {Runtime} from '../src/runtime/runtime.ts';
 import {WebAuth} from '../src/web/auth.ts';
 import {createApiServer} from '../src/web/api.ts';
@@ -154,7 +154,10 @@ async function signIn(f:Niwa,as:As,url:string,extra:Record<string,unknown>={},qu
  const done=await f.call(`/api/mcp/oauth/callback?${query(state,code)}`,'GET',undefined,{cookie:false});
  return {started,done,state,code};
 }
-const stored=(f:Niwa,id='remote')=>JSON.parse(f.read(`mcp-oauth-${id}.json`)) as McpOAuthCredential;
+/** File name of the login for one connection ID and URL. */
+const credFile=(url:string,id='remote')=>mcpOAuthFile(id,mcpUrl(url)!.href);
+/** The stored login of a connection (the one for `resource` when several exist). */
+const stored=(f:Niwa,id='remote',resource?:string)=>{const entry=listMcpOAuth(join(f.root,'secrets')).find(e=>e.id===id&&(resource===undefined||e.credential?.resource===resource));return entry!.credential as McpOAuthCredential;};
 const toolCtx=()=>({scope:mcpScope('epoch','room'),deadline:Date.now()+10000});
 
 test('OAuth login end to end: discovery, registration, PKCE, cookie-free callback, probe, save and a tool call',async t=>{
@@ -167,14 +170,14 @@ test('OAuth login end to end: discovery, registration, PKCE, cookie-free callbac
  assert.match(q.get('code_challenge')!,/^[A-Za-z0-9_-]{43}$/);assert.match(q.get('state')!,/^[A-Za-z0-9_-]{43}$/);assert.equal(q.get('resource'),mcp.url);assert.equal(q.get('scope'),'mail.read');
  assert.ok(started.json.expires_at>Date.now());
  assert.deepEqual(as.registrations[0],{client_name:'Niwa',redirect_uris:[f.callback],grant_types:['authorization_code','refresh_token'],response_types:['code'],token_endpoint_auth_method:'none'});
- assert.equal(done.status,200);assert.match(done.text,/MCPの接続先にログインしました。Niwaの画面に戻って「接続を確認」を押してください。/);
+ assert.equal(done.status,200);assert.match(done.text,/<a href="\/#settings\/mcp">Niwaの画面に戻る<\/a>/);assert.match(done.text,/MCPの接続先にログインしました。Niwaの画面に戻って「接続を確認」を押してください。/);
  assert.equal(done.headers['referrer-policy'],'no-referrer');assert.match(String(done.headers['content-security-policy']),/default-src 'none'/);
  // The authorization code exchange carried the PKCE verifier, redirect and resource.
  const exchange=as.tokens[0]!.form;assert.equal(exchange.get('grant_type'),'authorization_code');assert.equal(exchange.get('resource'),mcp.url);assert.equal(exchange.get('client_id'),'client-1');
- const file=f.secret('mcp-oauth-remote.json'),credential=stored(f);
+ const file=f.secret(credFile(mcp.url)),credential=stored(f);
  assert.equal(statSync(file).mode&0o777,0o600);assert.equal(credential.resource,mcp.url);assert.equal(credential.issuer,as.url);assert.equal(credential.token_endpoint_auth_method,'none');assert.ok(credential.refresh_token);
  const status=await f.call('/api/mcp');
- assert.deepEqual(status.json.oauth,[{id:'remote',status:'signed_in',pending:false,resource_matches:true,resource:mcp.url}]);
+ assert.deepEqual(status.json.oauth,[{id:'remote',status:'signed_in',pending:false,resource_matches:true,resource:mcp.url,logins:[{resource:mcp.url,status:'signed_in'}]}]);
  const probe=await f.call('/api/mcp/probe','POST',{url:mcp.url,id:'remote',oauth:true});
  assert.equal(probe.json.ok,true,probe.text);assert.deepEqual(probe.json.tools.map((x:any)=>x.name),['mail_search','echo']);assert.equal(mcp.calls.at(-1)!.auth,`Bearer ${credential.access_token}`);
  const saved=await f.call('/api/mcp','PUT',{revision:status.json.revision,servers:[remoteConfig(mcp.url)]});
@@ -185,12 +188,12 @@ test('OAuth login end to end: discovery, registration, PKCE, cookie-free callbac
  for(const text of [readFileSync(join(f.root,'state/mcp.json'),'utf8'),readFileSync(join(f.root,'config/niwa.json'),'utf8'),saved.text,status.text,probe.text,done.text,started.text]){for(const value of secrets)assert.ok(!text.includes(value));}
  assert.equal(JSON.parse(readFileSync(join(f.root,'state/mcp.json'),'utf8')).servers[0].oauth,true);
  assert.equal(readInstallation(f.root).mcpServers![0]!.oauth,true);
- assert.deepEqual(readdirSync(join(f.root,'secrets')).filter(n=>n.startsWith('mcp-')),['mcp-oauth-remote.json']);
+ assert.deepEqual(readdirSync(join(f.root,'secrets')).filter(n=>n.startsWith('mcp-')).sort(),[credFile(mcp.url),'mcp-oauth-remote.client.json'].sort());
 });
 
 test('OAuth access tokens are renewed before they expire; the rotated refresh token is saved and concurrent callers share one renewal',async t=>{
  const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),oauth=new McpOAuth(join(f.root,'secrets'));
- as.expiresIn=30;
+ as.expiresIn=0;
  const login=async()=>{const s=await oauth.start('remote',mcp.url,undefined,f.callback);assert.equal(s.ok,true);if(!s.ok)return;const {code,state}=as.authorize(s.url);assert.ok(await oauth.finish({state,code}));};
  await login();const first=stored(f);assert.ok(first.expires_at!-Date.now()<=30_000);
  as.expiresIn=3600;
@@ -198,16 +201,16 @@ test('OAuth access tokens are renewed before they expire; the rotated refresh to
  const second=stored(f);assert.equal(as.refreshes().length,1);
  assert.equal(as.refreshes()[0]!.form.get('refresh_token'),first.refresh_token);assert.equal(as.refreshes()[0]!.form.get('resource'),mcp.url);assert.equal(as.refreshes()[0]!.form.get('client_id'),'client-1');
  assert.notEqual(second.refresh_token,first.refresh_token);assert.notEqual(second.access_token,first.access_token);assert.ok(second.expires_at!-Date.now()>3000_000);
- assert.equal(statSync(f.secret('mcp-oauth-remote.json')).mode&0o777,0o600);assert.equal(mcp.calls.at(-1)!.auth,`Bearer ${second.access_token}`);
+ assert.equal(statSync(f.secret(credFile(mcp.url))).mode&0o777,0o600);assert.equal(mcp.calls.at(-1)!.auth,`Bearer ${second.access_token}`);
  // A valid token is not renewed again.
  await mcpRpc({url:mcp.url,oauth:oauth.source('remote',mcp.url)},'tools/list');assert.equal(as.refreshes().length,1);
  // Expired again: six simultaneous requests cause one renewal.
- as.expiresIn=30;await login();as.expiresIn=3600;as.delay=100;const before=as.refreshes().length;
+ as.expiresIn=0;await login();as.expiresIn=3600;as.delay=100;const before=as.refreshes().length;
  const endpoint:McpEndpoint={url:mcp.url,oauth:oauth.source('remote',mcp.url)};
  await Promise.all(Array.from({length:6},()=>mcpRpc(endpoint,'tools/list')));
  assert.equal(as.refreshes().length,before+1);
  // A refresh response without a new refresh token keeps the old one.
- as.expiresIn=30;await login();const old=stored(f);as.expiresIn=3600;as.omitRefresh=true;
+ as.expiresIn=0;await login();const old=stored(f);as.expiresIn=3600;as.omitRefresh=true;
  await mcpRpc({url:mcp.url,oauth:oauth.source('remote',mcp.url)},'tools/list');
  const kept=stored(f);assert.equal(kept.refresh_token,old.refresh_token);assert.notEqual(kept.access_token,old.access_token);
 });
@@ -254,19 +257,19 @@ test('a revoked refresh token marks the login as needed; signing in again reconn
 
 test('temporary refresh failures are retried and never mistaken for a lost login',async t=>{
  const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),secrets=join(f.root,'secrets'),oauth=new McpOAuth(secrets);
- as.expiresIn=30;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));as.expiresIn=3600;
- const before=readFileSync(f.secret('mcp-oauth-remote.json'),'utf8');
+ as.expiresIn=0;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));as.expiresIn=3600;
+ const before=readFileSync(f.secret(credFile(mcp.url)),'utf8');
  const outage=(respond:()=>Response|Promise<Response>)=>new McpOAuth(secrets,{fetcher:(async(input:any,init:any)=>String(input).endsWith('/token')?respond():fetch(input,init)) as typeof fetch});
  for(const flaky of [outage(()=>new Response('busy',{status:503})),outage(()=>{throw new TypeError('fetch failed');}),outage(()=>new Response('<html>',{status:200,headers:{'Content-Type':'text/html'}})),outage(()=>new Response(JSON.stringify({access_token:'x'}),{status:200,headers:{'Content-Type':'application/json'}}))]){
   await assert.rejects(mcpRpc({url:mcp.url,oauth:flaky.source('remote',mcp.url)},'tools/list'),(e:Error)=>!(e instanceof McpLoginRequired)&&e.message==='oauth_refresh_failed');
-  assert.equal(flaky.states([])[0]!.status,'signed_in');assert.equal(readFileSync(f.secret('mcp-oauth-remote.json'),'utf8'),before);
+  assert.equal(flaky.states([])[0]!.status,'signed_in');assert.equal(readFileSync(f.secret(credFile(mcp.url)),'utf8'),before);
  }
  assert.equal(as.refreshes().length,0);
  await mcpRpc({url:mcp.url,oauth:oauth.source('remote',mcp.url)},'tools/list');assert.equal(as.refreshes().length,1);
 });
 
 test('callback states are single use, expire and are validated; the callback needs no cookie but other MCP routes do',async t=>{
- const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file='mcp-oauth-remote.json';
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=credFile(mcp.url);
  const failedPage=(r:{status:number;text:string})=>{assert.equal(r.status,400);assert.match(r.text,/ログインを完了できませんでした。Niwaの設定から、もう一度ログインしてください。/);};
  const fake=randomBytes(32).toString('base64url');
  failedPage(await f.call(`/api/mcp/oauth/callback?state=${fake}&code=abc`,'GET',undefined,{cookie:false}));
@@ -312,7 +315,7 @@ test('at most eight logins are pending and a new login for the same server repla
  assert.equal(await oauth.finish(a),undefined);assert.ok(await oauth.finish(b));
  const many=[];for(let i=0;i<9;i++)many.push(await begin(`srv${i}`));
  assert.equal(await oauth.finish(many[0]!),undefined);assert.ok(await oauth.finish(many[8]!));
- assert.deepEqual(listMcpOAuth(join(f.root,'secrets')).sort(),['remote','srv8']);
+ assert.deepEqual(listMcpOAuth(join(f.root,'secrets')).map(e=>e.id).sort(),['remote','srv8']);
 });
 
 test('discovery refuses mismatched issuers and resources, missing PKCE, insecure endpoints and redirects',async t=>{
@@ -332,7 +335,7 @@ test('discovery refuses mismatched issuers and resources, missing PKCE, insecure
  as.redirects.add('/register');await refuses('network_error');assert.equal(as.hits.get('/elsewhere')??0,0);as.redirects.clear();
  as.redirects.add('/token');const login=await start(),pair=as.authorize(login.json.url);
  const page=await f.call(`/api/mcp/oauth/callback?state=${pair.state}&code=${pair.code}`,'GET',undefined,{cookie:false});
- assert.equal(page.status,400);assert.equal(as.hits.get('/elsewhere')??0,0);assert.ok(!existsSync(f.secret('mcp-oauth-remote.json')));
+ assert.equal(page.status,400);assert.equal(as.hits.get('/elsewhere')??0,0);assert.ok(!existsSync(f.secret(credFile(mcp.url))));
  // PRM served through a redirect is not followed either.
  as.redirects.clear();
  const redirecting=await listen(t,(req,res)=>{res.writeHead(307,{Location:`${mcp.base}/.well-known/oauth-protected-resource/mcp`});res.end();});
@@ -361,7 +364,7 @@ test('OAuth endpoints on a remote HTTPS server may not point at plain http, even
 });
 
 test('the issuer parameter of the callback is checked when the provider supports it (RFC 9207) and rejected when wrong',async t=>{
- const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file='mcp-oauth-remote.json';
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=credFile(mcp.url);
  as.overrides={authorization_response_iss_parameter_supported:true};
  const attempt=(iss:string|undefined)=>signIn(f,as,mcp.url,{},(state,code)=>`state=${state}&code=${code}${iss===undefined?'':`&iss=${encodeURIComponent(iss)}`}`);
  assert.equal((await attempt(undefined)).done.status,400);assert.ok(!existsSync(f.secret(file)));
@@ -375,7 +378,7 @@ test('the issuer parameter of the callback is checked when the provider supports
 });
 
 test('token responses are validated before anything is stored; zero, fractional and long lifetimes and 12 KiB tokens are accepted',async t=>{
- const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file='mcp-oauth-remote.json';
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=credFile(mcp.url);
  as.tokenType='mac';assert.equal((await signIn(f,as,mcp.url)).done.status,400);assert.ok(!existsSync(f.secret(file)));
  as.tokenType='bearer';as.expiresIn=-5;assert.equal((await signIn(f,as,mcp.url)).done.status,400);assert.ok(!existsSync(f.secret(file)));
  // Already expired is allowed with a refresh token (it is renewed before use), not without one.
@@ -404,16 +407,16 @@ test('without a registration endpoint the client ID must be entered; a client se
  assert.equal(post.done.status,200);assert.equal(new URL(post.started.json.url).searchParams.get('client_id'),'manual-client');
  assert.equal(as.tokens[0]!.form.get('client_secret'),secret);assert.equal(as.tokens[0]!.auth,undefined);
  assert.equal(stored(f).token_endpoint_auth_method,'client_secret_post');assert.equal(stored(f).client_secret,secret);
- assert.equal(statSync(f.secret('mcp-oauth-remote.json')).mode&0o777,0o600);
+ assert.equal(statSync(f.secret(credFile(mcp.url))).mode&0o777,0o600);
  const status=await f.call('/api/mcp');assert.ok(!status.text.includes(secret));assert.ok(!post.started.text.includes(secret));assert.ok(!post.done.text.includes(secret));
  // The refresh request authenticates the same way.
  const oauth=new McpOAuth(join(f.root,'secrets'));
- as.expiresIn=30;await signIn(f,as,mcp.url,{client_id:'manual-client',client_secret:secret});as.expiresIn=3600;
+ as.expiresIn=0;await signIn(f,as,mcp.url,{client_id:'manual-client',client_secret:secret});as.expiresIn=3600;
  await mcpRpc({url:mcp.url,oauth:oauth.source('remote',mcp.url)},'tools/list');
  assert.equal(as.refreshes().length,1);assert.equal(as.refreshes()[0]!.form.get('client_secret'),secret);assert.equal(as.refreshes()[0]!.auth,undefined);
  // client_secret_basic when that is all the provider lists
  as.overrides={registration_endpoint:null,token_endpoint_auth_methods_supported:['client_secret_basic']};as.method='client_secret_basic';
- as.expiresIn=30;const basic=await signIn(f,as,mcp.url,{client_id:'manual-client',client_secret:secret});as.expiresIn=3600;
+ as.expiresIn=0;const basic=await signIn(f,as,mcp.url,{client_id:'manual-client',client_secret:secret});as.expiresIn=3600;
  assert.equal(basic.done.status,200);const last=as.tokens.at(-1)!;
  assert.equal(last.auth,`Basic ${Buffer.from(`manual-client:${secret}`).toString('base64')}`);assert.equal(last.form.get('client_secret'),null);assert.equal(stored(f).token_endpoint_auth_method,'client_secret_basic');
  await mcpRpc({url:mcp.url,oauth:oauth.source('remote',mcp.url)},'tools/list');
@@ -436,7 +439,7 @@ test('a client secret issued by registration is kept for token requests only; un
 });
 
 test('a login is used only for the exact URL it was made for; deleting a connection or leaving OAuth removes it, and OAuth servers take no static token',async t=>{
- const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file='mcp-oauth-remote.json';
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=credFile(mcp.url);
  as.accepted.add('static-token-0123456789');
  await signIn(f,as,mcp.url);
  const revision=()=>f.manager.status().revision;
@@ -471,7 +474,7 @@ test('a login is used only for the exact URL it was made for; deleting a connect
 });
 
 test('a failed configuration write restores removed logins',async t=>{
- const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file='mcp-oauth-remote.json';
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=credFile(mcp.url);
  await signIn(f,as,mcp.url);const before=f.read(file),state=join(f.root,'state/mcp.json');
  f.manager.status();
  // The saved state cannot be read, so the write that follows the credential removal fails.
@@ -481,7 +484,7 @@ test('a failed configuration write restores removed logins',async t=>{
 });
 
 test('logout removes the login, asks the provider to revoke it (failures ignored) and takes the connection out of service',async t=>{
- const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file='mcp-oauth-remote.json';
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=credFile(mcp.url);
  await signIn(f,as,mcp.url);const credential=stored(f);
  assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[remoteConfig(mcp.url)]})).json.ok,true);
  as.revokeStatus=500;
@@ -490,7 +493,7 @@ test('logout removes the login, asks the provider to revoke it (failures ignored
  assert.equal(out.status,200);assert.equal(out.json.ok,true);assert.ok(!existsSync(f.secret(file)));
  assert.equal(as.revoked.length,1);assert.equal(as.revoked[0]!.form.get('token'),credential.refresh_token);assert.equal(as.revoked[0]!.form.get('token_type_hint'),'refresh_token');assert.equal(as.revoked[0]!.form.get('client_id'),'client-1');
  const status=(await f.call('/api/mcp')).json;
- assert.deepEqual(status.connected,[]);assert.deepEqual(status.failed,[{id:'remote',reason:'login_required'}]);assert.deepEqual(status.oauth,[{id:'remote',status:'signed_out',pending:false,resource_matches:false,resource:null}]);
+ assert.deepEqual(status.connected,[]);assert.deepEqual(status.failed,[{id:'remote',reason:'login_required'}]);assert.deepEqual(status.oauth,[{id:'remote',status:'signed_out',pending:false,resource_matches:false,resource:null,logins:[]}]);
  // The pending login was dropped with it.
  assert.equal((await f.call(`/api/mcp/oauth/callback?state=${waiting.state}&code=${waiting.code}`,'GET',undefined,{cookie:false})).status,400);assert.ok(!existsSync(f.secret(file)));
  await assert.rejects(f.manager.connector.call('mcp_remote_mail_search',{},toolCtx()));
@@ -528,7 +531,7 @@ test('startup with an OAuth server and no usable login still succeeds; the serve
  assert.deepEqual(status.failed,waiting);assert.deepEqual(status.connected,[]);assert.equal(status.oauth[0]!.status,'signed_out');assert.ok(status.error);
  await sleep(100);assert.equal(mcp.calls.length,0);
  // Unreadable, invalid and unsafe credential files are the same as no login.
- const file=join(root,'secrets/mcp-oauth-remote.json'),valid={version:1,resource:mcp.url,issuer:as.url,token_endpoint:`${as.url}/token`,client_id:'c',token_endpoint_auth_method:'none',access_token:'at-valid-token-123456'};
+ const file=join(root,'secrets',credFile(mcp.url)),valid={version:1,resource:mcp.url,issuer:as.url,token_endpoint:`${as.url}/token`,client_id:'c',token_endpoint_auth_method:'none',access_token:'at-valid-token-123456'};
  writeFileSync(file,'{broken',{mode:0o600});settings=await open();assert.deepEqual(settings.status().failed,waiting);
  writeFileSync(file,JSON.stringify({...valid,extra:true}),{mode:0o600});settings=await open();assert.deepEqual(settings.status().failed,waiting);
  writeFileSync(file,JSON.stringify({...valid,token_endpoint:'http://example.com/token'}),{mode:0o600});settings=await open();assert.deepEqual(settings.status().failed,waiting);
@@ -543,23 +546,34 @@ test('startup with an OAuth server and no usable login still succeeds; the serve
 
 test('credential files are strictly validated: symlinks, extra links, wide permissions, oversize and malformed content are refused',{skip:process.platform==='win32'},async t=>{
  const dir=mkdtempSync(join(tmpdir(),'niwa-oauth-store-'));t.after(async()=>rmSync(dir,{recursive:true,force:true}));chmodSync(dir,0o700);
- const credential:McpOAuthCredential={version:1,resource:'https://mcp.example.com/mcp',issuer:'https://auth.example.com',token_endpoint:'https://auth.example.com/token',client_id:'c1',client_secret:'s3cret-value',token_endpoint_auth_method:'client_secret_post',access_token:'access-token-1234',refresh_token:'refresh-token-1234',expires_at:Date.now()+1000,scope:'a b',revocation_endpoint:'https://auth.example.com/revoke'};
- assert.equal(readMcpOAuth(dir,'srv'),undefined);
- writeMcpOAuth(dir,'srv',credential);assert.deepEqual(readMcpOAuth(dir,'srv'),credential);assert.equal(statSync(join(dir,'mcp-oauth-srv.json')).mode&0o777,0o600);assert.deepEqual(listMcpOAuth(dir),['srv']);
- assert.deepEqual(readdirSync(dir).filter(n=>n.endsWith('.tmp')),[]);
+ const resource='https://mcp.example.com/mcp',credential:McpOAuthCredential={version:1,resource,issuer:'https://auth.example.com',token_endpoint:'https://auth.example.com/token',client_id:'c1',client_secret:'s3cret-value',token_endpoint_auth_method:'client_secret_post',access_token:'access-token-1234',refresh_token:'refresh-token-1234',expires_at:Date.now()+1000,lifetime:3600,scope:'a b',revocation_endpoint:'https://auth.example.com/revoke'};
+ assert.equal(readMcpOAuth(dir,'srv',resource),undefined);
+ writeMcpOAuth(dir,'srv',credential);assert.deepEqual(readMcpOAuth(dir,'srv',resource),credential);
+ const name=mcpOAuthFile('srv',resource);assert.match(name,/^mcp-oauth-srv-[0-9a-f]{16}\.json$/);assert.equal(statSync(join(dir,name)).mode&0o777,0o600);
+ assert.deepEqual(listMcpOAuth(dir),[{id:'srv',file:name,credential}]);assert.deepEqual(readdirSync(dir).filter(n=>n.endsWith('.tmp')),[]);
  for(const bad of [{...credential,access_token:'short'},{...credential,access_token:'with"quote-1234'},{...credential,resource:'https://mcp.example.com'},{...credential,token_endpoint:'http://auth.example.com/token'},{...credential,client_secret:undefined},{...credential,token_endpoint_auth_method:'none' as const},{...credential,version:2} as any,{...credential,extra:1} as any,{...credential,expires_at:-1}])
   assert.throws(()=>writeMcpOAuth(dir,'srv',bad),/Invalid MCP OAuth credential/);
  assert.throws(()=>writeMcpOAuth(dir,'Bad',credential),/Invalid MCP server id/);
- const file=join(dir,'mcp-oauth-srv.json');
- chmodSync(file,0o640);assert.throws(()=>readMcpOAuth(dir,'srv'),/Unsafe/);chmodSync(file,0o600);
- linkSync(file,join(dir,'hard'));assert.throws(()=>readMcpOAuth(dir,'srv'),/Unsafe/);rmSync(join(dir,'hard'));
- rmSync(file);symlinkSync(join(dir,'elsewhere'),file);assert.throws(()=>readMcpOAuth(dir,'srv'));rmSync(file);
- writeFileSync(file,' '.repeat(65537),{mode:0o600});assert.throws(()=>readMcpOAuth(dir,'srv'));
- writeFileSync(file,'[]',{mode:0o600});assert.throws(()=>readMcpOAuth(dir,'srv'),/Invalid/);
- writeMcpOAuth(dir,'srv',undefined);assert.equal(readMcpOAuth(dir,'srv'),undefined);writeMcpOAuth(dir,'srv',undefined);
+ const file=join(dir,name);
+ chmodSync(file,0o640);assert.throws(()=>readMcpOAuth(dir,'srv',resource),/Unsafe/);chmodSync(file,0o600);
+ linkSync(file,join(dir,'hard'));assert.throws(()=>readMcpOAuth(dir,'srv',resource),/Unsafe/);rmSync(join(dir,'hard'));
+ rmSync(file);symlinkSync(join(dir,'elsewhere'),file);assert.throws(()=>readMcpOAuth(dir,'srv',resource));rmSync(file);
+ writeFileSync(file,' '.repeat(65537),{mode:0o600});assert.throws(()=>readMcpOAuth(dir,'srv',resource));
+ writeFileSync(file,'[]',{mode:0o600});assert.throws(()=>readMcpOAuth(dir,'srv',resource),/Invalid/);
+ // A file holding a login for another URL than its name says is refused.
+ writeFileSync(file,JSON.stringify({...credential,resource:'https://other.example.com/mcp'}),{mode:0o600});assert.throws(()=>readMcpOAuth(dir,'srv',resource),/Invalid/);
+ removeMcpOAuth(dir,'srv',resource);assert.equal(readMcpOAuth(dir,'srv',resource),undefined);removeMcpOAuth(dir,'srv',resource);
+ // Several URLs of one connection live side by side.
+ const other={...credential,resource:'https://other.example.com/mcp'};
+ writeMcpOAuth(dir,'srv',credential);writeMcpOAuth(dir,'srv',other);
+ assert.deepEqual(readMcpOAuth(dir,'srv',resource),credential);assert.deepEqual(readMcpOAuth(dir,'srv',other.resource),other);assert.equal(listMcpOAuth(dir).length,2);
+ // A file of the old per-connection kind counts for the URL it records and is superseded by a new write of that login.
+ rmSync(join(dir,mcpOAuthFile('srv',resource)));writeFileSync(join(dir,'mcp-oauth-srv.json'),JSON.stringify(credential),{mode:0o600});
+ assert.deepEqual(readMcpOAuth(dir,'srv',resource),credential);assert.equal(readMcpOAuth(dir,'srv','https://third.example.com/mcp'),undefined);
+ writeMcpOAuth(dir,'srv',credential);assert.ok(!existsSync(join(dir,'mcp-oauth-srv.json')));assert.deepEqual(readMcpOAuth(dir,'srv',resource),credential);
  // A public client has no secret.
  const {client_secret:_,...rest}=credential,pub:McpOAuthCredential={...rest,token_endpoint_auth_method:'none'};
- writeMcpOAuth(dir,'pub',pub);assert.deepEqual(readMcpOAuth(dir,'pub'),pub);
+ writeMcpOAuth(dir,'pub',pub);assert.deepEqual(readMcpOAuth(dir,'pub',resource),pub);
 });
 
 test('WWW-Authenticate challenges are parsed robustly',()=>{
@@ -625,7 +639,7 @@ test('the state of a login in progress is reported without any secret or address
  const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t);
  const started=await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url});assert.equal(started.json.ok,true);
  const status=await f.call('/api/mcp');
- assert.deepEqual(status.json.oauth,[{id:'remote',status:'signed_out',pending:true,resource_matches:false,resource:null}]);
+ assert.deepEqual(status.json.oauth,[{id:'remote',status:'signed_out',pending:true,resource_matches:false,resource:null,logins:[]}]);
  assert.ok(!status.text.includes(started.json.url));assert.ok(!status.text.includes(new URL(started.json.url).searchParams.get('state')!));
 });
 
@@ -643,23 +657,36 @@ test('OAuth connections work with McpConnector directly: strict connect fails fa
  assert.ok(mcp.calls.every(c=>c.auth===undefined||c.auth.startsWith('Bearer at-')));
 });
 
-test('a login made for a new URL counts as signed in whatever URL is saved; the screen compares it with the form',async t=>{
+test('a login for an edited, unsaved URL is kept apart: the saved connection keeps working, the screen sees both, and saving cleans up',async t=>{
  const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),{loggedIn,loginNote}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
  await signIn(f,as,mcp.url);
  assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[remoteConfig(mcp.url)]})).json.ok,true);
+ const firstLogin=stored(f);
  // The administrator edits the URL and logs in again before saving.
  const other=mcp.url+'?team=b';mcp.resource=other;
  await signIn(f,as,other);
+ // The live connection is untouched and its login still there.
+ assert.deepEqual(f.manager.status().connected,['remote']);await f.manager.connector.call('mcp_remote_mail_search',{},toolCtx());
+ assert.equal(stored(f,'remote',mcp.url).refresh_token,firstLogin.refresh_token);assert.equal(listMcpOAuth(join(f.root,'secrets')).length,2);
  const status=(await f.call('/api/mcp')).json,entry=status.oauth[0];
- assert.equal(entry.status,'signed_in');assert.equal(entry.resource,other);assert.equal(entry.resource_matches,false);
+ assert.equal(entry.status,'signed_in');assert.equal(entry.resource,mcp.url);assert.equal(entry.resource_matches,true);
+ assert.deepEqual(entry.logins.map((l:{resource:string})=>l.resource).sort(),[mcp.url,other].sort());
  const draft=(url:string)=>({id:'remote',url,savedId:'remote',savedOAuth:true});
  assert.equal(loggedIn(draft(other),status),true);assert.equal(loginNote(draft(other),status),'');
- // The saved URL and any other URL are not covered by it, and the screen says why.
- assert.equal(loggedIn(draft(mcp.url),status),false);assert.match(loginNote(draft(mcp.url),status),/別のURL/);
- assert.equal(loggedIn(draft('https://elsewhere.example.com/mcp'),status),false);
- // The probe and the save with the new URL work.
+ assert.equal(loggedIn(draft(mcp.url),status),true);
+ assert.equal(loggedIn(draft('https://elsewhere.example.com/mcp'),status),false);assert.match(loginNote(draft('https://elsewhere.example.com/mcp'),status),/別のURL/);
+ // Probing uses the login of the URL that is probed.
  assert.equal((await f.call('/api/mcp/probe','POST',{url:other,id:'remote',oauth:true})).json.ok,true);
- assert.equal((await f.call('/api/mcp','PUT',{revision:status.revision,servers:[remoteConfig(other)]})).json.ok,true);
+ assert.equal((await f.call('/api/mcp/probe','POST',{url:mcp.url,id:'remote',oauth:true})).json.ok,true);
+ assert.match((await f.call('/api/mcp/probe','POST',{url:mcp.url+'?team=c',id:'remote',oauth:true})).json.message,/ログインが必要です/);
+ // A login for a third, never saved URL is cleaned up by the save, and so is the old one once the URL is changed; both are revoked.
+ const third=mcp.url+'?team=c';mcp.resource=third;await signIn(f,as,third);assert.equal(listMcpOAuth(join(f.root,'secrets')).length,3);const thirdLogin=stored(f,'remote',third);
+ const saved=await f.call('/api/mcp','PUT',{revision:status.revision,servers:[remoteConfig(other)]});
+ assert.equal(saved.json.ok,true,saved.text);
+ assert.deepEqual(listMcpOAuth(join(f.root,'secrets')).map(e=>e.credential?.resource),[other]);
+ await until(()=>as.revoked.length>=2);
+ assert.deepEqual(as.revoked.map(r=>r.form.get('token')).sort(),[firstLogin.refresh_token,thirdLogin.refresh_token].sort());
+ assert.deepEqual(f.manager.status().connected,['remote']);
  assert.equal(loggedIn(draft(other),(await f.call('/api/mcp')).json),true);
  // A login the provider ended is still reported as needing a new one.
  as.accepted.clear();as.refreshFailure='invalid_grant';
@@ -677,13 +704,13 @@ test('the resource indicator has no lone trailing slash and the same value is us
    res.writeHead(401);res.end();
   });
   origin=server;
-  as.expiresIn=30;
+  as.expiresIn=0;
   const started=await oauth.start('remote',server,undefined,f.callback);assert.equal(started.ok,true,variant);if(!started.ok)return;
   const expected=variant==='slash'?server+'/':server;
   assert.equal(new URL(started.url).searchParams.get('resource'),expected,variant);
   assert.ok(await oauth.finish(as.authorize(started.url)));
   assert.equal(as.tokens.at(-1)!.form.get('resource'),expected);
-  const credential=stored(f);assert.equal(credential.resource,server+'/');assert.equal(credential.audience,expected);
+  const credential=stored(f,'remote',server+'/');assert.equal(credential.resource,server+'/');assert.equal(credential.audience,expected);
   // Renewal sends the same audience, and the login stays bound to the canonical URL.
   as.expiresIn=3600;
   await mcpRpc({url:server,oauth:oauth.source('remote',server)},'tools/list');
@@ -698,14 +725,14 @@ test('the client secret is sent with the method RFC 8414 defaults to when the pr
  const methods:[unknown,string][]=[[null,'client_secret_basic'],[['client_secret_post','client_secret_basic'],'client_secret_basic'],[['client_secret_post'],'client_secret_post'],[['none'],'client_secret_basic']];
  for(const [listed,expected] of methods){
   as.overrides={registration_endpoint:null,token_endpoint_auth_methods_supported:listed};as.method=expected;
-  rmSync(f.secret('mcp-oauth-remote.json'),{force:true});
+  rmSync(f.secret(credFile(mcp.url)),{force:true});
   const done=await signIn(f,as,mcp.url,{client_id:'manual-client',client_secret:secret});
   assert.equal(done.done.status,200,JSON.stringify(listed));assert.equal(stored(f).token_endpoint_auth_method,expected,JSON.stringify(listed));
  }
 });
 
 test('deleting a connection while its login is open cancels that login, also while the code exchange is running',async t=>{
- const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file='mcp-oauth-remote.json';
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=credFile(mcp.url);
  const pair=as.authorize((await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url})).json.url);
  assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[]})).json.ok,true);
  assert.equal((await f.call(`/api/mcp/oauth/callback?state=${pair.state}&code=${pair.code}`,'GET',undefined,{cookie:false})).status,400);
@@ -731,7 +758,7 @@ test('a second login reuses the client of the first one, with its secret and met
  const again=await signIn(f,as,mcp.url);assert.equal(again.done.status,200);
  assert.equal(as.registrations.length,1);assert.equal(stored(f).client_id,first.client_id);assert.equal(new URL(again.started.json.url).searchParams.get('client_id'),first.client_id);
  // Manual client with a secret: the form is not needed again.
- as.overrides={registration_endpoint:null};as.secret=secret;rmSync(f.secret('mcp-oauth-remote.json'));
+ as.overrides={registration_endpoint:null};as.secret=secret;rmSync(f.secret(credFile(mcp.url)));
  await signIn(f,as,mcp.url,{client_id:'manual-client',client_secret:secret});
  const relogin=await signIn(f,as,mcp.url);
  assert.equal(relogin.done.status,200);assert.equal(stored(f).client_id,'manual-client');assert.equal(stored(f).client_secret,secret);assert.equal(stored(f).token_endpoint_auth_method,'client_secret_post');
@@ -744,9 +771,9 @@ test('a second login reuses the client of the first one, with its secret and met
 });
 
 test('a renewed login that cannot be written yet is kept and used, and written when the disk allows',async t=>{
- const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),secrets=join(f.root,'secrets'),file=f.secret('mcp-oauth-remote.json');
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),secrets=join(f.root,'secrets'),file=f.secret(credFile(mcp.url));
  const oauth=new McpOAuth(secrets),log=t.mock.method(console,'error',()=>{});
- as.expiresIn=30;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
+ as.expiresIn=0;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
  const first=stored(f);as.expiresIn=3600;
  // Writing fails: the credential file is replaced by a directory while the provider renews.
  as.onRefresh=()=>{rmSync(file);mkdirSync(file);as.onRefresh=undefined;};
@@ -804,7 +831,7 @@ test('the well-known address of the protected resource keeps the query of the MC
 
 test('a renewal for one URL never hands its token to a request for another URL of the same connection ID',async t=>{
  const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),oauth=new McpOAuth(join(f.root,'secrets'));
- as.expiresIn=30;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
+ as.expiresIn=0;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
  const old=stored(f).access_token;as.expiresIn=3600;as.delay=150;
  const owner=oauth.source('remote',mcp.url),stranger=oauth.source('remote',mcp.url+'?team=b');
  const renewing=owner.refresh(old);
@@ -815,9 +842,9 @@ test('a renewal for one URL never hands its token to a request for another URL o
 });
 
 test('a renewed login that is written after an earlier failed write replaces the held one everywhere',async t=>{
- const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=f.secret('mcp-oauth-remote.json'),oauth=new McpOAuth(join(f.root,'secrets'));
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=f.secret(credFile(mcp.url)),oauth=new McpOAuth(join(f.root,'secrets'));
  t.mock.method(console,'error',()=>{});
- as.expiresIn=30;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
+ as.expiresIn=0;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
  // Renewal 1 cannot be written and is itself short-lived, so renewal 2 follows at once, from the held login.
  as.onRefresh=()=>{rmSync(file);mkdirSync(file);as.onRefresh=undefined;};
  const endpoint:McpEndpoint={url:mcp.url,oauth:oauth.source('remote',mcp.url)};
@@ -833,7 +860,7 @@ test('a renewed login that is written after an earlier failed write replaces the
  // Later accesses use the stored login and do not write an old one back.
  await mcpRpc(endpoint,'tools/list');assert.equal(stored(f).refresh_token,as.latestRefresh);assert.equal(as.refreshes().length,2);
  // A new login also clears a held one.
- as.expiresIn=30;const relogin=await oauth.start('remote',mcp.url,undefined,f.callback);if(!relogin.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(relogin.url)));
+ as.expiresIn=0;const relogin=await oauth.start('remote',mcp.url,undefined,f.callback);if(!relogin.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(relogin.url)));
  as.onRefresh=()=>{rmSync(file);mkdirSync(file);as.onRefresh=undefined;};
  await mcpRpc(endpoint,'tools/list');assert.equal((oauth.states([])[0] as {unsaved?:boolean}).unsaved,true);
  rmSync(file,{recursive:true});as.expiresIn=3600;
@@ -855,12 +882,12 @@ test('a start that is still discovering when its connection is deleted cannot le
  as.metadataDelay=0;assert.equal((await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url})).json.ok,true);
 });
 
-test('a stored client is not reused once its login ended or the provider refused it, and the client ID can be entered instead',async t=>{
+test('a stored client is reused after its login ended but not once the provider refused it, and the client ID can be entered instead',async t=>{
  const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),oauth=new McpOAuth(join(f.root,'secrets'));
  const login=async(manual?:{client_id:string;client_secret?:string})=>{const s=await oauth.start('remote',mcp.url,manual,f.callback);if(!s.ok)return s;return {...s,done:await oauth.finish(as.authorize(s.url)),client:new URL(s.url).searchParams.get('client_id')};};
  const endpoint=():McpEndpoint=>({url:mcp.url,oauth:oauth.source('remote',mcp.url)});
  // The provider deleted the client: renewal fails with invalid_client.
- as.expiresIn=30;await login();assert.equal(stored(f).client_id,'client-1');as.expiresIn=3600;as.clientGone='client-1';
+ as.expiresIn=0;await login();assert.equal(stored(f).client_id,'client-1');as.expiresIn=3600;as.clientGone='client-1';
  await assert.rejects(mcpRpc(endpoint(),'tools/list'),McpLoginRequired);assert.equal(oauth.states([])[0]!.status,'needs_login');
  const second=await login() as {client:string;done:unknown};
  assert.equal(second.client,'client-2');assert.ok(second.done);assert.equal(as.registrations.length,2);assert.equal(oauth.states([])[0]!.status,'signed_in');
@@ -868,20 +895,23 @@ test('a stored client is not reused once its login ended or the provider refused
  as.clientGone='client-2';
  const reused=await login() as {client:string;done:unknown};assert.equal(reused.client,'client-2');assert.equal(reused.done,undefined);
  const third=await login() as {client:string;done:unknown};assert.equal(third.client,'client-3');assert.ok(third.done);
- // A login that merely expired also starts over, so without registration the client ID is asked for and a typed one is honoured.
+ // A login that merely ended keeps its client: nothing has to be typed again, also when the provider has no registration.
  as.clientGone=undefined;as.overrides={registration_endpoint:null};
  const manual=await login({client_id:'typed-client'}) as {client:string;done:unknown};assert.equal(manual.client,'typed-client');assert.ok(manual.done);
- const reuse=await login() as {client:string};assert.equal(reuse.client,'typed-client');
- as.expiresIn=30;await login();as.expiresIn=3600;as.refreshFailure='invalid_grant';
+ as.expiresIn=0;await login();as.expiresIn=3600;as.refreshFailure='invalid_grant';
  await assert.rejects(mcpRpc(endpoint(),'tools/list'),McpLoginRequired);as.refreshFailure=undefined;
+ const again=await login() as {client:string;done:unknown};assert.equal(again.client,'typed-client');assert.ok(again.done);
+ // Only a client the provider refused is dropped, and then the form is asked for again.
+ as.clientGone='typed-client';
+ const refused=await login() as {client:string;done:unknown};assert.equal(refused.client,'typed-client');assert.equal(refused.done,undefined);
  const blocked=await login() as {ok:boolean;code:string};assert.equal(blocked.ok,false);assert.equal(blocked.code,'client_registration_required');
  const typed=await login({client_id:'typed-client-2'}) as {client:string;done:unknown};assert.equal(typed.client,'typed-client-2');assert.ok(typed.done);
 });
 
 test('logout revokes the renewed login that was only held in memory',async t=>{
- const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=f.secret('mcp-oauth-remote.json'),oauth=new McpOAuth(join(f.root,'secrets'));
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=f.secret(credFile(mcp.url)),oauth=new McpOAuth(join(f.root,'secrets'));
  t.mock.method(console,'error',()=>{});
- as.expiresIn=30;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
+ as.expiresIn=0;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
  const original=stored(f).refresh_token;as.expiresIn=3600;
  as.onRefresh=()=>{rmSync(file);mkdirSync(file);as.onRefresh=undefined;};
  await mcpRpc({url:mcp.url,oauth:oauth.source('remote',mcp.url)},'tools/list');
@@ -896,4 +926,132 @@ test('unreadable credentials in a failing renewal keep the screen informed: the 
  const card={id:'remote'};
  assert.equal(loginUnsaved(card,{oauth:[{id:'remote',status:'signed_in',unsaved:true}]}),true);
  assert.equal(loginUnsaved(card,{oauth:[{id:'remote',status:'signed_in'}]}),false);assert.equal(loginUnsaved(card,undefined),false);
+});
+
+test('logout removes only the login of the URL in the form; the client stays on file and deleting the connection removes everything',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),secrets=join(f.root,'secrets'),other=mcp.url+'?team=b';
+ await signIn(f,as,mcp.url);
+ assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[remoteConfig(mcp.url)]})).json.ok,true);
+ mcp.resource=other;await signIn(f,as,other);
+ // Registered once, reused for the second URL.
+ assert.equal(as.registrations.length,1);assert.equal(stored(f,'remote',other).client_id,stored(f,'remote',mcp.url).client_id);
+ // Logging out of the edited URL leaves the live connection alone and revokes only that login.
+ const draftLogin=stored(f,'remote',other);
+ assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote',url:other})).json.ok,true);
+ assert.deepEqual(listMcpOAuth(secrets).map(e=>e.credential?.resource),[mcp.url]);assert.deepEqual(f.manager.status().connected,['remote']);
+ assert.deepEqual(as.revoked.map(r=>r.form.get('token')),[draftLogin.refresh_token]);
+ // Logging out of the saved URL stops the connection.
+ const liveLogin=stored(f);
+ assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote',url:mcp.url})).json.ok,true);
+ assert.deepEqual(listMcpOAuth(secrets),[]);assert.deepEqual(f.manager.status().failed,[{id:'remote',reason:'login_required'}]);assert.equal(as.revoked.at(-1)!.form.get('token'),liveLogin.refresh_token);
+ // The client is still on file, so the next login registers nothing and the server comes back.
+ assert.equal(readMcpOAuthClient(secrets,'remote')?.client_id,liveLogin.client_id);
+ mcp.resource=undefined;await signIn(f,as,mcp.url);
+ assert.equal(as.registrations.length,1);assert.equal(stored(f).client_id,liveLogin.client_id);
+ await until(()=>f.manager.status().connected.includes('remote'));
+ // A bare logout removes every login of the connection.
+ mcp.resource=other;await signIn(f,as,other);mcp.resource=undefined;
+ assert.equal((await f.call('/api/mcp/oauth/logout','POST',{id:'remote'})).json.ok,true);assert.deepEqual(listMcpOAuth(secrets),[]);assert.ok(readMcpOAuthClient(secrets,'remote'));
+ // Deleting the connection takes the client too.
+ await signIn(f,as,mcp.url);
+ assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[]})).json.ok,true);
+ assert.deepEqual(listMcpOAuth(secrets),[]);assert.equal(readMcpOAuthClient(secrets,'remote'),undefined);assert.deepEqual(readdirSync(secrets).filter(n=>n.startsWith('mcp-oauth')),[]);
+ // A client typed by hand is kept the same way.
+ as.overrides={registration_endpoint:null};await signIn(f,as,mcp.url,{client_id:'typed-client'});
+ await f.call('/api/mcp/oauth/logout','POST',{id:'remote'});
+ assert.equal((await signIn(f,as,mcp.url)).done.status,200);assert.equal(stored(f).client_id,'typed-client');
+});
+
+test('a login for a URL that is not saved is cancelled when the configuration is saved, also while it is open',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),other=mcp.url+'?team=b';
+ await signIn(f,as,mcp.url);
+ assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[remoteConfig(mcp.url)]})).json.ok,true);
+ mcp.resource=other;
+ const pair=as.authorize((await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:other})).json.url);
+ assert.equal((await f.call('/api/mcp')).json.oauth[0].pending,true);
+ assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[{...remoteConfig(mcp.url),enabled:false}]})).json.ok,true);
+ assert.equal((await f.call(`/api/mcp/oauth/callback?state=${pair.state}&code=${pair.code}`,'GET',undefined,{cookie:false})).status,400);
+ assert.deepEqual(listMcpOAuth(join(f.root,'secrets')).map(e=>e.credential?.resource),[mcp.url]);
+ // The saved URL's own pending login survives an unrelated save.
+ mcp.resource=undefined;
+ const own=as.authorize((await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url})).json.url);
+ assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[remoteConfig(mcp.url)]})).json.ok,true);
+ assert.equal((await f.call(`/api/mcp/oauth/callback?state=${own.state}&code=${own.code}`,'GET',undefined,{cookie:false})).status,200);
+});
+
+test('a short-lived token is renewed when half of its lifetime is gone, not before every request',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),oauth=new McpOAuth(join(f.root,'secrets'));
+ as.expiresIn=40;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
+ assert.equal(stored(f).lifetime,40);
+ const endpoint:McpEndpoint={url:mcp.url,oauth:oauth.source('remote',mcp.url)};
+ // A probe is three requests: none of them renews.
+ for(let i=0;i<3;i++)await mcpRpc(endpoint,'tools/list');
+ assert.equal(as.refreshes().length,0);
+ // After 25 s 15 s are left, less than half of 40 s.
+ const now=Date.now;t.mock.method(Date,'now',()=>now()+25_000);
+ as.expiresIn=7200;await mcpRpc(endpoint,'tools/list');await mcpRpc(endpoint,'tools/list');
+ assert.equal(as.refreshes().length,1);assert.equal(stored(f).lifetime,7200);
+ // A long-lived token still renews 60 s before its end.
+ t.mock.method(Date,'now',()=>now()+25_000+7200_000-61_000);await mcpRpc(endpoint,'tools/list');assert.equal(as.refreshes().length,1);
+ t.mock.method(Date,'now',()=>now()+25_000+7200_000-59_000);as.expiresIn=7200;await mcpRpc(endpoint,'tools/list');assert.equal(as.refreshes().length,2);
+});
+
+test('the reason of a failed login is kept per connection for the screen and logged without secrets',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),log=t.mock.method(console,'error',()=>{}),{loginFailure}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
+ const failure=async()=>(await f.call('/api/mcp')).json.oauth.find((o:{id:string})=>o.id==='remote')?.failure;
+ const card={id:'remote'};
+ // The provider refuses.
+ const start=async()=>{const url=(await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url})).json.url as string;return {...as.authorize(url),client:new URL(url).searchParams.get('client_id')!};};
+ const denied=await start();
+ await f.call(`/api/mcp/oauth/callback?state=${denied.state}&error=access_denied`,'GET',undefined,{cookie:false});
+ assert.equal((await failure()).code,'access_denied');assert.ok(Math.abs((await failure()).at-Date.now())<5000);
+ assert.match(loginFailure(card,(await f.call('/api/mcp')).json),/^ログインに失敗しました（access_denied）。/);
+ // A new start clears the old reason.
+ const expired=await start();assert.equal(await failure(),undefined);
+ const now=Date.now;t.mock.method(Date,'now',()=>now()+11*60_000);
+ await f.call(`/api/mcp/oauth/callback?state=${expired.state}&code=${expired.code}`,'GET',undefined,{cookie:false});t.mock.restoreAll();
+ assert.equal((await failure()).code,'state_expired');
+ // The provider rejects the client at the token endpoint.
+ const refused=await start();as.clientGone=refused.client;
+ const log2=t.mock.method(console,'error',()=>{});
+ await f.call(`/api/mcp/oauth/callback?state=${refused.state}&code=${refused.code}`,'GET',undefined,{cookie:false});
+ assert.equal((await failure()).code,'invalid_client');assert.match(loginFailure(card,(await f.call('/api/mcp')).json),/クライアントIDとシークレットを確認/);
+ // A start that cannot discover anything.
+ as.clientGone=undefined;as.overrides={issuer:'http://127.0.0.1:1'};
+ const bad=await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url});assert.equal(bad.json.ok,false);assert.equal((await failure()).code,'issuer_mismatch');
+ // The log has one line per failure with the connection and the code, nothing else.
+ const lines=[...log.mock.calls,...log2.mock.calls].map(c=>String(c.arguments.join(' ')));
+ for(const code of ['access_denied','state_expired','invalid_client','issuer_mismatch'])assert.ok(lines.some(l=>l===`MCP OAuth: login of "remote" failed (${code})`),code);
+ for(const line of lines)assert.doesNotMatch(line,/code-|state=|client-|at-\d|rt-\d/);
+ // A login that works clears it.
+ as.overrides={};await signIn(f,as,mcp.url);assert.equal(await failure(),undefined);
+ // A start that needs the client ID is shown by the card's own form, not as a failure line.
+ await f.call('/api/mcp/oauth/logout','POST',{id:'remote'});rmSync(join(f.root,'secrets','mcp-oauth-remote.client.json'),{force:true});
+ as.overrides={registration_endpoint:null};await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url});
+ assert.equal((await failure()).code,'client_registration_required');assert.equal(loginFailure(card,(await f.call('/api/mcp')).json),'');
+});
+
+test('when every failed connection waits for a login the form says so, otherwise it keeps the general message',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t);
+ writeFileSync(join(f.root,'config/niwa.json'),JSON.stringify({...readInstallation(f.root),mcpServers:[remoteConfig(mcp.url)]}));
+ const settings=await McpSettings.open(f.root,undefined,{initial:60000,max:60000});t.after(()=>settings.close());
+ assert.equal(settings.status().error,'ログインが必要な接続があります。各接続の「ログイン」からログインしてください。');
+ writeFileSync(join(f.root,'config/niwa.json'),JSON.stringify({...readInstallation(f.root),mcpServers:[remoteConfig(mcp.url),{id:'late',socket:join(f.root,'none.sock'),scope:'conversation',tools:[{name:'read',readOnly:true}]}]}));
+ const mixed=await McpSettings.open(f.root,undefined,{initial:60000,max:60000});t.after(()=>mixed.close());
+ assert.match(String(mixed.status().error),/接続できませんでした/);
+});
+
+test('a card that waits for its login says so once, however many places could repeat it',async()=>{
+ const {loginState,connectionState,connectionError}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
+ const card={id:'remote',url:'https://mcp.example.com/mcp',auth:'oauth',enabled:true,savedId:'remote',savedOAuth:true};
+ const status={connected:[],failed:[{id:'remote',reason:'login_required'}],oauth:[{id:'remote',status:'signed_out',pending:false,logins:[]}]};
+ const texts=[loginState(card,status),connectionState(card,status,false),connectionError(card,status,false)];
+ assert.equal(texts.filter(text=>text.includes('ログインが必要です')).length,1);
+ assert.equal(connectionState(card,status,false),'未接続');assert.equal(connectionError(card,status,false),'');
+ // Other failures, and connections that do not use OAuth, keep their own wording.
+ const down={connected:[],failed:[{id:'remote',reason:'ECONNREFUSED'}],oauth:status.oauth};
+ assert.equal(connectionState(card,down,false),'接続失敗（自動で再試行します）');assert.equal(connectionError(card,down,false),'接続できません: ECONNREFUSED');
+ assert.match(connectionError({...card,auth:'token'},status,false),/ログインが必要です/);
+ assert.equal(connectionState(card,{...status,connected:['remote']},false),'接続済み');assert.equal(connectionState(card,status,true),'未保存の変更あり');
+ assert.equal(loginState(card,{oauth:[{id:'remote',pending:true,logins:[]}]}),'ログインを待っています');
 });

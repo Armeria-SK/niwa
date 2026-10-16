@@ -1,15 +1,16 @@
 import {createHash,randomBytes} from 'node:crypto';
 import {createPkcePair} from '../../auth/codex-oauth.ts';
 import {McpLoginRequired,mcpUrl,oauthUrl,type McpOAuthSource} from './client.ts';
-import {listMcpOAuth,readMcpOAuth,writeMcpOAuth,type McpOAuthCredential} from './oauth-store.ts';
+import {listMcpOAuth,readMcpOAuth,readMcpOAuthClient,removeMcpOAuth,removeMcpOAuthFile,writeMcpOAuth,writeMcpOAuthClient,type McpOAuthCredential} from './oauth-store.ts';
 
 type AuthMethod=McpOAuthCredential['token_endpoint_auth_method'];
 interface Client{client_id:string;client_secret?:string;method:AuthMethod}
-interface Flow{id:string;resource:string;audience:string;issuer:string;token_endpoint:string;revocation_endpoint?:string;client:Client;verifier:string;redirect:string;scope?:string;requireIss:boolean;generation:number;expires:number}
+interface Flow{id:string;slot:string;resource:string;audience:string;issuer:string;token_endpoint:string;revocation_endpoint?:string;client:Client;verifier:string;redirect:string;scope?:string;requireIss:boolean;generation:number;expires:number}
 interface Reply{status:number;headers:Headers;json:Record<string,unknown>|undefined}
 interface Server{token_endpoint:string;authorization_endpoint:string;registration_endpoint?:string;revocation_endpoint?:string;requireIss:boolean;useBasic:boolean}
 /** `status` says whether a login exists and is usable, whatever the saved configuration is; `resource_matches` compares it with the saved URL. `unsaved` is present while a renewed login could not be written to disk. */
-export interface McpOAuthState{id:string;status:'signed_in'|'needs_login'|'signed_out';pending:boolean;resource_matches:boolean;resource:string|null;unsaved?:true}
+export interface McpOAuthLogin{resource:string;status:'signed_in'|'needs_login';unsaved?:true}
+export interface McpOAuthState{id:string;logins:McpOAuthLogin[];failure?:{code:string;at:number};status:'signed_in'|'needs_login'|'signed_out';pending:boolean;resource_matches:boolean;resource:string|null;unsaved?:true}
 export type McpOAuthStart={ok:true;url:string;expires_at:number}|{ok:false;code:string;message:string};
 /** Failure with a short code only. Messages never carry response bodies, tokens, codes or secrets. */
 class OAuthError extends Error{constructor(readonly code:string){super(code);}}
@@ -25,6 +26,8 @@ const idPattern=/^[a-z][a-z0-9_]{0,19}$/,statePattern=/^[A-Za-z0-9_-]{43}$/,code
 const jsonType=/^application\/(?:[a-z0-9.+-]+\+)?json(?:\s*;|$)/i;
 const initialize=JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'niwa',version:'0.1.0'}}});
 const fingerprint=(c:McpOAuthCredential)=>createHash('sha256').update(c.refresh_token??c.access_token).digest('hex');
+const slotOf=(id:string,resource:string)=>`${id}\n${resource}`;
+const idOf=(slot:string)=>slot.slice(0,slot.indexOf('\n'));
 const abandon=<T>(promise:Promise<T>,signal?:AbortSignal)=>signal?new Promise<T>((resolve,reject)=>{
  const stop=()=>reject(signal.reason);signal.addEventListener('abort',stop,{once:true});if(signal.aborted)stop();
  promise.then(resolve,reject).finally(()=>signal.removeEventListener('abort',stop));
@@ -59,41 +62,64 @@ const bearer=(header:string|null|undefined)=>{const list=parseChallenges(header)
 const normal=(value:string)=>value.replace(/\/$/,'');
 const strings=(value:unknown)=>Array.isArray(value)&&value.every(v=>typeof v==='string')?value as string[]:undefined;
 
-/** OAuth login for remote MCP servers (MCP Authorization 2025-06-18): discovery, registration, PKCE login, refresh. Pending logins live in memory only. */
+/** OAuth login for remote MCP servers (MCP Authorization 2025-06-18): discovery, registration, PKCE login, refresh. Pending logins live in memory only.
+ * Everything that belongs to one login is kept per connection ID and URL (a "slot"), so a login made for an edited, unsaved URL never touches the one the saved connection uses. */
 export class McpOAuth{
  private pending=new Map<string,Flow>();
  private flights=new Map<string,Promise<McpOAuthCredential>>();
  private generations=new Map<string,number>();
  private needs=new Map<string,string>();
- /** Renewed logins that could not be written yet, by id; valid only for the generation they were made in. */
+ /** Renewed logins that could not be written yet, by slot; valid only for the generation they were made in. */
  private held=new Map<string,{credential:McpOAuthCredential;generation:number;retry:number}>();
- /** Logins whose code exchange is running, by id, so a configuration change can still cancel them. */
+ /** Logins whose code exchange is running, by slot, so a configuration change can still cancel them. */
  private exchanging=new Map<string,number>();
- /** Logins whose discovery or registration is still running, by id. */
+ /** Logins whose discovery or registration is still running, by slot. */
  private starting=new Map<string,number>();
  /** Ids whose client the provider refused (invalid_client): the stored client is not tried again. */
  private clientRejected=new Set<string>();
+ /** The last failed login per id: a short reason code and the time, nothing else. */
+ private failures=new Map<string,{code:string;at:number}>();
  private lifetime=new AbortController();
  private fetcher:typeof fetch;
  private onLogin:(id:string)=>void;
  constructor(private secrets:string,options:{fetcher?:typeof fetch;onLogin?:(id:string)=>void}={}){this.fetcher=options.fetcher??fetch;this.onLogin=options.onLogin??(()=>{});}
- private generation(id:string){return this.generations.get(id)??0;}
- private bump(id:string){const next=this.generation(id)+1;this.generations.set(id,next);return next;}
+ private generation(slot:string){return this.generations.get(slot)??0;}
+ private bump(slot:string){const next=this.generation(slot)+1;this.generations.set(slot,next);return next;}
  private prune(){const now=Date.now();for(const [state,flow] of this.pending)if(flow.expires<=now)this.pending.delete(state);}
- private drop(id:string){for(const [state,flow] of this.pending)if(flow.id===id)this.pending.delete(state);}
- private credential(id:string){
-  const held=this.held.get(id);
+ private dropSlot(slot:string){for(const [state,flow] of this.pending)if(flow.slot===slot)this.pending.delete(state);}
+ /** Every slot of one connection that has anything in memory. */
+ private slotsOf(id:string){
+  const slots=new Set<string>();
+  for(const source of [this.generations,this.needs,this.held,this.exchanging,this.starting,this.flights])for(const slot of source.keys())if(idOf(slot)===id)slots.add(slot);
+  for(const flow of this.pending.values())if(flow.id===id)slots.add(flow.slot);
+  return slots;
+ }
+ private fail(id:string,code:string){
+  // A start cancelled by a configuration change is not a failure of the login.
+  if(code==='changed')return;
+  this.failures.set(id,{code,at:Date.now()});
+  if(code!=='client_registration_required')console.error(`MCP OAuth: login of "${id}" failed (${code})`);
+ }
+ private credential(id:string,resource:string){
+  const slot=slotOf(id,resource),held=this.held.get(slot);
   if(held){
-   if(held.generation!==this.generation(id))this.held.delete(id);
+   if(held.generation!==this.generation(slot))this.held.delete(slot);
    else{
     if(Date.now()>=held.retry){
      held.retry=Date.now()+5000;
-     try{writeMcpOAuth(this.secrets,id,held.credential);this.held.delete(id);}catch{}
+     try{writeMcpOAuth(this.secrets,id,held.credential);this.held.delete(slot);}catch{}
     }
     return held.credential;
    }
   }
-  try{return readMcpOAuth(this.secrets,id);}catch{return undefined;}
+  try{return readMcpOAuth(this.secrets,id,resource);}catch{return undefined;}
+ }
+ /** All readable logins of one connection (held ones in place of their files). */
+ private credentials(id:string){
+  const found=new Map<string,McpOAuthCredential>();
+  try{for(const entry of listMcpOAuth(this.secrets))if(entry.id===id&&entry.credential)found.set(entry.credential.resource,entry.credential);}catch{}
+  for(const slot of this.held.keys())if(idOf(slot)===id){const resource=slot.slice(id.length+1),credential=this.credential(id,resource);if(credential)found.set(resource,credential);}
+  return [...found.values()].sort((a,b)=>a.resource<b.resource?-1:1);
  }
  /** One request. Redirects are never followed, the answer is capped at 64 KiB and only JSON objects are parsed. */
  private async send(url:URL,init:{method:'GET'|'POST';headers?:Record<string,string>;body?:string},signal:AbortSignal,read=true,seconds=20):Promise<Reply>{
@@ -183,36 +209,40 @@ export class McpOAuth{
   if(client_secret===undefined)throw new OAuthError('registration_failed');
   return {client_id,client_secret,method};
  }
- /** A second login at the same authorization server and callback keeps the client of the first (manual ones included), so nothing has to be entered or registered again. */
+ /** A second login at the same authorization server and callback keeps the client of the first (manual ones included), also after logout, so nothing has to be entered or registered again. */
  private reusable(id:string,issuer:string,redirect:string):Client|undefined{
-  const old=this.credential(id);
-  // A login that already ended, or whose client the provider refused, starts over with a client from the form or a new registration.
-  if(!old||old.issuer!==issuer||old.redirect_uri!==redirect||this.needs.get(id)===fingerprint(old)||this.clientRejected.has(id))return undefined;
-  return {client_id:old.client_id,...(old.client_secret!==undefined?{client_secret:old.client_secret}:{}),method:old.token_endpoint_auth_method};
+  if(this.clientRejected.has(id))return undefined;
+  let saved:{issuer:string;redirect_uri?:string|undefined;client_id:string;client_secret?:string;token_endpoint_auth_method:AuthMethod}|undefined;
+  try{saved=readMcpOAuthClient(this.secrets,id);}catch{}
+  saved??=this.credentials(id).find(c=>c.issuer===issuer&&c.redirect_uri===redirect);
+  if(!saved||saved.issuer!==issuer||saved.redirect_uri!==redirect)return undefined;
+  return {client_id:saved.client_id,...(saved.client_secret!==undefined?{client_secret:saved.client_secret}:{}),method:saved.token_endpoint_auth_method};
  }
  /** Discovers the authorization server, obtains a client and returns the address the administrator logs in at. */
  async start(id:string,url:string,manual:{client_id:string;client_secret?:string|undefined}|undefined,callback:string,signal?:AbortSignal):Promise<McpOAuthStart>{
   const resource=mcpUrl(url),redirect=oauthUrl(callback,true);
   if(!resource||!idPattern.test(id)||!redirect||redirect.search||(manual&&!/^[\x21-\x7e]{1,512}$/.test(manual.client_id)))throw Error('Invalid MCP OAuth request');
-  const begun=this.generation(id),all=AbortSignal.any([AbortSignal.timeout(60000),this.lifetime.signal,...(signal?[signal]:[])]),local=resource.protocol==='http:';
-  this.starting.set(id,(this.starting.get(id)??0)+1);
+  const slot=slotOf(id,resource.href),begun=this.generation(slot),all=AbortSignal.any([AbortSignal.timeout(60000),this.lifetime.signal,...(signal?[signal]:[])]),local=resource.protocol==='http:';
+  this.starting.set(slot,(this.starting.get(slot)??0)+1);
   try{
    const found=await this.protectedResource(resource,local,all);
    const server=await this.authorizationServer(found.issuer,local,all);
    const client:Client=manual?{client_id:manual.client_id,...(manual.client_secret!==undefined?{client_secret:manual.client_secret}:{}),method:manual.client_secret===undefined?'none':server.useBasic?'client_secret_basic':'client_secret_post'}
     :this.reusable(id,found.issuer,redirect.href)??(server.registration_endpoint?await this.register(server,redirect.href,all):(()=>{throw new OAuthError('client_registration_required');})());
-   if(this.generation(id)!==begun)throw new OAuthError('changed');
-   this.prune();this.drop(id);
+   if(this.generation(slot)!==begun)throw new OAuthError('changed');
+   this.prune();this.dropSlot(slot);
    while(this.pending.size>=8)this.pending.delete(this.pending.keys().next().value!);
-   const pkce=createPkcePair(),state=randomBytes(32).toString('base64url'),expires=Date.now()+10*60_000,generation=this.generation(id);
-   this.pending.set(state,{id,resource:resource.href,audience:found.audience,issuer:found.issuer,token_endpoint:server.token_endpoint,...(server.revocation_endpoint?{revocation_endpoint:server.revocation_endpoint}:{}),client,verifier:pkce.verifier,redirect:redirect.href,...(found.scope?{scope:found.scope}:{}),requireIss:server.requireIss,generation,expires});
+   const pkce=createPkcePair(),state=randomBytes(32).toString('base64url'),expires=Date.now()+10*60_000,generation=this.generation(slot);
+   this.pending.set(state,{id,slot,resource:resource.href,audience:found.audience,issuer:found.issuer,token_endpoint:server.token_endpoint,...(server.revocation_endpoint?{revocation_endpoint:server.revocation_endpoint}:{}),client,verifier:pkce.verifier,redirect:redirect.href,...(found.scope?{scope:found.scope}:{}),requireIss:server.requireIss,generation,expires});
    const target=new URL(server.authorization_endpoint);
    for(const [key,value] of Object.entries({response_type:'code',client_id:client.client_id,redirect_uri:redirect.href,code_challenge:pkce.challenge,code_challenge_method:'S256',state,resource:found.audience,...(found.scope?{scope:found.scope}:{})}))target.searchParams.set(key,value);
+   this.failures.delete(id);
    return {ok:true,url:target.href,expires_at:expires};
   }catch(error){
    const code=error instanceof OAuthError?error.code:'start_failed';
+   this.fail(id,code);
    return {ok:false,code,message:`${messages[code]??generic}（${code}）`};
-  }finally{const left=(this.starting.get(id)??1)-1;if(left>0)this.starting.set(id,left);else this.starting.delete(id);}
+  }finally{const left=(this.starting.get(slot)??1)-1;if(left>0)this.starting.set(slot,left);else this.starting.delete(slot);}
  }
  private async token(credential:{token_endpoint:string;client_id:string;client_secret?:string|undefined;method:AuthMethod},form:Record<string,string>,signal:AbortSignal){
   const body=new URLSearchParams({...form,client_id:credential.client_id}),headers:Record<string,string>={'Content-Type':'application/x-www-form-urlencoded'};
@@ -229,45 +259,52 @@ export class McpOAuth{
   const {refresh_token,scope}=value,seconds=typeof value.expires_in==='string'&&/^[0-9]{1,10}(?:\.[0-9]{1,9})?$/.test(value.expires_in)?Number(value.expires_in):value.expires_in;
   if(refresh_token!==undefined&&(typeof refresh_token!=='string'||!token.test(refresh_token)))throw new OAuthError('token_response_invalid');
   if(seconds!==undefined&&(typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<0))throw new OAuthError('token_response_invalid');
-  return {access_token:value.access_token,...(refresh_token!==undefined?{refresh_token}:{}),...(seconds!==undefined?{expires_at:Date.now()+Math.floor(Math.min(seconds,10*365*86400))*1000}:{}),
+  return {access_token:value.access_token,...(refresh_token!==undefined?{refresh_token}:{}),...(seconds!==undefined?{expires_at:Date.now()+Math.floor(Math.min(seconds,10*365*86400))*1000,lifetime:Math.floor(Math.min(seconds,10*365*86400))}:{}),
    ...(typeof scope==='string'&&scope.length<=2048&&/^[\x20-\x7e]*$/.test(scope)?{scope}:{})};
  }
- /** Completes a login from the browser's return. Callable without the admin session: the single-use state created by an authenticated start is the proof. Failures carry no detail. */
+ /** Completes a login from the browser's return. Callable without the admin session: the single-use state created by an authenticated start is the proof. Failures carry no detail, but their reason code is kept for the settings screen. */
  async finish(input:{state?:string|undefined;code?:string|undefined;error?:string|undefined;iss?:string|undefined}){
-  this.prune();
   const {state,code,error,iss}=input,flow=state!==undefined&&statePattern.test(state)?this.pending.get(state):undefined;
-  if(!flow||state===undefined)return undefined;
-  this.pending.delete(state);
-  if(error!==undefined||code===undefined||!codePattern.test(code))return undefined;
-  if(flow.requireIss?iss!==flow.issuer:(iss!==undefined&&iss!==flow.issuer))return undefined;
-  if(flow.generation!==this.generation(flow.id)||this.lifetime.signal.aborted)return undefined;
-  this.exchanging.set(flow.id,(this.exchanging.get(flow.id)??0)+1);
+  if(!flow||state===undefined){this.prune();return undefined;}
+  this.pending.delete(state);this.prune();
+  if(flow.expires<=Date.now()){this.fail(flow.id,'state_expired');return undefined;}
+  if(error!==undefined){this.fail(flow.id,/^[a-z_]{1,40}$/.test(error)?error:'access_denied');return undefined;}
+  if(code===undefined||!codePattern.test(code)){this.fail(flow.id,'invalid_callback');return undefined;}
+  if(flow.requireIss?iss!==flow.issuer:(iss!==undefined&&iss!==flow.issuer)){this.fail(flow.id,'issuer_mismatch');return undefined;}
+  if(flow.generation!==this.generation(flow.slot)||this.lifetime.signal.aborted)return undefined;
+  this.exchanging.set(flow.slot,(this.exchanging.get(flow.slot)??0)+1);
   try{
    const reply=await this.token({...flow.client,token_endpoint:flow.token_endpoint},{grant_type:'authorization_code',code,redirect_uri:flow.redirect,code_verifier:flow.verifier,resource:flow.audience},AbortSignal.any([AbortSignal.timeout(30000),this.lifetime.signal]));
-   if(reply.json?.error==='invalid_client')this.clientRejected.add(flow.id);
+   if(reply.json?.error==='invalid_client'){this.clientRejected.add(flow.id);throw new OAuthError('invalid_client');}
+   if(reply.status!==200)throw new OAuthError('token_exchange_failed');
    const t=this.tokens(reply);
    // A login that is already out of date and cannot be renewed would only look signed in.
-   if(t.expires_at!==undefined&&t.expires_at<=Date.now()&&t.refresh_token===undefined)return undefined;
-   if(flow.generation!==this.generation(flow.id))return undefined;
-   writeMcpOAuth(this.secrets,flow.id,{version:1,resource:flow.resource,audience:flow.audience,redirect_uri:flow.redirect,issuer:flow.issuer,token_endpoint:flow.token_endpoint,client_id:flow.client.client_id,...(flow.client.client_secret!==undefined?{client_secret:flow.client.client_secret}:{}),
-    token_endpoint_auth_method:flow.client.method,...t,...(t.scope===undefined&&flow.scope?{scope:flow.scope}:{}),...(flow.revocation_endpoint?{revocation_endpoint:flow.revocation_endpoint}:{})});
-  }catch{return undefined;}
-  finally{const left=(this.exchanging.get(flow.id)??1)-1;if(left>0)this.exchanging.set(flow.id,left);else this.exchanging.delete(flow.id);}
+   if(t.expires_at!==undefined&&t.expires_at<=Date.now()&&t.refresh_token===undefined)throw new OAuthError('token_response_invalid');
+   if(flow.generation!==this.generation(flow.slot))return undefined;
+   try{
+    writeMcpOAuth(this.secrets,flow.id,{version:1,resource:flow.resource,audience:flow.audience,redirect_uri:flow.redirect,issuer:flow.issuer,token_endpoint:flow.token_endpoint,client_id:flow.client.client_id,...(flow.client.client_secret!==undefined?{client_secret:flow.client.client_secret}:{}),
+     token_endpoint_auth_method:flow.client.method,...t,...(t.scope===undefined&&flow.scope?{scope:flow.scope}:{}),...(flow.revocation_endpoint?{revocation_endpoint:flow.revocation_endpoint}:{})});
+   }catch{throw new OAuthError('save_failed');}
+   // The client stays on file after logout; failing to keep this copy does not undo the login.
+   try{writeMcpOAuthClient(this.secrets,flow.id,{version:1,issuer:flow.issuer,redirect_uri:flow.redirect,client_id:flow.client.client_id,...(flow.client.client_secret!==undefined?{client_secret:flow.client.client_secret}:{}),token_endpoint_auth_method:flow.client.method});}catch{}
+  }catch(error){this.fail(flow.id,error instanceof OAuthError?error.code:'token_exchange_failed');return undefined;}
+  finally{const left=(this.exchanging.get(flow.slot)??1)-1;if(left>0)this.exchanging.set(flow.slot,left);else this.exchanging.delete(flow.slot);}
   // A renewal that started with the previous login must not overwrite this one.
-  this.bump(flow.id);this.held.delete(flow.id);this.needs.delete(flow.id);this.clientRejected.delete(flow.id);
+  this.bump(flow.slot);this.held.delete(flow.slot);this.needs.delete(flow.slot);this.clientRejected.delete(flow.id);this.failures.delete(flow.id);
   try{this.onLogin(flow.id);}catch{}
   return {id:flow.id};
  }
- private flag(id:string,credential:McpOAuthCredential){this.needs.set(id,fingerprint(credential));}
+ private flag(id:string,credential:McpOAuthCredential){this.needs.set(slotOf(id,credential.resource),fingerprint(credential));}
+ private flagged(id:string,credential:McpOAuthCredential){return this.needs.get(slotOf(id,credential.resource))===fingerprint(credential);}
  /** The credential for this server and exact URL, or "login required". */
  private usable(id:string,resource:string){
-  const credential=this.credential(id);
-  if(!credential||credential.resource!==resource||this.needs.get(id)===fingerprint(credential))throw new McpLoginRequired();
+  const credential=this.credential(id,resource);
+  if(!credential||credential.resource!==resource||this.flagged(id,credential))throw new McpLoginRequired();
   return credential;
  }
  private renew(id:string,resource:string,rejected:string,signal?:AbortSignal){
   // One renewal per login and URL: a request for another URL never receives this login's token.
-  const key=`${id}\n${resource}`;let flight=this.flights.get(key);
+  const key=slotOf(id,resource);let flight=this.flights.get(key);
   if(!flight){
    // Shared by every caller and bound to the connector's lifetime: a caller that gives up only stops waiting.
    const created=this.exchange(id,resource,rejected);flight=created;this.flights.set(key,created);
@@ -276,7 +313,7 @@ export class McpOAuth{
   return abandon(flight,signal).then(c=>c.access_token);
  }
  private async exchange(id:string,resource:string,rejected:string){
-  const known=this.usable(id,resource),generation=this.generation(id);
+  const known=this.usable(id,resource),slot=slotOf(id,resource),generation=this.generation(slot);
   // Another caller already renewed it.
   if(known.access_token!==rejected)return known;
   if(!known.refresh_token){this.flag(id,known);throw new McpLoginRequired();}
@@ -284,16 +321,16 @@ export class McpOAuth{
   try{reply=await this.token({...known,method:known.token_endpoint_auth_method},{grant_type:'refresh_token',refresh_token:known.refresh_token,resource:known.audience??known.resource},this.lifetime.signal);}
   catch{throw Error('oauth_refresh_failed');}
   // The login was replaced or removed while the request was out: whatever is stored now wins.
-  if(generation!==this.generation(id))return this.usable(id,resource);
+  if(generation!==this.generation(slot))return this.usable(id,resource);
   if(reply.status===400||reply.status===401){if(reply.json?.error==='invalid_client')this.clientRejected.add(id);this.flag(id,known);throw new McpLoginRequired();}
   let t:ReturnType<McpOAuth['tokens']>;
   try{t=this.tokens(reply);}catch{throw Error('oauth_refresh_failed');}
-  const {expires_at:_,scope:__,...rest}=known;
-  const next:McpOAuthCredential={...rest,access_token:t.access_token,refresh_token:t.refresh_token??known.refresh_token,...(t.expires_at!==undefined?{expires_at:t.expires_at}:{}),...((t.scope??known.scope)!==undefined?{scope:(t.scope??known.scope)!}:{})};
-  try{writeMcpOAuth(this.secrets,id,next);this.held.delete(id);}
+  const {expires_at:_,lifetime:___,scope:__,...rest}=known;
+  const next:McpOAuthCredential={...rest,access_token:t.access_token,refresh_token:t.refresh_token??known.refresh_token,...(t.expires_at!==undefined?{expires_at:t.expires_at}:{}),...(t.lifetime!==undefined?{lifetime:t.lifetime}:{}),...((t.scope??known.scope)!==undefined?{scope:(t.scope??known.scope)!}:{})};
+  try{writeMcpOAuth(this.secrets,id,next);this.held.delete(slot);}
   catch{
    // The provider may have retired the old refresh token already, so the renewed login is kept in memory and written again later.
-   this.held.set(id,{credential:next,generation,retry:Date.now()+5000});
+   this.held.set(slot,{credential:next,generation,retry:Date.now()+5000});
    console.error(`MCP OAuth: could not save the renewed login of "${id}"; it is kept in memory and saving is retried`);
   }
   return next;
@@ -306,7 +343,9 @@ export class McpOAuth{
    access:async signal=>{
     signal?.throwIfAborted();
     const credential=this.usable(id,resource);
-    if(credential.expires_at!==undefined&&credential.expires_at-Date.now()<=60_000){
+    // A short-lived token is renewed when half of its lifetime is gone (at the latest 60 s before the end), not before every request.
+    const margin=credential.lifetime===undefined?60_000:Math.min(60_000,credential.lifetime*500);
+    if(credential.expires_at!==undefined&&credential.expires_at-Date.now()<=margin){
      if(!credential.refresh_token){this.flag(id,credential);throw new McpLoginRequired();}
      return this.renew(id,resource,credential.access_token,signal);
     }
@@ -314,39 +353,45 @@ export class McpOAuth{
    },
    refresh:async(rejected,signal)=>{signal?.throwIfAborted();return this.renew(id,resource,rejected,signal);},
    // Only a login that is still the rejected one is marked; a refusal that arrives after a new login says nothing about it.
-   reject:token=>{const credential=this.credential(id);if(!credential||credential.resource!==resource||credential.access_token!==token)return false;this.flag(id,credential);return true;},
-   secrets:()=>{const credential=this.credential(id);return credential?[credential.access_token,...(credential.refresh_token?[credential.refresh_token]:[])]:[];},
+   reject:token=>{const credential=this.credential(id,resource);if(!credential||credential.access_token!==token)return false;this.flag(id,credential);return true;},
+   secrets:()=>{const credential=this.credential(id,resource);return credential?[credential.access_token,...(credential.refresh_token?[credential.refresh_token]:[])]:[];},
   };
  }
- /** Login state per server id, for ids saved as OAuth and for any id that has a credential or a login in progress. Never returns token values. */
+ /** Login state per server id, for ids saved as OAuth and for any id that has a login or one in progress. The top-level fields describe the login for the saved URL; `logins` lists every URL that has one, so the screen can tell whether an edited URL is covered. Never returns token values. */
  states(servers:readonly {id:string;url?:string|undefined;oauth?:true|undefined}[]):McpOAuthState[]{
   this.prune();
   const saved=new Map(servers.filter(s=>s.oauth&&s.url!==undefined).map(s=>[s.id,mcpUrl(s.url!)?.href]));
-  let stored:string[]=[];try{stored=listMcpOAuth(this.secrets);}catch{}
+  let listed:{id:string}[]=[];try{listed=listMcpOAuth(this.secrets);}catch{}
   const pending=new Set([...this.pending.values()].map(f=>f.id));
-  return [...new Set([...saved.keys(),...stored,...pending])].sort().slice(0,32).map(id=>{
-   const credential=this.credential(id),want=saved.get(id),matches=!!credential&&(!saved.has(id)||credential.resource===want);
-   return {id,pending:pending.has(id),resource_matches:matches,resource:credential?.resource??null,
-    status:!credential?'signed_out' as const:this.needs.get(id)===fingerprint(credential)?'needs_login' as const:'signed_in' as const,
-    ...(this.held.has(id)?{unsaved:true as const}:{})};
+  const held=[...this.held.keys()].map(idOf);
+  return [...new Set([...saved.keys(),...listed.map(e=>e.id),...pending,...held,...this.failures.keys()])].sort().slice(0,32).map(id=>{
+   const logins:McpOAuthLogin[]=this.credentials(id).map(c=>({resource:c.resource,status:this.flagged(id,c)?'needs_login' as const:'signed_in' as const,...(this.held.has(slotOf(id,c.resource))?{unsaved:true as const}:{})}));
+   const want=saved.get(id),live=want!==undefined?logins.find(l=>l.resource===want):logins[0],failure=this.failures.get(id);
+   return {id,pending:pending.has(id),resource_matches:!!live,resource:live?.resource??null,status:live?.status??'signed_out' as const,logins,
+    ...(logins.some(l=>l.unsaved)?{unsaved:true as const}:{}),...(failure?{failure}:{})};
   });
  }
- /** Forgets in-memory state of a server whose credential is gone or replaced. */
- forget(id:string){this.bump(id);this.drop(id);this.needs.delete(id);this.clientRejected.delete(id);}
- /** A configuration was saved: logins in progress for any other id are cancelled, so a late return cannot store a login for a deleted connection. */
- forgetExcept(keep:ReadonlySet<string>){
-  for(const id of new Set([...[...this.pending.values()].map(f=>f.id),...this.exchanging.keys(),...this.starting.keys()]))if(!keep.has(id))this.forget(id);
+ /** Forgets in-memory state of a server whose logins are gone or replaced: every URL of it, the client rejection and the last failure. */
+ forget(id:string){
+  for(const slot of this.slotsOf(id))this.forgetSlot(slot);
+  this.clientRejected.delete(id);this.failures.delete(id);
  }
- /** Removes the credential first, then asks the provider to revoke the token (best effort, 10 s, failures ignored). */
- async logout(id:string){
-  if(!idPattern.test(id))throw Error('Invalid MCP OAuth request');
-  // Read first: a renewed login that is only held in memory is the one to revoke.
-  const credential=this.credential(id);
-  this.forget(id);
-  writeMcpOAuth(this.secrets,id,undefined);
-  const endpoint=credential?.revocation_endpoint?oauthUrl(credential.revocation_endpoint,mcpUrl(credential.resource)?.protocol==='http:'):undefined;
-  // The client secret goes along, so only the token endpoint's own origin is trusted with it.
-  if(!credential||!endpoint||endpoint.origin!==new URL(credential.token_endpoint).origin)return;
+ private forgetSlot(slot:string){this.bump(slot);this.dropSlot(slot);this.held.delete(slot);this.needs.delete(slot);}
+ /** A configuration was saved (`keep`: connection ID to its saved URL for every OAuth connection): logins in progress for other connections, and for other URLs of kept ones, are cancelled, so a late return cannot store a login nobody uses. */
+ forgetExcept(keep:ReadonlyMap<string,string>){
+  for(const id of this.failures.keys())if(!keep.has(id))this.failures.delete(id);
+  const active=new Set([...this.pending.values()].map(f=>f.slot));
+  for(const source of [this.exchanging,this.starting,this.held])for(const slot of source.keys())active.add(slot);
+  for(const slot of active){
+   const id=idOf(slot);
+   if(!keep.has(id))this.forget(id);
+   else if(slot.slice(id.length+1)!==keep.get(id))this.forgetSlot(slot);
+  }
+ }
+ /** Asks the provider to revoke a login (best effort, 10 s, failures ignored). The client secret goes along, so only the token endpoint's own origin is trusted with it. */
+ async revoke(credential:McpOAuthCredential){
+  const endpoint=credential.revocation_endpoint?oauthUrl(credential.revocation_endpoint,mcpUrl(credential.resource)?.protocol==='http:'):undefined;
+  if(!endpoint||endpoint.origin!==new URL(credential.token_endpoint).origin)return;
   const refresh=credential.refresh_token!==undefined;
   try{
    const body=new URLSearchParams({token:refresh?credential.refresh_token!:credential.access_token,token_type_hint:refresh?'refresh_token':'access_token',client_id:credential.client_id}),headers:Record<string,string>={'Content-Type':'application/x-www-form-urlencoded'};
@@ -356,6 +401,18 @@ export class McpOAuth{
    }
    await this.send(endpoint,{method:'POST',headers,body:body.toString()},this.lifetime.signal,false,10);
   }catch{}
+ }
+ /** Removes the login for one URL (or every URL of the connection) first, then asks the provider to revoke it. The client on file stays, so the next login needs no form. Returns the URLs that lost their login. */
+ async logout(id:string,resource?:string){
+  if(!idPattern.test(id))throw Error('Invalid MCP OAuth request');
+  // Read first: a renewed login that is only held in memory is the one to revoke.
+  const targets=this.credentials(id).filter(c=>resource===undefined||c.resource===resource);
+  if(resource===undefined){
+   this.forget(id);
+   for(const entry of listMcpOAuth(this.secrets))if(entry.id===id)removeMcpOAuthFile(this.secrets,entry.file);
+  }else{this.forgetSlot(slotOf(id,resource));removeMcpOAuth(this.secrets,id,resource);}
+  for(const credential of targets)await this.revoke(credential);
+  return targets.map(c=>c.resource);
  }
  close(){this.pending.clear();this.lifetime.abort();}
 }

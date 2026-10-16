@@ -345,3 +345,18 @@ test('an unreadable saved token is reported by name and \"none\" removes it',asy
  assert.deepEqual(tokenChanges([{...card('token'),token:'new-token-123456'}],status),[{id:'remote',value:'new-token-123456'}]);
  assert.deepEqual(tokenChanges([card('none')],{tokens:[],token_errors:[]}),[]);
 });
+test('tool choices survive an edited URL and a new check; only tools that no longer exist are dropped',async()=>{
+ const {rememberTools,mergeCatalog}=await import(pathToFileURL(resolve('web/src/mcp-tools.js')).href);
+ const card={catalog:[{name:'read',selected:true,readOnly:true},{name:'send',selected:true,readOnly:false,approval:true},{name:'gone',selected:true,readOnly:false}],remembered:{}};
+ // The URL is edited: the list is cleared but the choices are remembered, also over a second edit.
+ const edited={...card,catalog:[],remembered:rememberTools(card)};
+ const again={...edited,catalog:[],remembered:rememberTools(edited)};
+ const tools=[{name:'read',readOnlyHint:true},{name:'send'},{name:'extra'}];
+ for(const source of [card,edited,again]){
+  const merged=mergeCatalog(tools,source);
+  assert.deepEqual(merged.map((t:{name:string;selected:boolean;readOnly:boolean;approval?:boolean})=>[t.name,t.selected,t.readOnly,t.approval]),[['read',true,true,undefined],['send',true,false,true],['extra',false,false,undefined]]);
+  assert.equal(merged[0].hint,true);
+ }
+ // A tool that came back after a check without it is still remembered until the card is saved.
+ assert.deepEqual(Object.keys(rememberTools({...edited,catalog:mergeCatalog(tools,edited)})).sort(),['extra','gone','read','send']);
+});

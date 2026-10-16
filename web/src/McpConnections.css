@@ -1,6 +1,7 @@
 .mcp-server { margin:18px 0; padding:16px; min-width:0; border:1px solid var(--border); border-radius:10px; }
 .mcp-server legend { padding:0 6px; font-size:13px; font-weight:600; overflow-wrap:anywhere; }
 .mcp-server > .field-pair,.mcp-server > .field,.mcp-server > .inline-actions { margin-top:16px; }
+.mcp-settings a { color:var(--green); text-decoration:underline; text-underline-offset:2px; }
 .mcp-server code { overflow-wrap:anywhere; }
 .mcp-oauth-state { margin:0 0 12px; font-weight:600; }
 .mcp-enabled { display:flex; align-items:center; gap:8px; }
@@ -15,4 +16,5 @@
 .mcp-tool small { display:block; margin-top:5px; color:var(--muted); font-size:11px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
 .mcp-tool select { flex:0 0 auto; width:auto; max-width:180px; padding:7px; border:1px solid var(--border); border-radius:6px; background:var(--paper); color:var(--text); font-size:11px; }
 .mcp-settings .saved-inline { min-height:20px; white-space:normal; }
+@media(max-width:480px) { .mcp-settings .mcp-client-fields { grid-template-columns:1fr; } }
 @media(max-width:600px) { .mcp-server { padding:12px; }.mcp-tool { flex-direction:column; gap:8px; }.mcp-tool select { margin-left:25px; max-width:calc(100% - 25px); font-size:16px; }.mcp-settings .form-actions { flex-wrap:wrap; } }

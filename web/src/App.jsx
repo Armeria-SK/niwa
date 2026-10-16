@@ -21,7 +21,7 @@ const navItems = [
   { id: 'activity', label: '活動', icon: ActivityIcon },
   { id: 'settings', label: '設定', icon: SettingsIcon },
 ];
-function readPage() { const id = window.location.hash.slice(1); return navItems.some(item => item.id === id) ? id : 'activity'; }
+function readPage() { const id = window.location.hash.slice(1).split('/')[0]; return navItems.some(item => item.id === id) ? id : 'activity'; }
 
 export function App() {
   const [page, setPage] = useState(readPage);

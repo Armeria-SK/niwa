@@ -38,7 +38,7 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 function sendNotice(res: ServerResponse, status: number, message: string): void {
   res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" });
-  res.end(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Niwa</title><body style="font-family:sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.7"><p>${message}</p><p><a href="/#settings">Niwaの設定へ戻る</a></p></body></html>`);
+  res.end(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Niwa</title><body style="font-family:sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.7"><p>${message}</p><p><a href="/#settings/mcp">Niwaの画面に戻る</a></p></body></html>`);
 }
 /** Webhook bodies: at most 64 KiB of UTF-8 JSON or plain text. The content stays untrusted data for the next run. */
 async function readHook(req: IncomingMessage): Promise<{ type: string; text: string } | number> {
