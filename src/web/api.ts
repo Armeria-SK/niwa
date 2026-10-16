@@ -10,7 +10,7 @@ import { Type, type TSchema } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { DomainError } from '../domain/types.ts';
 import { ATTACHMENT_LIMITS } from '../domain/attachments.ts';
-import type { Agent, Settings } from '../domain/types.ts';
+import type { Agent, FallbackProvider, Settings } from '../domain/types.ts';
 import type { Runtime } from '../runtime/runtime.ts';
 import { WebAuth } from './auth.ts';
 import { LiveStreams } from './live-stream.ts';
@@ -24,6 +24,7 @@ import type { XOAuth } from '../auth/x-oauth.ts';
 const string = Type.String({ minLength: 1, maxLength: 20_000 });
 const id = Type.String({ pattern: '^[0-9a-f-]{36}$' });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
+const provider = Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription'), Type.Literal('openai_compatible')]);
 const scheduleFields = { agent_id: id, room_id: id, prompt: string,
       interval_ms: Type.Integer({ minimum: 60_000, maximum: 365 * 86400_000 }), next_at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }),
       max_runs: Type.Integer({ minimum: 1, maximum: 10_000 }), timeout_ms: Type.Integer({ minimum: 60_000, maximum: 86400_000 }),
@@ -155,19 +156,29 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       run: (_m, b) => runtime.createConversation(admin, b.id as string, b.title as string, b.body as string, b.participants as string[] | undefined, b.agent_id as string | undefined) },
     { method: 'GET', path: /^\/api\/model-settings$/, run: () => runtime.modelSettings(admin) },
     { method: 'GET', path: /^\/api\/model-settings\/generated$/, run: () => runtime.generatedModel(admin) },
-    { method: 'PUT', path: /^\/api\/model-settings\/generated$/, schema: object({ provider: Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription')]), model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 64 }) }),
-      run: (_m, b) => models.selectGenerated(b.provider as 'ollama' | 'openai_subscription', b.model as string, b.reasoning as string) },
+    { method: 'PUT', path: /^\/api\/model-settings\/generated$/, schema: object({ provider, model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 64 }) }),
+      run: (_m, b) => models.selectGenerated(b.provider as Agent['provider'], b.model as string, b.reasoning as string) },
     { method: 'GET', path: /^\/api\/model-routes$/, run: () => runtime.modelRoutes(admin) },
     { method: 'PUT', path: /^\/api\/common-rules$/, schema: object({ revision: Type.Integer({ minimum: 1 }), body: Type.String({ maxLength: 20_000 }) }),
       run: (_m, b) => { runtime.updateCommonRules(admin, b.revision as number, b.body as string); return runtime.commonRules(admin); } },
     { method: 'PATCH', path: /^\/api\/model-settings$/, schema: object({ ollamaUrl: Type.Optional(Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 2048 })])), maxParallel: Type.Optional(Type.Integer({ minimum: 1, maximum: 8 })) }),
       run: (_m, b) => { if (b.ollamaUrl !== undefined) runtime.configureOllama(admin, b.ollamaUrl as string | null); if (b.maxParallel !== undefined) runtime.configureOllamaParallel(admin, b.maxParallel as number); return runtime.modelSettings(admin); } },
     { method: 'GET', path: /^\/api\/models$/, run: () => models.catalog() },
-    { method: 'PUT', path: /^\/api\/model-settings\/fallback$/, schema: object({ model: Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 256 })]) }),
-      run: (_m, b) => models.selectFallback(b.model as string | null) },
-    { method: 'PUT', path: /^\/api\/agents\/([0-9a-f-]{36})\/model$/, schema: object({ provider: Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription')]), model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.Optional(Type.String({ maxLength: 20 })) }),
-      run: (m, b) => b.provider === 'ollama' ? models.select(m[1]!, b.model as string) : models.selectSubscription(m[1]!, b.model as string, b.reasoning as string) },
-    { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/profile$/, schema: object({ patch: profileSchema, version: Type.String({ pattern: '^[0-9a-f]{64}$' }), selection: Type.Optional(object({ provider: Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription')]), model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 20 }) })) }), run: (m, b) => models.updateProfile(m[1]!, b.patch as Record<string, unknown>, b.version as string, b.selection as Pick<Agent, 'provider' | 'model' | 'reasoning'> | undefined) },
+    // The API key is write-only: responses report only whether one is configured for the saved URL.
+    { method: 'GET', path: /^\/api\/openai-compatible$/, run: () => models.compatibleStatus() },
+    { method: 'PUT', path: /^\/api\/openai-compatible$/, schema: object({ url: Type.Optional(Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 2048 })])),
+      apiKey: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })), parallel: Type.Optional(Type.Integer({ minimum: 1, maximum: 8 })) }),
+      run: (_m, b) => models.configureCompatible(b as { url?: string | null; apiKey?: string; parallel?: number }) },
+    { method: 'DELETE', path: /^\/api\/openai-compatible\/key$/, schema: object({}), run: () => models.clearCompatibleKey() },
+    { method: 'GET', path: /^\/api\/openai-compatible\/models$/, run: () => models.compatibleCatalog() },
+    { method: 'POST', path: /^\/api\/openai-compatible\/check$/, schema: object({}), run: () => models.checkCompatible() },
+    { method: 'PUT', path: /^\/api\/model-settings\/fallback$/, schema: object({ model: Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 256 })]),
+      provider: Type.Optional(Type.Union([Type.Literal('ollama'), Type.Literal('openai_compatible')])) }),
+      run: (_m, b) => models.selectFallback(b.model as string | null, (b.provider ?? 'ollama') as FallbackProvider) },
+    { method: 'PUT', path: /^\/api\/agents\/([0-9a-f-]{36})\/model$/, schema: object({ provider, model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.Optional(Type.String({ maxLength: 20 })) }),
+      run: (m, b) => b.provider === 'ollama' ? models.select(m[1]!, b.model as string) : b.provider === 'openai_compatible' ? models.selectCompatible(m[1]!, b.model as string)
+        : models.selectSubscription(m[1]!, b.model as string, b.reasoning as string) },
+    { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/profile$/, schema: object({ patch: profileSchema, version: Type.String({ pattern: '^[0-9a-f]{64}$' }), selection: Type.Optional(object({ provider, model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 20 }) })) }), run: (m, b) => models.updateProfile(m[1]!, b.patch as Record<string, unknown>, b.version as string, b.selection as Pick<Agent, 'provider' | 'model' | 'reasoning'> | undefined) },
     { method: 'DELETE', path: /^\/api\/agents\/([0-9a-f-]{36})$/, schema: object({ version: Type.String({ pattern: '^[0-9a-f]{64}$' }) }), run: async (m, b) => { runtime.deleteAgent(admin, m[1]!, b.version as string);if(workareas)await runtime.workareas.purgeRetired(workareas);return { ok: true }; } },
     { method: 'GET', path: /^\/api\/state$/, run: () => ({ approvals: runtime.approvals(admin), businessTasks: runtime.businessTasks(admin), deletedAgents: runtime.deletedAgents(admin), agents: runtime.agents(admin).map(agent => ({ ...agent, profile: runtime.profile(admin, agent.id), profile_version: runtime.profileVersion(admin, agent.id), memory_version: runtime.memoryVersion(admin, agent.id) })),
       rooms: runtime.rooms(admin).map(room => ({ ...room, ...runtime.roomPreferences(admin, room.id), ...runtime.messageSummary(admin, room.id), acknowledgments: runtime.acknowledgments(admin, room.id), participants: runtime.participants(admin, room.id) })), settings: runtime.settings(admin), commonRules: runtime.commonRules(admin), tasks: runtime.tasks.list(admin).map(task => ({ ...task, work_root_id:runtime.tasks.workRoot(admin,String(task.id)), control_revision:runtime.tasks.controlRevision(admin,String(task.id)), progress:runtime.tasks.progress(admin,String(task.id)), replies: runtime.tasks.replies(admin, task.id) })) }) },

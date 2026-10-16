@@ -159,7 +159,7 @@ export function App() {
     const ok = await mutate(async () => {
       const changed = model && (model !== memberMap[id].model || provider !== memberMap[id].provider || effort !== memberMap[id].effort);
       ({ version } = await api(`/agents/${id}/profile`, 'PATCH', { patch: profile, version: profile_version,
-        ...(changed ? { selection: { provider, model, reasoning: provider === 'ollama' ? 'native' : effort } } : {}) }));
+        ...(changed ? { selection: { provider, model, reasoning: provider === 'ollama' || provider === 'openai_compatible' ? 'native' : effort } } : {}) }));
     });
     return ok ? version : false;
   }
