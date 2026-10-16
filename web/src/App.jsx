@@ -106,7 +106,7 @@ export function App() {
       setPaused(state.settings.paused);
       setSchedules(savedSchedules);
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
-        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, ollamaUrl: modelSettings.ollamaUrl || '', rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
+        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, ollamaUrl: modelSettings.ollamaUrl || '', maxParallel: modelSettings.maxParallel ?? 1, rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
       setReady(true);
       setLoadError('');
     } catch (error) { if (version !== refreshVersion.current) return; if (error.status === 401) { setAuthenticated(false); setReady(false); } else { setLoadError('庭を読み込めませんでした。サーバーの接続とバージョンを確認してください。'); notify(error.message); } }
@@ -187,7 +187,8 @@ export function App() {
   function saveSettings(next) { return mutate(async () => {
     if (next.rules !== settings.rules) await api('/common-rules', 'PUT', { revision: next.rulesRevision, body: next.rules });
     await api('/settings', 'PATCH', { generatedLimit: Number(next.maxMembers), concurrencyLimit: next.unlimited ? null : Number(next.concurrent), backupDays: Number(next.backupDays), backupTime: next.backupTime, backupEnabled: next.backupEnabled, autonomous: next.autonomous });
-    if (next.ollamaUrl !== settings.ollamaUrl) await api('/model-settings', 'PATCH', { ollamaUrl: next.ollamaUrl || null });
+    const model = { ...(next.ollamaUrl !== settings.ollamaUrl ? { ollamaUrl: next.ollamaUrl || null } : {}), ...(Number(next.maxParallel) !== settings.maxParallel ? { maxParallel: Number(next.maxParallel) } : {}) };
+    if (Object.keys(model).length) await api('/model-settings', 'PATCH', model);
     setSettings(current => ({ ...current, theme: next.theme }));
   }); }
   const visibleThreads = threads.filter(item => (scope === 'archived' ? item.archived : !item.archived) && (scope === 'all' || scope === 'archived' || item.scope === scope) && (roomSearch.ids?.has(item.id) || `${item.title} ${item.members.map(id => memberMap[id]?.name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivity - a.lastActivity);

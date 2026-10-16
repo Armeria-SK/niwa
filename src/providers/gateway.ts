@@ -3,19 +3,23 @@ import type { Agent } from '../domain/types.ts';
 import { check } from '../domain/types.ts';
 import type { Runtime } from '../runtime/runtime.ts';
 import type { ResolveAdapter } from '../runtime/turns.ts';
-import { inspectOllamaModel, listOllamaModels, OllamaAdapter } from './ollama/adapter.ts';
+import { inspectOllamaModel, listOllamaModels, ollamaUrl, OllamaAdapter, type OllamaSlot } from './ollama/adapter.ts';
+import { OllamaLimiter } from './ollama/limiter.ts';
 import type { Subscription } from '../auth/subscription.ts';
 import { createHash } from 'node:crypto';
-import { ConnectionGate } from './shared/serial.ts';
 import type { ModelAdapter } from './shared/adapter.ts';
 
 /** Host-owned selection and discovery. URLs and model identity never come from model tool calls. */
 export class ModelGateway {
   #runtime: Runtime;
   #fetch: typeof fetch;
-  #gate = new ConnectionGate();
+  #limiter = new OllamaLimiter();
   readonly subscription: Subscription | undefined;
   constructor(runtime: Runtime, fetchImpl = fetch, subscription?: Subscription) { this.#runtime = runtime; this.#fetch = fetchImpl; this.subscription = subscription; }
+  #slot(url: string): OllamaSlot {
+    const key = ollamaUrl(url, 'chat').href;
+    return signal => this.#limiter.acquire(key, () => this.#runtime.modelSettings(this.#runtime.administrator()).maxParallel, signal);
+  }
   #url(): string {
     const url = this.#runtime.modelSettings(this.#runtime.administrator()).ollamaUrl;
     check(url, 'conflict', 'Ollama is not configured');
@@ -88,7 +92,7 @@ export class ModelGateway {
       const profile = await this.subscription.profile(agent.model, agent.reasoning, signal); signal?.throwIfAborted();
       check(subscription.revision === generation, 'conflict', 'Subscription account changed');
       const adapter = subscription.connection.create(profile);
-      return this.#gate.wrap({ adapter_id: adapter.adapter_id, capabilities: adapter.capabilities,
+      return { adapter_id: adapter.adapter_id, capabilities: adapter.capabilities,
         ...(adapter.context_window === undefined ? {} : { context_window: adapter.context_window }),
         async *run(request, options) {
           check(subscription.revision === generation, 'conflict', 'Subscription account changed');
@@ -107,14 +111,14 @@ export class ModelGateway {
           }
           if (completed && !failed && subscription.revision === generation) runtime.providerLimits.recovered(admin, key, revision);
         },
-      });
+      };
     }
     check(agent.provider === 'ollama', 'conflict', 'Subscription login and capability verification are required');
     const url = this.#url();
     const model = await inspectOllamaModel(url, agent.model, this.#fetch);
     signal?.throwIfAborted();
     check(this.#url() === url, 'conflict', 'Ollama configuration changed during discovery');
-    return this.#record(new OllamaAdapter(url, model, this.#fetch), agent.id, agent.model, 'configured');
+    return this.#record(new OllamaAdapter(url, model, this.#fetch, this.#slot(url)), agent.id, agent.model, 'configured');
   };
   #record(adapter: ModelAdapter, agentId: string, model: string, reason: 'configured' | 'quota'): ModelAdapter {
     const runtime = this.#runtime;
@@ -135,6 +139,6 @@ export class ModelGateway {
     check(model.tools, 'conflict', 'Fallback model must support tools');
     const current = this.#runtime.modelSettings(admin);
     check(current.ollamaUrl === settings.ollamaUrl && current.fallbackModel === settings.fallbackModel, 'conflict', 'Fallback settings changed');
-    return this.#record(new OllamaAdapter(settings.ollamaUrl, model, this.#fetch), agent.id, settings.fallbackModel, 'quota');
+    return this.#record(new OllamaAdapter(settings.ollamaUrl, model, this.#fetch, this.#slot(settings.ollamaUrl)), agent.id, settings.fallbackModel, 'quota');
   }
 }

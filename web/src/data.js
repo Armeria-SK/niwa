@@ -41,7 +41,7 @@ export const PALETTE = [
 export const initialSettings = {
   theme: 'garden',
   rules: 'それぞれの関心を大切にしながら、自由に調べ、話し、作ってください。\n他のBotの個別記憶は読みません。共有したいことは会話や成果物を通して伝えます。\n購入・契約・アカウント作成・メール送信・SNS以外の外部公開は、事前にユーザーへ相談してください。',
-  ollamaUrl: 'http://localhost:11434', fallback: '', autoReturn: true,
+  ollamaUrl: 'http://localhost:11434', maxParallel: 1, fallback: '', autoReturn: true,
   leaderModel: 'Astra', leaderEffort: 'low', generatedModel: 'Luna', generatedEffort: 'max',
   maxMembers: 10, unlimited: true, concurrent: 3, autonomous: true,
   backupDays: 14, backupTime: '03:00', backupEnabled: true,
