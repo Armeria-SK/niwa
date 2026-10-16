@@ -98,7 +98,19 @@ APIキーと標準のChat Completions API（`POST {接続先URL}/chat/completion
 - APIキーは `secrets/openai-compatible-key.json`（権限0600）に保存し、画面やAPIの応答には表示しません。保存時のURLと同じ接続先にだけ送ります。通常バックアップには含まれません。
 - **API利用料はChatGPTのサブスクとは別に、接続先から請求されます。** 「接続を確認」はモデル一覧の取得だけで、応答の生成は行いません。
 - 同じ接続先へ同時に送る依頼の数（1〜8）を設定できます。利用制限（429）は表示された再確認時刻まで待機し、認証エラーは設定の確認を求めて停止します。
-- ChatGPTのサブスクでの接続（Codex）は、外部アプリ向けに公式公開された経路ではありません。予告なく使えなくなる可能性があるため、OpenAI互換APIまたはOllamaも設定しておくと継続できます。
+- ChatGPTのサブスクでの接続（Codex）は、外部アプリ向けに公式公開された経路ではありません。予告なく使えなくなる可能性があるため、OpenAI互換API・Claude（Anthropic API）またはOllamaも設定しておくと継続できます。
+
+### Claude（Anthropic API）で接続する
+
+Anthropic公式のSDK（`@anthropic-ai/sdk`）で、Claude APIのMessages API（`https://api.anthropic.com`）へAPIキーで接続します。「設定」→「モデルと接続」の「Claude（Anthropic API）」でAPIキーを保存すると、そのキーで使えるモデルの一覧（新しい順・表示名つき）を取得し、リーダー・新しいBotの標準モデル・メンバーごとのモデル、または利用上限時の切替先として選べます。モデルが一覧にあれば `claude-opus-5-5`（Claude Opus 5.5）を候補として選んでおきます。キーが拒否された場合を除き、一覧を取得できないときはモデルIDを直接入力できます。
+
+- **APIキーの用意**: ClaudeのMax・Teamプランでは、claude.aiの「設定」→「請求」からClaude Consoleの組織を連携すると、毎月のAPIクレジットが付きます。その組織のConsoleでAPIキーを作成して入力します（キーは通常 `sk-ant-` で始まります）。
+- **料金**: クレジットを超えた利用は、Consoleの組織に請求されます。Claude Codeを手元で対話的に使う分は、このクレジットの対象外です。「接続を確認」はモデル一覧の取得だけで、応答の生成（課金対象）は行いません。
+- APIキーは `secrets/anthropic-key.json`（権限0600）に保存し、画面やAPIの応答には表示しません。送り先は `https://api.anthropic.com` だけで、キー・送り先・認証方式は環境変数（`ANTHROPIC_API_KEY`・`ANTHROPIC_AUTH_TOKEN`・`ANTHROPIC_BASE_URL`）の影響を受けません。通常バックアップには含まれません。
+- **考える量**: 対応するモデルでは適応型の思考（adaptive thinking）を使い、Botの「推論の強さ」を `output_config.effort`（low・medium・high・xhigh・max）として送ります。`native` と `minimal` はそれぞれ medium と low として扱い、モデルが対応しない強さは一段ずつ下げます。ツールを使う一連の応答では、モデルが返した思考のブロックを署名ごと変えずに次の依頼へ戻します。Niwaは作業状況や文脈の長さに応じて会話を組み直すため、組み直した部分より後の思考はAPIが捨てる設定（`prefix_mismatch_behavior: "drop_block"`）で送り、エラーにはしません。
+- **安全上の拒否と自動のやり直し**: Claude Opus 5.5・Claude Opus 5・Claude Fable 5.1・Claude Sonnet 5.5では、既定でサーバー側の切替（`fallbacks: "default"`）を有効にしています。安全上の理由で応答を断られた場合、APIが同じ依頼を拒否の種類に応じてAnthropicが勧める別のモデルで自動的にやり直します。やり直した分はそのモデルの料金がかかります。それでも断られた場合は、内容の見直しを求めて停止します。
+- 出力の上限で応答が途中で止まった場合は、途中のツール操作を実行せずに停止します。利用制限（429）は表示された再確認時刻まで待機し、混雑（529）・サーバーエラー・通信断は既存の再確認方針で再試行します。認証エラー（401）・権限エラー（403）は設定の確認を求めて停止します。エラー文は固定の日本語で、応答本文とキーを含めません。
+- 同時に送る依頼の数（1〜8、既定2）を設定できます。
 
 ## 日常の起動・停止
 

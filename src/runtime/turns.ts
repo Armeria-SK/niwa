@@ -19,7 +19,9 @@ import { summarySchema } from '../domain/summary.ts';
 
 /** Return a fresh adapter each time; calls after memory corrections must discard opaque continuation. */
 /** Adapters the gateway substitutes for a subscription at its usage limit. */
-const FALLBACK_ADAPTERS: readonly string[] = ['ollama', 'openai-compatible'];
+const FALLBACK_ADAPTERS: readonly string[] = ['ollama', 'openai-compatible', 'anthropic'];
+/** Adapters that take the bot's reasoning effort; the Claude adapter maps it to output_config.effort. */
+const EFFORT_ADAPTERS: readonly string[] = ['openai-subscription', 'anthropic'];
 export type ResolveAdapter = (agent: Agent, taskId: string, signal?: AbortSignal) => Promise<ModelAdapter>;
 
 
@@ -149,7 +151,7 @@ export class TurnRunner {
             .filter(tool => (!phaseTool || tool.name === phaseTool)&&(!reportingReads||['conversation_send','task_report'].includes(tool.name))) : [],
           response_contract: { type: 'text' }, model_options: {},
           budget: { max_output_tokens: 4096, max_total_tokens: 64_000, max_requests: 1, max_tool_calls: 8 },
-          ...(adapter.adapter_id === 'openai-subscription' && isReasoningEffort(agent.reasoning) ? { reasoning_effort: agent.reasoning } : {}),
+          ...(EFFORT_ADAPTERS.includes(adapter.adapter_id) && isReasoningEffort(agent.reasoning) ? { reasoning_effort: agent.reasoning } : {}),
         });
         const requestForPhase = (): ModelRequest => {
           const request = makeRequest();

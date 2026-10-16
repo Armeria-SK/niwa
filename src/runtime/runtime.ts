@@ -23,6 +23,7 @@ import { check, text, DomainError, MODEL_PROVIDERS } from '../domain/types.ts';
 import type { Agent, FallbackProvider, Room, Message, Memory, Settings } from '../domain/types.ts';
 import { normalizeCompatibleUrl } from '../providers/openai-compatible/url.ts';
 import { openaiCompatibleSchema } from '../storage/openai-compatible-schema.ts';
+import { anthropicSchema } from '../storage/anthropic-schema.ts';
 import { openDatabase, transaction } from '../storage/database.ts';
 import { controlSchema, memoryMigrations } from '../storage/schema.ts';
 import { taskSchema } from '../storage/task-schema.ts';
@@ -103,7 +104,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -406,11 +407,17 @@ export class Runtime {
       ON CONFLICT(agent_id) DO UPDATE SET provider=excluded.provider,model=excluded.model,reason=excluded.reason,attempted_at=excluded.attempted_at`)
       .run(agentId, provider, model, reason, Date.now());
   }
-  modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null; maxParallel: number; fallbackProvider: FallbackProvider; compatibleUrl: string | null; compatibleParallel: number } {
+  modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null; maxParallel: number; fallbackProvider: FallbackProvider; compatibleUrl: string | null; compatibleParallel: number; anthropicParallel: number } {
     this.#admin(actor);
-    const row = this.#db.prepare('SELECT ollama_url,fallback_model,max_parallel,fallback_provider,compatible_url,compatible_parallel FROM model_settings WHERE id=1').get()!;
+    const row = this.#db.prepare('SELECT ollama_url,fallback_model,max_parallel,fallback_provider,compatible_url,compatible_parallel,anthropic_parallel FROM model_settings WHERE id=1').get()!;
     return { ollamaUrl: row.ollama_url as string | null, fallbackModel: row.fallback_model as string | null, maxParallel: row.max_parallel as number, fallbackProvider: row.fallback_provider as FallbackProvider,
-      compatibleUrl: row.compatible_url as string | null, compatibleParallel: Number(row.compatible_parallel) };
+      compatibleUrl: row.compatible_url as string | null, compatibleParallel: Number(row.compatible_parallel), anthropicParallel: Number(row.anthropic_parallel) };
+  }
+  /** Requests Niwa sends at once to the Claude API. Read per request, so running work keeps going. */
+  configureAnthropicParallel(actor: Actor, count: number): void {
+    this.#admin(actor);
+    check(Number.isInteger(count) && count >= 1 && count <= 8, 'invalid', 'Invalid parallel request count');
+    this.#db.prepare('UPDATE model_settings SET anthropic_parallel=? WHERE id=1').run(count);
   }
   /** Requests per Ollama endpoint that Niwa sends at once; match the server's OLLAMA_NUM_PARALLEL. Read per request, so no interruption is needed. */
   configureOllamaParallel(actor: Actor, count: number): void {
@@ -421,10 +428,10 @@ export class Runtime {
   /** Host must verify model capabilities against this exact endpoint before saving. */
   configureFallback(actor: Actor, url: string, model: string | null, provider: FallbackProvider = 'ollama'): void {
     this.#admin(actor);
-    check(provider === 'ollama' || provider === 'openai_compatible', 'invalid', 'Invalid provider');
+    check(provider === 'ollama' || provider === 'openai_compatible' || provider === 'anthropic', 'invalid', 'Invalid provider');
     const settings = this.modelSettings(actor);
-    // Clearing needs no endpoint; a selection must match the endpoint it was verified against.
-    check(model === null || (provider === 'ollama' ? settings.ollamaUrl : settings.compatibleUrl) === url, 'conflict', 'Model endpoint changed during discovery');
+    // Clearing needs no endpoint; a selection must match the endpoint it was verified against. The Claude API has one fixed endpoint.
+    check(model === null || provider === 'anthropic' || (provider === 'ollama' ? settings.ollamaUrl : settings.compatibleUrl) === url, 'conflict', 'Model endpoint changed during discovery');
     if (model !== null) text(model, 256);
     this.#db.prepare('UPDATE model_settings SET fallback_model=?,fallback_provider=? WHERE id=1').run(model, model === null ? settings.fallbackProvider : provider);
   }

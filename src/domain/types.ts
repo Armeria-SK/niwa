@@ -8,7 +8,7 @@ export interface Agent {
   reasoning: string;
   provider: ModelProvider;
 }
-export const MODEL_PROVIDERS = ['openai_subscription', 'ollama', 'openai_compatible'] as const;
+export const MODEL_PROVIDERS = ['openai_subscription', 'ollama', 'openai_compatible', 'anthropic'] as const;
 export type ModelProvider = typeof MODEL_PROVIDERS[number];
 export type FallbackProvider = Exclude<ModelProvider, 'openai_subscription'>;
 export interface Room {

@@ -58,7 +58,8 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     runtime = new Runtime(paths.state);
     const admin = runtime.administrator(); runtime.bootstrap(admin); runtime.tasks.recover(admin); runtime.tasks.recoverProviderWaits(admin,true);
     subscription = new Subscription(new FileCredentialStore(join(paths.secrets, 'codex.json')), () => runtime!.invalidateProvider(admin, 'openai_subscription'), {}, config.reasoningSummary===true);
-    const models = new ModelGateway(runtime, fetch, subscription, new FileApiKeyStore(join(paths.secrets, 'openai-compatible-key.json')));
+    const models = new ModelGateway(runtime, fetch, subscription, new FileApiKeyStore(join(paths.secrets, 'openai-compatible-key.json')),
+      { key: new FileApiKeyStore(join(paths.secrets, 'anthropic-key.json')), reasoningSummary: config.reasoningSummary === true });
     backups = new Backups(runtime, paths, config);
     const searchKey = readSearchKey(paths.secrets);
     const xClient = config.xAccountId ? readXClient(paths.secrets) : undefined;

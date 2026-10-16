@@ -24,7 +24,7 @@ import type { XOAuth } from '../auth/x-oauth.ts';
 const string = Type.String({ minLength: 1, maxLength: 20_000 });
 const id = Type.String({ pattern: '^[0-9a-f-]{36}$' });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
-const provider = Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription'), Type.Literal('openai_compatible')]);
+const provider = Type.Union([Type.Literal('ollama'), Type.Literal('openai_subscription'), Type.Literal('openai_compatible'), Type.Literal('anthropic')]);
 const scheduleFields = { agent_id: id, room_id: id, prompt: string,
       interval_ms: Type.Integer({ minimum: 60_000, maximum: 365 * 86400_000 }), next_at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }),
       max_runs: Type.Integer({ minimum: 1, maximum: 10_000 }), timeout_ms: Type.Integer({ minimum: 60_000, maximum: 86400_000 }),
@@ -193,12 +193,19 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'DELETE', path: /^\/api\/openai-compatible\/key$/, schema: object({}), run: () => models.clearCompatibleKey() },
     { method: 'GET', path: /^\/api\/openai-compatible\/models$/, run: () => models.compatibleCatalog() },
     { method: 'POST', path: /^\/api\/openai-compatible\/check$/, schema: object({}), run: () => models.checkCompatible() },
+    // The Claude API key is write-only as well; it is bound to the official API origin.
+    { method: 'GET', path: /^\/api\/anthropic$/, run: () => models.anthropicStatus() },
+    { method: 'PUT', path: /^\/api\/anthropic$/, schema: object({ apiKey: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })), parallel: Type.Optional(Type.Integer({ minimum: 1, maximum: 8 })) }),
+      run: (_m, b) => models.configureAnthropic(b as { apiKey?: string; parallel?: number }) },
+    { method: 'DELETE', path: /^\/api\/anthropic\/key$/, schema: object({}), run: () => models.clearAnthropicKey() },
+    { method: 'GET', path: /^\/api\/anthropic\/models$/, run: () => models.anthropicCatalog() },
+    { method: 'POST', path: /^\/api\/anthropic\/check$/, schema: object({}), run: () => models.checkAnthropic() },
     { method: 'PUT', path: /^\/api\/model-settings\/fallback$/, schema: object({ model: Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 256 })]),
-      provider: Type.Optional(Type.Union([Type.Literal('ollama'), Type.Literal('openai_compatible')])) }),
+      provider: Type.Optional(Type.Union([Type.Literal('ollama'), Type.Literal('openai_compatible'), Type.Literal('anthropic')])) }),
       run: (_m, b) => models.selectFallback(b.model as string | null, (b.provider ?? 'ollama') as FallbackProvider) },
     { method: 'PUT', path: /^\/api\/agents\/([0-9a-f-]{36})\/model$/, schema: object({ provider, model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.Optional(Type.String({ maxLength: 20 })) }),
       run: (m, b) => b.provider === 'ollama' ? models.select(m[1]!, b.model as string) : b.provider === 'openai_compatible' ? models.selectCompatible(m[1]!, b.model as string)
-        : models.selectSubscription(m[1]!, b.model as string, b.reasoning as string) },
+        : b.provider === 'anthropic' ? models.selectAnthropic(m[1]!, b.model as string, (b.reasoning as string | undefined) || 'medium') : models.selectSubscription(m[1]!, b.model as string, b.reasoning as string) },
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/profile$/, schema: object({ patch: profileSchema, version: Type.String({ pattern: '^[0-9a-f]{64}$' }), selection: Type.Optional(object({ provider, model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 20 }) })) }), run: (m, b) => models.updateProfile(m[1]!, b.patch as Record<string, unknown>, b.version as string, b.selection as Pick<Agent, 'provider' | 'model' | 'reasoning'> | undefined) },
     { method: 'DELETE', path: /^\/api\/agents\/([0-9a-f-]{36})$/, schema: object({ version: Type.String({ pattern: '^[0-9a-f]{64}$' }) }), run: async (m, b) => { runtime.deleteAgent(admin, m[1]!, b.version as string);if(workareas)await runtime.workareas.purgeRetired(workareas);return { ok: true }; } },
     { method: 'GET', path: /^\/api\/state$/, run: () => ({ approvals: runtime.approvals(admin), businessTasks: runtime.businessTasks(admin), deletedAgents: runtime.deletedAgents(admin), agents: runtime.agents(admin).map(agent => ({ ...agent, profile: runtime.profile(admin, agent.id), profile_version: runtime.profileVersion(admin, agent.id), memory_version: runtime.memoryVersion(admin, agent.id) })),

@@ -6,6 +6,7 @@ import { BackupStatus } from '../BackupStatus.jsx';
 import { SubscriptionConnection } from '../SubscriptionConnection.jsx';
 import { FallbackConnection } from '../FallbackConnection.jsx';
 import { CompatibleConnection } from '../CompatibleConnection.jsx';
+import { AnthropicConnection } from '../AnthropicConnection.jsx';
 import { ModelDefaults } from '../ModelDefaults.jsx';
 import { ModelRoutes } from '../ModelRoutes.jsx';
 import { XConnection } from '../XConnection.jsx';
@@ -34,8 +35,9 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
       {tab === 'rules' ? <section className="settings-section"><h2>みんなが大切にすること</h2><p>全Botに共通して渡す指示です。保存すると、進行中の応答も新しいルールで取り直します。</p><label className="field"><span>共通の指示</span><textarea rows={9} maxLength={20000} value={draft.rules} onChange={e => change('rules', e.target.value)} /></label><p className="field-hint">別の画面で更新された場合は「変更を戻す」で最新の内容を読み直してください。空欄にすると追加の指示を解除します。</p><div className="inline-note"><ShieldIcon size={20} /><span>停止・権限・予算・記憶の分離は本体が管理します。共通の指示や個別の性格設定では上書きできません。</span></div></section> : null}
       {tab === 'models' ? <section className="settings-section"><h2>モデルと接続先</h2><p>いつものモデルと、利用上限に達したときの切替先を設定します。</p>
         <SubscriptionConnection />
-        <p className="field-hint">ChatGPTでの接続は、外部アプリ向けに公式公開された経路ではありません。予告なく使えなくなる場合に備えて、下のOpenAI互換APIも設定できます。</p>
+        <p className="field-hint">ChatGPTでの接続は、外部アプリ向けに公式公開された経路ではありません。予告なく使えなくなる場合に備えて、下のOpenAI互換APIやClaude（Anthropic API）も設定できます。</p>
         <CompatibleConnection />
+        <AnthropicConnection />
         <ModelDefaults />
         <p className="field-hint">Botごとの変更は、メンバーのプロフィールで行えます。</p>
         <div className="form-section-label">利用上限時の自動切替</div><label className="field"><span>Ollamaの接続先URL</span><input type="url" value={draft.ollamaUrl} onChange={e => change('ollamaUrl', e.target.value)} placeholder="http://…:11434" /></label>

@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
+import { useAnthropicModels } from './anthropicModels.js';
+import { modelLabel } from './providers.js';
 
-const PROVIDERS = { ollama: 'Ollama', openai_compatible: 'OpenAI互換API' };
+const PROVIDERS = { ollama: 'Ollama', openai_compatible: 'OpenAI互換API', anthropic: 'Claude（Anthropic API）' };
+const SUGGESTED_CLAUDE = 'claude-opus-5-5';
 export function FallbackConnection({ savedUrl }) {
   const [settings, setSettings] = useState(null);
   const [provider, setProvider] = useState('ollama');
@@ -11,6 +14,8 @@ export function FallbackConnection({ savedUrl }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  // Claudeのモデルはキーを保存すると自動で取得する（新しい順・表示名つき）。
+  const claude = useAnthropicModels();
   function apply(next) { setSettings(next); setProvider(next.fallbackProvider || 'ollama'); setSelected(next.fallbackModel || ''); }
   useEffect(() => {
     let active = true;
@@ -18,9 +23,18 @@ export function FallbackConnection({ savedUrl }) {
     api('/model-settings').then(next => { if (active) apply(next); }).catch(error => { if (active) setError(error.message); });
     return () => { active = false; };
   }, [savedUrl]);
-  const endpoint = provider === 'ollama' ? settings?.ollamaUrl : settings?.compatibleUrl;
+  const endpoint = provider === 'ollama' ? settings?.ollamaUrl : provider === 'anthropic' ? (claude.keyConfigured ? 'https://api.anthropic.com' : '') : settings?.compatibleUrl;
   const savedHere = settings?.fallbackProvider === provider ? settings?.fallbackModel || '' : '';
+  const listed = provider === 'anthropic' ? claude.models : models;
+  // 保存済みの切替先がなければ、一覧にある場合だけClaude Opus 5.5を候補として選んでおく。
+  const suggested = useRef(false);
+  useEffect(() => {
+    if (provider !== 'anthropic') { suggested.current = false; return; }
+    if (suggested.current || !settings || savedHere || selected || !claude.models.some(item => item.model === SUGGESTED_CLAUDE)) return;
+    suggested.current = true; setSelected(SUGGESTED_CLAUDE);
+  }, [provider, settings, savedHere, selected, claude.models]);
   async function refresh() {
+    if (provider === 'anthropic') { await claude.reload(); return; }
     setBusy(true); setError(''); setMessage('');
     try {
       const next = await api('/model-settings'); setSettings(next);
@@ -37,12 +51,14 @@ export function FallbackConnection({ savedUrl }) {
     } catch (error) { setError(error.message); }
     finally { setBusy(false); }
   }
-  const options = [...new Set([savedHere, selected, ...models.map(item => item.model)].filter(Boolean))];
+  const options = [...new Set([savedHere, selected, ...listed.map(item => item.model)].filter(Boolean))];
+  const label = model => { const item = listed.find(other => other.model === model); return item ? modelLabel(item) : model; };
   return <>
     <label className="field"><span>切替先の接続</span><select value={provider} disabled={busy} onChange={event => { setProvider(event.target.value); setModels([]); setSelected(settings?.fallbackProvider === event.target.value ? settings.fallbackModel || '' : ''); setMessage(''); api('/model-settings').then(setSettings).catch(failure => setError(failure.message)); }}>{Object.entries(PROVIDERS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-    <p className="field-hint">保存済みの接続先: {endpoint || '未設定'}。{provider === 'ollama' ? 'URLを変更した場合は、先に下の「設定を保存」を押してください。' : 'OpenAI互換APIの接続設定は上で保存してください。'}</p>
-    <label className="field"><span>上限時に使うモデル</span><select value={selected} disabled={busy || !endpoint} onChange={event => { setSelected(event.target.value); setMessage(''); }}><option value="">未設定（上限時は待機）</option>{options.map(model => <option key={model} value={model}>{model}</option>)}</select></label>
-    {provider === 'openai_compatible' ? <div className="inline-actions"><label className="field"><span>モデルIDを直接入力</span><input value={manual} disabled={busy || !endpoint} maxLength={256} onChange={event => setManual(event.target.value)} placeholder="例: gpt-4.1-mini" /></label><button type="button" className="button subtle" disabled={busy || !manual.trim()} onClick={() => { setSelected(manual.trim()); setManual(''); }}>候補に追加</button></div> : null}
+    <p className="field-hint">保存済みの接続先: {endpoint || '未設定'}。{provider === 'ollama' ? 'URLを変更した場合は、先に下の「設定を保存」を押してください。' : provider === 'anthropic' ? 'ClaudeのAPIキーは上で保存してください。' : 'OpenAI互換APIの接続設定は上で保存してください。'}</p>
+    <label className="field"><span>上限時に使うモデル</span><select value={selected} disabled={busy || !endpoint} onChange={event => { setSelected(event.target.value); setMessage(''); }}><option value="">未設定（上限時は待機）</option>{options.map(model => <option key={model} value={model}>{label(model)}</option>)}</select></label>
+    {provider === 'anthropic' && claude.error ? <p className="field-hint" role="status">{claude.error}</p> : null}
+    {provider === 'openai_compatible' || (provider === 'anthropic' && claude.manual) ? <div className="inline-actions"><label className="field"><span>モデルIDを直接入力</span><input value={manual} disabled={busy || !endpoint} maxLength={256} onChange={event => setManual(event.target.value)} placeholder={provider === 'anthropic' ? '例: claude-opus-5-5' : '例: gpt-4.1-mini'} /></label><button type="button" className="button subtle" disabled={busy || !manual.trim()} onClick={() => { setSelected(manual.trim()); setManual(''); }}>候補に追加</button></div> : null}
     <div className="inline-actions">
       <button type="button" className="button secondary" disabled={busy || !endpoint} onClick={refresh}>{provider === 'ollama' ? '導入済みモデルを取得' : 'モデル一覧を取得'}</button>
       <button type="button" className="button primary" disabled={busy || !endpoint || (selected === savedHere && settings?.fallbackProvider === provider) || (!selected && !settings?.fallbackModel)} onClick={() => save(selected || null)}>切替先を保存</button>
