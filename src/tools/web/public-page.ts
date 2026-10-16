@@ -73,6 +73,9 @@ const networkFor = (accept: string, types: RegExp, maxBytes = MAX_BYTES): PageNe
 });
 const network = networkFor('text/html,text/plain,application/json', PAGE_TYPES);
 const resourceNetwork = networkFor('*/*', RESOURCE_TYPES);
+// Feeds add only XML text types. Destination, port, redirect, size and time limits are the page reader's.
+const WATCH_TYPES = /^(text\/(html|plain|xml)|application\/(json|xml|rss\+xml|atom\+xml))(;|$)/i;
+const watchNetwork = networkFor('application/rss+xml,application/atom+xml,application/xml,text/xml,text/html,text/plain,application/json', WATCH_TYPES);
 
 export async function publicAddress(host: string, signal: AbortSignal, resolveHost: PageNetwork['resolve'] = network.resolve): Promise<string> {
   signal.throwIfAborted();
@@ -117,6 +120,12 @@ export async function readPublicPage(input: string, signal?: AbortSignal, transp
   if(extracted&&!extracted.text)throw new RetrievalFailure('empty_content');
   const text=extracted?.text??raw;
   return { ...source, ...(extracted?{title:extracted.title,links:extracted.links}:{}), text: text.slice(0, 20_000), truncated: text.length > 20_000 };
+}
+
+/** Anonymous GET for administrator-registered change checks. The text is untrusted external content and is never executed. */
+export async function readWatchedPage(input: string, signal?: AbortSignal, transport: PageNetwork = watchNetwork) {
+  const { body, ...source } = await fetchPublic(input, WATCH_TYPES, signal, transport);
+  return { ...source, body: body.toString('utf8') };
 }
 
 /** Broker-only anonymous GET. No caller-controlled headers, cookies, body, credentials or proxy. */

@@ -12,6 +12,8 @@ export class Scheduler {
   #stopped = false;
   #nextWakeCheck = 0;
   #logged = new Map<string, number>();
+  #watching: Promise<void> | undefined;
+  #watchAbort = new AbortController();
 
   constructor(runtime: Runtime, runner: Pick<TurnRunner, 'run'>) {
     this.#runtime = runtime; this.#admin = runtime.administrator(); this.#runner = runner;
@@ -41,6 +43,11 @@ export class Scheduler {
     if (Date.now() >= this.#nextWakeCheck) {
       this.#nextWakeCheck = Date.now() + 1000;
       this.#guard('autonomousWakes', () => this.#runtime.autonomousWakes.dispatch(this.#admin));
+      // Page checks are network-bound; one pass at a time, and a rejected pass is logged like a throwing phase.
+      if (!this.#watching) this.#guard('watch', () => {
+        this.#watching = this.#runtime.schedules.watch(this.#admin, this.#watchAbort.signal)
+          .catch(error => this.#guard('watch', () => { throw error; })).finally(() => { this.#watching = undefined; });
+      });
     }
     this.#guard('interrupt', () => {
       const requested = tasks.queuedRequestAgents(this.#admin);
@@ -71,6 +78,7 @@ export class Scheduler {
   async stop(): Promise<void> {
     this.#stopped = true;
     clearInterval(this.#timer);
+    this.#watchAbort.abort(); await this.#watching;
     for (const job of this.#jobs.values()) {
       this.#runtime.tasks.interrupt(this.#admin, job.lease);
       job.abort.abort();

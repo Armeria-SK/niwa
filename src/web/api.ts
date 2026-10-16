@@ -26,10 +26,29 @@ const scheduleFields = { agent_id: id, room_id: id, prompt: string,
       interval_ms: Type.Integer({ minimum: 60_000, maximum: 365 * 86400_000 }), next_at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }),
       max_runs: Type.Integer({ minimum: 1, maximum: 10_000 }), timeout_ms: Type.Integer({ minimum: 60_000, maximum: 86400_000 }),
       max_model_calls: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
-      trigger_kind: Type.Optional(Type.Union([Type.Literal('interval'), Type.Literal('shared_changes')])), autonomous: Type.Optional(Type.Boolean()) };
+      trigger_kind: Type.Optional(Type.Union([Type.Literal('interval'), Type.Literal('shared_changes'), Type.Literal('page_changes'), Type.Literal('webhook')])),
+      source_url: Type.Optional(Type.String({ maxLength: 4096 })), autonomous: Type.Optional(Type.Boolean()) };
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(JSON.stringify(body));
+}
+/** Webhook bodies: at most 64 KiB of UTF-8 JSON or plain text. The content stays untrusted data for the next run. */
+async function readHook(req: IncomingMessage): Promise<{ type: string; text: string } | number> {
+  const type = (req.headers['content-type'] ?? 'text/plain').split(';')[0]!.trim().toLowerCase();
+  if (type !== 'application/json' && type !== 'text/plain') { req.resume(); return 415; }
+  // Excess bytes are discarded rather than destroying the socket, so the sender still receives the 413.
+  if (Number(req.headers['content-length']) > 65_536) { req.resume(); return 413; }
+  const chunks: Buffer[] = []; let bytes = 0;
+  const complete = await new Promise<boolean>((resolve, reject) => {
+    req.on('data', (chunk: Buffer) => { if ((bytes += chunk.length) > 65_536) { chunks.length = 0; resolve(false); } else chunks.push(chunk); });
+    req.on('end', () => resolve(true)); req.on('error', reject);
+  });
+  if (!complete) return 413;
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+    if (type === 'application/json') JSON.parse(text);
+    return { type, text };
+  } catch { return 400; }
 }
 async function readBody(req: IncomingMessage): Promise<unknown> {
   if (req.headers['content-type']?.split(';')[0]?.trim() !== 'application/json') throw new DomainError('invalid', 'Expected JSON');
@@ -110,6 +129,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       run: (_m, b) => runtime.schedules.create(admin, b as unknown as import('../runtime/schedules.ts').ScheduleInput) },
     { method: 'PUT', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, schema: object({ ...scheduleFields, version: Type.String({ pattern: '^[0-9a-f]{64}$' }) }),
       run: (m, b) => runtime.schedules.update(admin, { ...b, id: m[1]! } as unknown as import('../runtime/schedules.ts').ScheduleInput, b.version as string) },
+    { method: 'POST', path: /^\/api\/schedules\/([0-9a-f-]{36})\/token$/, schema: object({}), run: m => runtime.schedules.issueHookToken(admin, m[1]!) },
     { method: 'PATCH', path: /^\/api\/schedules\/([0-9a-f-]{36})$/, schema: object({ enabled: Type.Boolean() }),
       run: (m, b) => { runtime.schedules.setEnabled(admin, m[1]!, b.enabled as boolean); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/subscription$/, run: async () => models.subscription ? { available: true, ...await models.subscription.status() } : { available: false, connected: false, pending: false, url: null, error: null } },
@@ -203,6 +223,25 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
   ];
   return createServer({ requestTimeout: 15_000, headersTimeout: 10_000, maxHeaderSize: 16_384 }, async (req, res) => {
     try {
+      // External services post here through the operator's HTTPS proxy, so Host and the admin cookie are not required; the per-schedule token is.
+      // Browsers cannot attach the token header cross-site without a preflight this server never answers, and a foreign Origin is refused outright.
+      const hook = /^\/api\/hooks\/([0-9a-f-]{36})$/.exec(req.url ?? '');
+      if (hook) {
+        // An unread body is drained so a kept-alive connection stays usable after an early refusal.
+        const refuse = (status: number, error: string) => { req.resume(); send(res, status, { error }); };
+        if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); refuse(405, 'method_not_allowed'); return; }
+        if (req.headers.origin && req.headers.origin !== auth.origin) { refuse(403, 'origin_rejected'); return; }
+        const header = req.headers.authorization ?? '', named = req.headers['x-niwa-token'];
+        const token = /^Bearer [A-Za-z0-9_-]{1,256}$/.test(header) ? header.slice(7) : typeof named === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(named) ? named : '';
+        const denied = () => { res.setHeader('WWW-Authenticate', 'Bearer'); refuse(401, 'authentication_required'); };
+        if (!runtime.schedules.hookAuthorized(admin, hook[1]!, token)) { denied(); return; }
+        const body = await readHook(req);
+        if (typeof body === 'number') { send(res, body, { error: { 400: 'invalid', 413: 'limit', 415: 'unsupported_media_type' }[body] }); return; }
+        const result = runtime.schedules.receive(admin, hook[1]!, token, body.type, body.text);
+        if (result.status === 'unauthorized') { denied(); return; }
+        if (result.status === 'rate_limited') { res.setHeader('Retry-After', String(result.retry_after)); send(res, 429, { error: 'rate_limited' }); return; }
+        send(res, result.status === 'stopped' ? 409 : 202, result.status === 'stopped' ? { error: 'schedule_stopped' } : { accepted: true }); return;
+      }
       if (!auth.validOrigin(req)) { send(res, 403, { error: 'origin_rejected' }); return; }
       const url = new URL(req.url ?? '/', auth.origin);
       if (url.origin !== auth.origin) { send(res, 403, { error: 'origin_rejected' }); return; }
