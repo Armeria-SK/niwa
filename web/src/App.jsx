@@ -115,7 +115,7 @@ export function App() {
       setPaused(state.settings.paused);
       setSchedules(savedSchedules);
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
-        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, ollamaUrl: modelSettings.ollamaUrl || '', rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
+        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, ollamaUrl: modelSettings.ollamaUrl || '', maxParallel: modelSettings.maxParallel ?? 1, rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
       setReady(true);
       setLoadError(''); setOffline(false);
       return true;
@@ -205,7 +205,8 @@ export function App() {
       ...(touched.has('backupDays') ? { backupDays: Number(next.backupDays) } : {}), ...(touched.has('backupTime') ? { backupTime: next.backupTime } : {}),
       ...(touched.has('backupEnabled') ? { backupEnabled: next.backupEnabled } : {}), ...(touched.has('autonomous') ? { autonomous: next.autonomous } : {}) };
     if (Object.keys(patch).length) await api('/settings', 'PATCH', patch);
-    if (touched.has('ollamaUrl')) await api('/model-settings', 'PATCH', { ollamaUrl: next.ollamaUrl || null });
+    const model = { ...(touched.has('ollamaUrl') ? { ollamaUrl: next.ollamaUrl || null } : {}), ...(touched.has('maxParallel') ? { maxParallel: Number(next.maxParallel) } : {}) };
+    if (Object.keys(model).length) await api('/model-settings', 'PATCH', model);
     setSettings(current => ({ ...current, theme: next.theme }));
   }); }
   const visibleThreads = threads.filter(item => (scope === 'archived' ? item.archived : !item.archived) && (scope === 'all' || scope === 'archived' || item.scope === scope) && (roomSearch.ids?.has(item.id) || `${item.title} ${item.members.map(id => memberMap[id]?.name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivity - a.lastActivity);

@@ -51,6 +51,7 @@ import { ProviderLimits } from './provider-limits.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
 import { fallbackSchema } from '../storage/fallback-schema.ts';
+import { modelParallelSchema } from '../storage/model-parallel-schema.ts';
 import { externalSchema } from '../storage/external-schema.ts';
 import { historySearchSchema } from '../storage/history-search-schema.ts';
 import { profileSchema as profileMigration } from '../storage/profile-schema.ts';
@@ -94,7 +95,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -389,10 +390,16 @@ export class Runtime {
       ON CONFLICT(agent_id) DO UPDATE SET provider=excluded.provider,model=excluded.model,reason=excluded.reason,attempted_at=excluded.attempted_at`)
       .run(agentId, provider, model, reason, Date.now());
   }
-  modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null } {
+  modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null; maxParallel: number } {
     this.#admin(actor);
-    const row = this.#db.prepare('SELECT ollama_url,fallback_model FROM model_settings WHERE id=1').get()!;
-    return { ollamaUrl: row.ollama_url as string | null, fallbackModel: row.fallback_model as string | null };
+    const row = this.#db.prepare('SELECT ollama_url,fallback_model,max_parallel FROM model_settings WHERE id=1').get()!;
+    return { ollamaUrl: row.ollama_url as string | null, fallbackModel: row.fallback_model as string | null, maxParallel: row.max_parallel as number };
+  }
+  /** Requests per Ollama endpoint that Niwa sends at once; match the server's OLLAMA_NUM_PARALLEL. Read per request, so no interruption is needed. */
+  configureOllamaParallel(actor: Actor, count: number): void {
+    this.#admin(actor);
+    check(Number.isInteger(count) && count >= 1 && count <= 8, 'invalid', 'Invalid parallel request count');
+    this.#db.prepare('UPDATE model_settings SET max_parallel=? WHERE id=1').run(count);
   }
   /** Host must verify local model capabilities against this exact endpoint before saving. */
   configureFallback(actor: Actor, url: string, model: string | null): void {

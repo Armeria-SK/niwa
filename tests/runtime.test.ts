@@ -252,7 +252,7 @@ test('the common-rules default migration upgrades only an untouched first defaul
   try {
     const open = () => new DatabaseSync(join(path, 'control.db'));
     const body = () => { const db = open(); try { return { ...db.prepare('SELECT body, revision FROM common_rules').get() as { body: string; revision: number } }; } finally { db.close(); } };
-    const rewind = (text: string, revision: number) => { const db = open(); try { db.prepare('UPDATE common_rules SET body = ?, revision = ?').run(text, revision); db.exec('PRAGMA user_version = 46'); } finally { db.close(); } };
+    const rewind = (text: string, revision: number) => { const db = open(); try { db.prepare('UPDATE common_rules SET body = ?, revision = ?').run(text, revision); db.exec('ALTER TABLE model_settings DROP COLUMN max_parallel; PRAGMA user_version = 46'); } finally { db.close(); } };
     new Runtime(path).close(); assert.deepEqual(body(), { body: currentDefault, revision: 1 });
     rewind(previousDefault, 1); new Runtime(path).close(); assert.deepEqual(body(), { body: currentDefault, revision: 1 });
     rewind(previousDefault, 2); new Runtime(path).close(); assert.deepEqual(body(), { body: previousDefault, revision: 2 });
