@@ -164,7 +164,7 @@ sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
 
 保存・復元・サービス再起動を再検証する場合は `sudo sh /home/niwa/niwa/deploy/ubuntu/verify-continuity.sh --apply` を使います。復元試験は人工データの一時環境で行います。
 
-## ローカルMCP接続（任意）
+## MCP接続（任意）
 
 **設定 → MCP接続**で接続先を追加し、「接続を確認」でツール一覧を取得します。Botに公開するツールと操作区分を選び、「保存して反映」で有効になります。追加・変更・無効化・削除は再起動不要です。画面機能を初めて導入するときは本体/UIの更新と再起動が必要です。
 
@@ -174,7 +174,13 @@ sudo python3 /home/niwa/niwa/deploy/ubuntu/enable-extensions.py --apply
 {"mcpServers":[{"id":"local","socket":"/home/niwa/tool-service/runtime/mcp.sock","scope":"shared","tools":[{"name":"lookup","readOnly":true}]}]}
 ```
 
-対応する通信方式は、Niwaと同じユーザー所有のprivate Unix socket上で、HTTP POST `/mcp` にMCP 2025-06-18のJSON応答を返すローカルプロファイルです。socketは0600、親ディレクトリは0700にします。通常のstdio・リモートHTTP・SSE・セッション付きサーバーへの直接接続は未対応です。Niwaは外部サーバーを起動せず、登録済みのツールだけを `mcp_<接続id>_<ツール名>` として公開します（全体64文字まで）。
+接続方法は2つです。`socket` はNiwaと同じユーザー所有のprivate Unix socket上の HTTP POST `/mcp` で、socketは0600、親ディレクトリは0700にします。`url` はリモートのStreamable HTTP（MCP 2025-06-18、JSONまたはSSE応答、`Mcp-Session-Id` 対応）で、`https://` のみ使えます（試験用に `http://127.0.0.1` などのローカルアドレスも可）。1つの接続にはどちらか一方だけを指定します。リダイレクトはたどりません。
+
+リモート接続の認証は、画面で入力する固定のトークンだけに対応します（`Authorization: Bearer <トークン>`。`Basic …` など方式付きの値はそのまま送ります）。トークンは `secrets/mcp-token-<接続id>`（0600）に保存し、`state/mcp.json`・バックアップ・画面には含めません。接続の削除や接続先の変更で保存済みのトークンは使われなくなり、バックアップから復元した場合は再入力が必要です。stdioとOAuthによるログインには対応していません。
+
+リモートのMCPサーバーには、Botがツールに渡す内容（会話の一部を含むことがあります）が送られます。信頼できる提供元のサーバーだけを登録してください。
+
+Niwaは外部サーバーを起動せず、登録済みのツールだけを `mcp_<接続id>_<ツール名>` として公開します（全体64文字まで）。
 
 `scope: "shared"` は共有会話からだけ利用でき、共有会話間でサーバー側のデータを共有します。会話ごとのデータ分離に対応したサーバーは `scope: "conversation"` を使えます。この場合は `niwaContextV1` capabilityと、Niwaが渡す会話識別子・実行ID・期限の検査が必要です。`enabled: false` で設定を残して無効化できます。`readOnly` は管理者が操作内容を確認して指定します。読取専用でないツールは、呼び出すたびにツール名と引数全体を「承認待ち」に出し、管理者が承認するまで送りません（表示は2000字まで、超える呼び出しは拒否）。書込操作は既存の実行記録を使い、照合に対応しないサーバーの結果不明操作は再送しません。
 
