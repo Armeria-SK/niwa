@@ -1,7 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {api} from './api.js';
 import {origin,savedToken,tokenCleared,probeToken,tokenChanges} from './mcp-tokens.js';
-import {loginEntry,loggedIn,loginNote} from './mcp-login.js';
+import {loginEntry,loggedIn,loginNote,loginUnsaved} from './mcp-login.js';
 import './McpConnections.css';
 
 const draftServer=(server,tokens)=>({...server,auth:server.oauth?'oauth':server.url!==undefined&&tokens?.includes(server.id)?'token':'none',savedOAuth:server.oauth===true,clientId:'',clientSecret:'',needClient:false,loginLink:'',transport:server.url!==undefined?'url':'socket',socket:server.socket??'',url:server.url??'',savedId:server.id,savedUrl:server.url,token:'',clearToken:false,enabled:server.enabled!==false,key:crypto.randomUUID(),catalog:server.tools.map(tool=>({...tool,selected:true,description:'保存済みのツール'})),checked:false});
@@ -92,11 +92,14 @@ export function McpConnections(){
     <label className="field"><span>接続方法</span><select value={server.transport} onChange={e=>change(server.key,{transport:e.target.value,catalog:[],checked:false,conversationIsolation:undefined})}><option value="socket">このPCのソケット</option><option value="url">URL（HTTPS）</option></select></label>
     {server.transport==='url'?<><label className="field"><span>URL</span><input type="url" value={server.url} maxLength={500} pattern="https?://.+" required onChange={e=>change(server.key,{url:e.target.value,catalog:[],checked:false,conversationIsolation:undefined})} placeholder="https://example.com/mcp" spellCheck={false}/><small>https:// で始まるURLを入力します。ユーザー名・パスワード・#は含められません。</small></label>
      <label className="field"><span>認証の方法</span><select value={server.auth} onChange={e=>change(server.key,{auth:e.target.value,token:'',clearToken:false})}><option value="none">なし</option><option value="token">認証トークン</option><option value="oauth">OAuthでログイン</option></select></label>
+     {status?.token_errors?.includes(server.id)&&server.auth!=='oauth'?<p className="field-error">保存済みの認証トークンのファイルを読み込めません。トークンを入力し直すか、認証の方法を「なし」にして保存してください。</p>:null}
      {server.auth==='token'?<>
      <label className="field"><span>認証トークン</span><input type="password" autoComplete="off" value={server.token} maxLength={4096} disabled={tokenCleared(server,status)} onChange={e=>change(server.key,{token:e.target.value})} placeholder={savedToken(server,status)?'設定済み（変更するときだけ入力）':'未設定'} spellCheck={false}/><small>トークンだけを入力すると「Bearer」を付けて送ります。保存したトークンは画面に表示しません。{server.savedUrl&&server.url&&origin(server.url)!==origin(server.savedUrl)&&status?.tokens?.includes(server.savedId)?' 接続先が変わったため、保存済みのトークンは使いません。':''}</small></label>
      {savedToken(server,status)?<label className="mcp-enabled"><input type="checkbox" checked={server.clearToken} onChange={e=>change(server.key,{clearToken:e.target.checked,token:''})}/>保存済みのトークンを削除する</label>:null}</>:null}
      {server.auth==='oauth'?<>
       <p className="field-hint mcp-oauth-state" role="status">{loggedIn(server,status)?'ログイン済み':loginEntry(server,status)?.pending?'ログインを待っています':'ログインが必要です'}{!loggedIn(server,status)&&loginNote(server,status)?` · ${loginNote(server,status)}`:''}</p>
+      {loginUnsaved(server,status)?<p className="field-error">新しい鍵をまだ保存できていません。保存先の空き容量と権限を確認してください。</p>:null}
+      {!server.needClient?<p className="field-hint"><button className="button subtle" type="button" onClick={()=>local(server.key,{needClient:true})}>クライアントIDを入力する</button> 提供元の開発者向けの画面で発行したクライアントIDを使うときに押します。前回のログインで使ったクライアントがあれば、入力しなくても再利用します。</p>:null}
       {server.needClient?<><p className="field-hint">この接続先は、クライアントの自動登録に対応していません。提供元の開発者向けの画面でアプリを登録し、発行されたクライアントIDを入力してください。登録するリダイレクトURL（コールバックURL）は <code>{location.origin}/api/mcp/oauth/callback</code> です。</p>
        <div className="field-pair"><label className="field"><span>クライアントID</span><input value={server.clientId} maxLength={512} autoComplete="off" spellCheck={false} onChange={e=>local(server.key,{clientId:e.target.value.trim()})}/></label>
        <label className="field"><span>クライアントシークレット（任意）</span><input type="password" value={server.clientSecret} maxLength={4096} autoComplete="off" spellCheck={false} onChange={e=>local(server.key,{clientSecret:e.target.value.trim()})}/></label></div></>:null}

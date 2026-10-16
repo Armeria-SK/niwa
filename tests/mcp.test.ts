@@ -323,3 +323,25 @@ test('MCP token field rules of the settings screen: raw typing, delete box only 
  assert.deepEqual(tokenChanges([card({savedId:undefined,savedUrl:undefined,token:'new-token-123456'})],status),[{id:'remote',value:'new-token-123456'}]);
  assert.deepEqual(tokenChanges([card({savedId:undefined,savedUrl:undefined,auth:'none'})],status),[{id:'remote',value:null}]);
 });
+test('results keep everything that is not a known credential, even when it looks like a secret',async t=>{
+ const token='Basic dXNlcjpwYXNzd29yZA==',jwt='eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJlMTIz',docs='const token = abc; Authorization: Bearer example-not-ours; api_key=docs-sample';
+ const f=await remoteServer(t,(message,req,res)=>{
+  if(message.id===undefined){res.writeHead(202);res.end();return;}
+  const result=message.method==='initialize'?{protocolVersion:'2025-06-18',capabilities:{experimental:{niwaContextV1:true}}}:message.method==='tools/list'?{tools:[{name:'echo',inputSchema:{type:'object'}}]}
+   :{content:[{type:'text',text:docs},{type:'text',text:jwt},{type:'text',text:`mine ${req.headers.authorization}`}],structuredContent:{'token = abc':[jwt,'dXNlcjpwYXNzd29yZA==']}};
+  res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result}));
+ });
+ const mcp=await McpConnector.connect([{id:'remote',url:f.url,scope:'conversation',tools:[{name:'echo',readOnly:true}]}],undefined,false,{remote:token});
+ const result=await mcp.call('mcp_remote_echo',{},{scope:mcpScope('epoch','room'),deadline:Date.now()+10000}) as {content:{text:string}[];structuredContent:Record<string,string[]>};
+ assert.equal(result.content[0]!.text,docs);assert.equal(result.content[1]!.text,jwt);assert.equal(result.content[2]!.text,'mine [REDACTED]');
+ assert.deepEqual(result.structuredContent,{'token = abc':[jwt,'[REDACTED]']});
+});
+test('an unreadable saved token is reported by name and \"none\" removes it',async()=>{
+ const {tokenChanges}=await import(pathToFileURL(resolve('web/src/mcp-tokens.js')).href);
+ const card=(auth:string)=>({id:'remote',transport:'url',auth,url:'https://a.example.com/mcp',savedId:'remote',savedUrl:'https://a.example.com/mcp',token:'',clearToken:false});
+ const status={tokens:[],token_errors:['remote']};
+ assert.deepEqual(tokenChanges([card('none')],status),[{id:'remote',value:null}]);
+ assert.deepEqual(tokenChanges([card('token')],status),[]);
+ assert.deepEqual(tokenChanges([{...card('token'),token:'new-token-123456'}],status),[{id:'remote',value:'new-token-123456'}]);
+ assert.deepEqual(tokenChanges([card('none')],{tokens:[],token_errors:[]}),[]);
+});

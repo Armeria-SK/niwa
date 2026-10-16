@@ -73,10 +73,12 @@ export class McpSettings{
  }
  /** An unreadable credential leaves that server unauthenticated; its connection failure is reported instead. */
  private tokens(){try{return readMcpTokens(this.secrets,[]);}catch{return {};}}
+ /** Ids whose saved token file cannot be read (reported without any content), so the screen can say so and let the administrator remove it. */
+ private unreadableTokens(){const bad:string[]=[];try{readMcpTokens(this.secrets,bad);}catch{}return bad;}
  read(){
   const servers=readInstallation(this.root).mcpServers??[],revision=mcpConfigRevision(servers),failed=this.connector.failed().map(({id,reason})=>({id,reason})),stored=this.tokens();
   // Only which servers have a credential is reported; the value never leaves the server.
-  return {available:true,revision,servers,tokens:servers.filter(s=>s.url!==undefined&&!s.oauth&&stored[s.id]!==undefined).map(s=>s.id),oauth:this.oauth.states(servers),connected:this.connector.connections(),failed,applied:revision===this.applied,error:failed.length?connectionMessage:null,busy:this.busy,tools:this.connector.tools(true).map(t=>({name:t.name,description:t.description}))};
+  return {available:true,revision,servers,tokens:servers.filter(s=>s.url!==undefined&&!s.oauth&&stored[s.id]!==undefined).map(s=>s.id),oauth:this.oauth.states(servers),token_errors:this.unreadableTokens().filter(id=>servers.some(s=>s.id===id&&s.url!==undefined&&!s.oauth)),connected:this.connector.connections(),failed,applied:revision===this.applied,error:failed.length?connectionMessage:null,busy:this.busy,tools:this.connector.tools(true).map(t=>({name:t.name,description:t.description}))};
  }
  status(){
   try{return this.last=this.read();}

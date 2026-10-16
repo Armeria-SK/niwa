@@ -72,12 +72,13 @@ function renew(target:string|McpEndpoint,session:McpSession,signal?:AbortSignal)
 type Send=(headers:OutgoingHttpHeaders,signal:AbortSignal,reply:(res:IncomingMessage)=>void)=>ClientRequest;
 /** A scheme token ("Basic <credential>") also hides its credential part. */
 const staticSecrets=(token:string)=>[token,...token.split(' ').filter(p=>p.length>=8)];
-/** Every string in a tool result (keys included) with the credentials removed. */
+/** Every string in a tool result (keys included) with exactly the known credentials replaced; anything else in the result is left as the server sent it. */
 function scrub(value:unknown,secrets:readonly string[],depth=0):unknown{
  if(depth>64)throw Error('Invalid MCP result');
- if(typeof value==='string')return redactSecrets(value,secrets);
+ const clean=(text:string)=>secrets.reduce((out,secret)=>out.includes(secret)?out.split(secret).join('[REDACTED]'):out,text);
+ if(typeof value==='string')return clean(value);
  if(Array.isArray(value))return value.map(item=>scrub(item,secrets,depth+1));
- if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>[redactSecrets(key,secrets),scrub(item,secrets,depth+1)]));
+ if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>[clean(key),scrub(item,secrets,depth+1)]));
  return value;
 }
 /** One POST per message. Redirects are never followed: any status other than 200/202 is a transport failure. */
@@ -284,7 +285,7 @@ export class McpConnector{
   if(!Array.isArray(result.content)||result.content.length>100)throw Error('Invalid MCP result');
   // A remote server may echo its credential back; the model never sees it.
   // Tokens renewed during the call count as well as the one that was sent.
-  const secrets=[...new Set([...sent,...endpointSecrets(endpoint)])].filter(secret=>secret.length>0);
+  const secrets=[...new Set([...sent,...endpointSecrets(endpoint)])].filter(secret=>secret.length>0).sort((a,b)=>b.length-a.length);
   if(secrets.length)result=scrub(result,secrets) as JsonObject;
   return {...result,untrusted:true};
  }

@@ -33,7 +33,7 @@ async function listen(t:After,handler:(req:IncomingMessage,res:ServerResponse)=>
 async function authorizationServer(t:After){
  const s={url:'',overrides:{} as Record<string,unknown>,codes:new Map<string,{challenge:string;redirect:string;client:string;resource:string}>(),refreshTokens:new Set<string>(),accepted:new Set<string>(),
   tokens:[] as {form:URLSearchParams;auth:string|undefined}[],registrations:[] as Record<string,any>[],revoked:[] as {form:URLSearchParams;auth:string|undefined}[],hits:new Map<string,number>(),redirects:new Set<string>(),
-  expiresIn:3600 as number|undefined,omitRefresh:false,omitInitialRefresh:false,tokenLength:0,onRefresh:undefined as (()=>void)|undefined,refreshFailure:undefined as string|undefined,secret:undefined as string|undefined,method:'client_secret_post',delay:0,counter:0,latestRefresh:'',registerStatus:201,revokeStatus:200,tokenType:'Bearer',registration:{} as Record<string,unknown>,
+  expiresIn:3600 as number|undefined,omitRefresh:false,omitInitialRefresh:false,tokenLength:0,clientGone:undefined as string|undefined,metadataDelay:0,onRefresh:undefined as (()=>void)|undefined,refreshFailure:undefined as string|undefined,secret:undefined as string|undefined,method:'client_secret_post',delay:0,counter:0,latestRefresh:'',registerStatus:201,revokeStatus:200,tokenType:'Bearer',registration:{} as Record<string,unknown>,
   refreshes:()=>s.tokens.filter(r=>r.form.get('grant_type')==='refresh_token'),
   metadata:()=>{
    const base:Record<string,unknown>={issuer:s.url,authorization_endpoint:`${s.url}/authorize`,token_endpoint:`${s.url}/token`,registration_endpoint:`${s.url}/register`,revocation_endpoint:`${s.url}/revoke`,
@@ -57,7 +57,7 @@ async function authorizationServer(t:After){
  s.url=await listen(t,async(req,res)=>{
   const path=new URL(req.url!,'http://x').pathname;s.hits.set(path,(s.hits.get(path)??0)+1);
   if(s.redirects.has(path)){res.writeHead(302,{Location:`${s.url}/elsewhere`});res.end();return;}
-  if(path==='/.well-known/oauth-authorization-server'){send(res,200,s.metadata());return;}
+  if(path==='/.well-known/oauth-authorization-server'){if(s.metadataDelay)await sleep(s.metadataDelay);send(res,200,s.metadata());return;}
   if(path==='/register'){
    const value=JSON.parse(await body(req));s.registrations.push(value);
    send(res,s.registerStatus,{client_id:`client-${s.registrations.length}`,redirect_uris:value.redirect_uris,token_endpoint_auth_method:'none',...s.registration});return;
@@ -66,6 +66,7 @@ async function authorizationServer(t:After){
   if(path==='/token'){
    const form=new URLSearchParams(await body(req));s.tokens.push({form,auth:req.headers.authorization});
    if(s.delay)await sleep(s.delay);
+   if(s.clientGone!==undefined&&form.get('client_id')===s.clientGone){send(res,401,{error:'invalid_client'});return;}
    if(s.secret!==undefined){
     const sent=s.method==='client_secret_basic'?req.headers.authorization===`Basic ${Buffer.from(`${encodeURIComponent(form.get('client_id')!)}:${encodeURIComponent(s.secret)}`).toString('base64')}`:form.get('client_secret')===s.secret;
     if(!sent){send(res,401,{error:'invalid_client'});return;}
@@ -811,4 +812,88 @@ test('a renewal for one URL never hands its token to a request for another URL o
  await assert.rejects(stranger.refresh(old),McpLoginRequired);
  await assert.rejects(stranger.access(),McpLoginRequired);
  assert.equal(await renewing,stored(f).access_token);assert.equal(as.refreshes().length,1);
+});
+
+test('a renewed login that is written after an earlier failed write replaces the held one everywhere',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=f.secret('mcp-oauth-remote.json'),oauth=new McpOAuth(join(f.root,'secrets'));
+ t.mock.method(console,'error',()=>{});
+ as.expiresIn=30;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
+ // Renewal 1 cannot be written and is itself short-lived, so renewal 2 follows at once, from the held login.
+ as.onRefresh=()=>{rmSync(file);mkdirSync(file);as.onRefresh=undefined;};
+ const endpoint:McpEndpoint={url:mcp.url,oauth:oauth.source('remote',mcp.url)};
+ await mcpRpc(endpoint,'tools/list');
+ const held=as.latestRefresh;assert.equal((oauth.states([])[0] as {unsaved?:boolean}).unsaved,true);
+ rmSync(file,{recursive:true});as.expiresIn=3600;
+ await mcpRpc(endpoint,'tools/list');
+ assert.equal(as.refreshes().length,2);assert.equal(as.refreshes()[1]!.form.get('refresh_token'),held);
+ const second=[...as.accepted].at(-1)!;
+ assert.equal(stored(f).access_token,second);assert.equal(stored(f).refresh_token,as.latestRefresh);assert.equal(mcp.calls.at(-1)!.auth,`Bearer ${second}`);
+ assert.equal((oauth.states([])[0] as {unsaved?:boolean}).unsaved,undefined);
+ assert.deepEqual(oauth.source('remote',mcp.url).secrets(),[second,as.latestRefresh]);
+ // Later accesses use the stored login and do not write an old one back.
+ await mcpRpc(endpoint,'tools/list');assert.equal(stored(f).refresh_token,as.latestRefresh);assert.equal(as.refreshes().length,2);
+ // A new login also clears a held one.
+ as.expiresIn=30;const relogin=await oauth.start('remote',mcp.url,undefined,f.callback);if(!relogin.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(relogin.url)));
+ as.onRefresh=()=>{rmSync(file);mkdirSync(file);as.onRefresh=undefined;};
+ await mcpRpc(endpoint,'tools/list');assert.equal((oauth.states([])[0] as {unsaved?:boolean}).unsaved,true);
+ rmSync(file,{recursive:true});as.expiresIn=3600;
+ const last=await oauth.start('remote',mcp.url,undefined,f.callback);if(!last.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(last.url)));
+ assert.equal((oauth.states([])[0] as {unsaved?:boolean}).unsaved,undefined);
+ assert.deepEqual(oauth.source('remote',mcp.url).secrets(),[stored(f).access_token,stored(f).refresh_token]);
+});
+
+test('a start that is still discovering when its connection is deleted cannot leave a login behind',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t);
+ as.metadataDelay=250;
+ const starting=f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url});
+ await until(()=>(as.hits.get('/.well-known/oauth-authorization-server')??0)>0);
+ assert.equal((await f.call('/api/mcp','PUT',{revision:f.manager.status().revision,servers:[]})).json.ok,true);
+ const result=(await starting).json;
+ assert.equal(result.ok,false);assert.equal(result.code,'changed');
+ assert.deepEqual((await f.call('/api/mcp')).json.oauth,[]);assert.equal(as.registrations.length<=1,true);
+ // Without a configuration change the same start completes.
+ as.metadataDelay=0;assert.equal((await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url})).json.ok,true);
+});
+
+test('a stored client is not reused once its login ended or the provider refused it, and the client ID can be entered instead',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),oauth=new McpOAuth(join(f.root,'secrets'));
+ const login=async(manual?:{client_id:string;client_secret?:string})=>{const s=await oauth.start('remote',mcp.url,manual,f.callback);if(!s.ok)return s;return {...s,done:await oauth.finish(as.authorize(s.url)),client:new URL(s.url).searchParams.get('client_id')};};
+ const endpoint=():McpEndpoint=>({url:mcp.url,oauth:oauth.source('remote',mcp.url)});
+ // The provider deleted the client: renewal fails with invalid_client.
+ as.expiresIn=30;await login();assert.equal(stored(f).client_id,'client-1');as.expiresIn=3600;as.clientGone='client-1';
+ await assert.rejects(mcpRpc(endpoint(),'tools/list'),McpLoginRequired);assert.equal(oauth.states([])[0]!.status,'needs_login');
+ const second=await login() as {client:string;done:unknown};
+ assert.equal(second.client,'client-2');assert.ok(second.done);assert.equal(as.registrations.length,2);assert.equal(oauth.states([])[0]!.status,'signed_in');
+ // The same happens when the code exchange itself is refused, and the next attempt registers again.
+ as.clientGone='client-2';
+ const reused=await login() as {client:string;done:unknown};assert.equal(reused.client,'client-2');assert.equal(reused.done,undefined);
+ const third=await login() as {client:string;done:unknown};assert.equal(third.client,'client-3');assert.ok(third.done);
+ // A login that merely expired also starts over, so without registration the client ID is asked for and a typed one is honoured.
+ as.clientGone=undefined;as.overrides={registration_endpoint:null};
+ const manual=await login({client_id:'typed-client'}) as {client:string;done:unknown};assert.equal(manual.client,'typed-client');assert.ok(manual.done);
+ const reuse=await login() as {client:string};assert.equal(reuse.client,'typed-client');
+ as.expiresIn=30;await login();as.expiresIn=3600;as.refreshFailure='invalid_grant';
+ await assert.rejects(mcpRpc(endpoint(),'tools/list'),McpLoginRequired);as.refreshFailure=undefined;
+ const blocked=await login() as {ok:boolean;code:string};assert.equal(blocked.ok,false);assert.equal(blocked.code,'client_registration_required');
+ const typed=await login({client_id:'typed-client-2'}) as {client:string;done:unknown};assert.equal(typed.client,'typed-client-2');assert.ok(typed.done);
+});
+
+test('logout revokes the renewed login that was only held in memory',async t=>{
+ const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=f.secret('mcp-oauth-remote.json'),oauth=new McpOAuth(join(f.root,'secrets'));
+ t.mock.method(console,'error',()=>{});
+ as.expiresIn=30;const s=await oauth.start('remote',mcp.url,undefined,f.callback);if(!s.ok)throw Error('start');assert.ok(await oauth.finish(as.authorize(s.url)));
+ const original=stored(f).refresh_token;as.expiresIn=3600;
+ as.onRefresh=()=>{rmSync(file);mkdirSync(file);as.onRefresh=undefined;};
+ await mcpRpc({url:mcp.url,oauth:oauth.source('remote',mcp.url)},'tools/list');
+ rmSync(file,{recursive:true});
+ await oauth.logout('remote');
+ assert.equal(as.revoked.length,1);assert.equal(as.revoked[0]!.form.get('token'),as.latestRefresh);assert.notEqual(as.revoked[0]!.form.get('token'),original);
+ assert.ok(!existsSync(file));assert.equal(oauth.states([]).length,0);
+});
+
+test('unreadable credentials in a failing renewal keep the screen informed: the unsaved login is reported',async()=>{
+ const {loginUnsaved}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
+ const card={id:'remote'};
+ assert.equal(loginUnsaved(card,{oauth:[{id:'remote',status:'signed_in',unsaved:true}]}),true);
+ assert.equal(loginUnsaved(card,{oauth:[{id:'remote',status:'signed_in'}]}),false);assert.equal(loginUnsaved(card,undefined),false);
 });

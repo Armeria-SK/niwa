@@ -11,3 +11,5 @@ export const loginNote=(server,status)=>{
  if(entry?.status==='needs_login')return 'ログインの有効期限が切れたか、取り消されました。もう一度ログインしてください。';
  return '';
 };
+/** A renewed login that the server could not write to disk yet (it keeps it in memory meanwhile). */
+export const loginUnsaved=(server,status)=>loginEntry(server,status)?.unsaved===true;
