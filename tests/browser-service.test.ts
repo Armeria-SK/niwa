@@ -10,6 +10,11 @@ import { browserExecutor } from '../src/tools/browser/client.ts';
 import { Runtime } from '../src/runtime/runtime.ts';
 import { executeAsyncTurnTool, turnTools } from '../src/runtime/turn-tools.ts';
 import type { BrowserSnapshot } from '../src/tools/browser/page.ts';
+import { PassThrough } from 'node:stream';
+import { BrowserWire } from '../src/tools/browser/wire.ts';
+import { BrowserSession } from '../src/tools/browser/session.ts';
+import { BrowserActionError } from '../src/tools/browser/action-error.ts';
+import { RetrievalFailure } from '../src/tools/web/public-page.ts';
 
 const snapshot = (title: string): BrowserSnapshot => ({ title, url: 'https://fixture.invalid/', revision: title,
   text: 'synthetic public page', elements: [{ ref: 0, role: 'a', name: 'Next', href: 'https://fixture.invalid/next' }], blocked: [], untrusted: true });
@@ -68,4 +73,45 @@ test('browser IPC cancellation reaches the session and disposes its page', async
   const controller = new AbortController();
   const pending = f.execute({ agent_id: 'bot', room_id: 'room', task_id: 'task', action: { kind: 'navigate', url: 'https://fixture.invalid/' } }, controller.signal);
   await start; controller.abort(); await assert.rejects(pending); await disposal;
+});
+
+test('model mistakes keep the browser session alive and reach the model as a fixed reason, while integrity failures still close it', async t => {
+  let closed = 0, created = 0, fail: Error | undefined;
+  let runtime!: Runtime; t.after(async () => runtime?.close());
+  const f = await fixture(t, () => { created++; return { navigate: async () => snapshot('1'), snapshot: async () => snapshot('1'),
+    follow: async revision => { if (fail) throw fail; if (revision !== '1') throw new BrowserActionError('stale_reference'); return snapshot('1'); },
+    close: async () => { closed++; } }; });
+  const base = { agent_id: 'bot', room_id: 'room', task_id: 'task' };
+  await f.execute({ ...base, action: { kind: 'navigate', url: 'https://fixture.invalid/' } });
+  await assert.rejects(f.execute({ ...base, action: { kind: 'follow', revision: 'old', ref: 0 } }), (error: unknown) => error instanceof BrowserActionError && error.code === 'stale_reference');
+  assert.equal(closed, 0);
+  assert.equal((await f.execute({ ...base, action: { kind: 'follow', revision: '1', ref: 0 } })).title, '1'); assert.equal(created, 1);
+  fail = new Error('protocol failure');
+  await assert.rejects(f.execute({ ...base, action: { kind: 'follow', revision: '1', ref: 0 } }), (error: unknown) => !(error instanceof BrowserActionError)); assert.equal(closed, 1);
+
+  runtime = new Runtime(join(f.root, 'state'));
+  const admin = runtime.administrator(), leader = runtime.bootstrap(admin), actor = runtime.agentSession(leader.id), room = runtime.createRoom(admin, 'browser');
+  runtime.tasks.create(admin, leader.id, room.id, 'read'); const lease = runtime.tasks.claim(admin)!;
+  const browser = async () => { throw new BrowserActionError('use_follow_or_form'); };
+  const result = await executeAsyncTurnTool(runtime, actor, lease, { name: 'browser_snapshot', tool_call_id: 'synthetic', arguments: {} }, 'reason', undefined, { browser });
+  assert.equal(result.failure_kind, 'invalid_request'); assert.match(String(result.reason), /browser_follow/);
+  const page = await executeAsyncTurnTool(runtime, actor, lease, { name: 'web_read', tool_call_id: 'synthetic2', arguments: { url: 'https://example.com/big' } }, 'reason2', undefined,
+    { readPage: async () => { throw new RetrievalFailure('invalid_response', 'Page exceeds size limit'); } });
+  assert.equal(page.failure_kind, 'invalid_response'); assert.equal(page.reason, 'Page exceeds size limit');
+});
+
+test('BrowserSession keeps its observation after a worker action error and closes on malformed observations', async () => {
+  const toWorker = new PassThrough(), toHost = new PassThrough(); let disposed = 0, reply: () => unknown = () => snapshot('1');
+  const worker: BrowserWire = new BrowserWire(toWorker, toHost, async () => reply());
+  const session = new BrowserSession(toHost, toWorker, async () => { disposed++; });
+  assert.equal((await session.navigate('https://fixture.invalid/')).revision, '1');
+  reply = () => { throw new BrowserActionError('dedicated_operation'); };
+  await assert.rejects(session.interact({ action: 'fill', revision: '1', ref: 0, value: 'x' }), (error: unknown) => error instanceof BrowserActionError && error.code === 'dedicated_operation');
+  assert.equal(disposed, 0);
+  reply = () => snapshot('1');
+  assert.equal((await session.follow('1', 0)).revision, '1'); assert.equal(disposed, 0);
+  await assert.rejects(async () => session.follow('stale', 0), (error: unknown) => error instanceof BrowserActionError && error.code === 'stale_reference'); assert.equal(disposed, 0);
+  reply = () => ({ ...snapshot('1'), elements: [{ ref: 0, role: 'a', name: 'x', href: 'https://fixture.invalid/' + 'a'.repeat(5000) }] });
+  await assert.rejects(session.snapshot(), /Invalid browser observation/); assert.equal(disposed, 1);
+  worker.close();
 });

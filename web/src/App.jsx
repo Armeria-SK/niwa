@@ -36,6 +36,7 @@ export function App() {
   const [authenticated, setAuthenticated] = useState(null);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [offline, setOffline] = useState(false);
   const refreshVersion = useRef(0);
   const submission = useRef(null);
   const previousTasks = useRef(null);
@@ -70,16 +71,24 @@ export function App() {
   useEffect(() => { api('/session').then(result => setAuthenticated(result.authenticated)).catch(() => setAuthenticated(false)); }, []);
   useEffect(() => {
     if (!authenticated) return;
-    let stopped = false; let timer;
-    async function poll() { await refresh(); if (!stopped) timer = setTimeout(poll, 2000); }
-    void poll(); return () => { stopped = true; clearTimeout(timer); refreshVersion.current++; };
+    let stopped = false; let timer; let running = false; let failures = 0;
+    // Hidden tabs stop polling; failures back off from 2 s to 30 s.
+    async function poll() {
+      running = true; clearTimeout(timer);
+      try { failures = await refresh() ? 0 : failures + 1; } finally { running = false; }
+      if (!stopped && !document.hidden) timer = setTimeout(poll, Math.min(30_000, 2000 * 2 ** failures));
+    }
+    const onVisibility = () => { if (document.hidden) clearTimeout(timer); else if (!running) void poll(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    if (!document.hidden) void poll();
+    return () => { stopped = true; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibility); refreshVersion.current++; };
   }, [authenticated]);
 
   async function refresh() {
     const version = ++refreshVersion.current;
     try {
       const [state, modelSettings, savedUpdates, savedArtifacts, savedSchedules] = await Promise.all([api('/state'), api('/model-settings'), api('/updates'), api('/artifacts'), api('/schedules')]);
-      if (version !== refreshVersion.current) return;
+      if (version !== refreshVersion.current) return true;
       if (previousTasks.current) for (const task of state.tasks) {
         if (task.state !== 'completed' || previousTasks.current.get(task.id) === 'completed') continue;
         setCelebrating(current => ({ ...current, [task.agent_id]: true }));
@@ -106,10 +115,16 @@ export function App() {
       setPaused(state.settings.paused);
       setSchedules(savedSchedules);
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
-        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, ollamaUrl: modelSettings.ollamaUrl || '', rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
+        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, ollamaUrl: modelSettings.ollamaUrl || '', maxParallel: modelSettings.maxParallel ?? 1, rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
       setReady(true);
-      setLoadError('');
-    } catch (error) { if (version !== refreshVersion.current) return; if (error.status === 401) { setAuthenticated(false); setReady(false); } else { setLoadError('庭を読み込めませんでした。サーバーの接続とバージョンを確認してください。'); notify(error.message); } }
+      setLoadError(''); setOffline(false);
+      return true;
+    } catch (error) {
+      if (version !== refreshVersion.current) return true;
+      if (error.status === 401) { setAuthenticated(false); setReady(false); return true; }
+      setLoadError('庭を読み込めませんでした。サーバーの接続とバージョンを確認してください。'); setOffline(true);
+      return false;
+    }
   }
   async function mutate(work, message = '保存しました') {
     try { await work(); await refresh(); notify(message); return true; } catch (error) { notify(error.message); return false; }
@@ -184,10 +199,14 @@ export function App() {
   function deleteMemory(memory) {
     return mutate(() => api(`/agents/${memory.member}/memories/${memory.id}`, 'DELETE', { revision: memory.revision }), '記憶を削除しました');
   }
-  function saveSettings(next) { return mutate(async () => {
-    if (next.rules !== settings.rules) await api('/common-rules', 'PUT', { revision: next.rulesRevision, body: next.rules });
-    await api('/settings', 'PATCH', { generatedLimit: Number(next.maxMembers), concurrencyLimit: next.unlimited ? null : Number(next.concurrent), backupDays: Number(next.backupDays), backupTime: next.backupTime, backupEnabled: next.backupEnabled, autonomous: next.autonomous });
-    if (next.ollamaUrl !== settings.ollamaUrl) await api('/model-settings', 'PATCH', { ollamaUrl: next.ollamaUrl || null });
+  function saveSettings(next, touched) { return mutate(async () => {
+    if (touched.has('rules') && next.rules !== settings.rules) await api('/common-rules', 'PUT', { revision: next.rulesRevision, body: next.rules });
+    const patch = { ...(touched.has('maxMembers') ? { generatedLimit: Number(next.maxMembers) } : {}), ...(touched.has('unlimited') || touched.has('concurrent') ? { concurrencyLimit: next.unlimited ? null : Number(next.concurrent) } : {}),
+      ...(touched.has('backupDays') ? { backupDays: Number(next.backupDays) } : {}), ...(touched.has('backupTime') ? { backupTime: next.backupTime } : {}),
+      ...(touched.has('backupEnabled') ? { backupEnabled: next.backupEnabled } : {}), ...(touched.has('autonomous') ? { autonomous: next.autonomous } : {}) };
+    if (Object.keys(patch).length) await api('/settings', 'PATCH', patch);
+    const model = { ...(touched.has('ollamaUrl') ? { ollamaUrl: next.ollamaUrl || null } : {}), ...(touched.has('maxParallel') ? { maxParallel: Number(next.maxParallel) } : {}) };
+    if (Object.keys(model).length) await api('/model-settings', 'PATCH', model);
     setSettings(current => ({ ...current, theme: next.theme }));
   }); }
   const visibleThreads = threads.filter(item => (scope === 'archived' ? item.archived : !item.archived) && (scope === 'all' || scope === 'archived' || item.scope === scope) && (roomSearch.ids?.has(item.id) || `${item.title} ${item.members.map(id => memberMap[id]?.name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivity - a.lastActivity);
@@ -220,6 +239,7 @@ export function App() {
     {modal?.type === 'delete-content' ? <DeleteContentDialog item={modal} onClose={() => setModal(null)} onDelete={item => mutate(() => api(`/${item.kind === 'room' ? 'rooms' : 'artifacts'}/${item.id}`, 'DELETE', {}), '削除しました')} /> : null}
     {modal?.type === 'artifact' ? <ArtifactPreview key={modal.artifact.id} onOpen={openArtifact} onDelete={() => setModal({ type: 'delete-content', kind: 'artifact', id: modal.artifact.id, title: modal.artifact.name })} artifact={modal.artifact} members={memberMap} onClose={() => setModal(null)} onThread={openThread} /> : null}
     {modal?.type === 'new-thread' ? <NewThreadModal members={animatedMembers} initialScope={modal.scope} initialMember={modal.member} onClose={() => setModal(null)} onCreate={createThread} /> : null}
+    {offline ? <div className="offline-notice" role="alert">サーバーに接続できません。つながるまで自動で再試行します。</div> : null}
     <div className={`toast ${toast ? 'visible' : ''}`} role="status" aria-live="polite">{toast ? <><CheckCircleIcon size={20} /><span>{toast}</span><IconButton label="通知を閉じる" onClick={() => setToast('')}><CloseIcon size={16} /></IconButton></> : null}</div>
   </div>;
 }

@@ -190,7 +190,7 @@ export class TurnRunner {
           return;
         }
         // Rebuild for a user correction before committing any of the stale answer's calls.
-        if (runtime.tasks.requestBrief(actor, lease).revision !== requestRevision) continue;
+        if (runtime.tasks.requestBrief(actor, lease).revision !== requestRevision) { runtime.tasks.discardPrompt(actor, lease, promptRun); continue; }
         if(reportingReads&&events.some(event=>event.type==='tool_call'&&!['conversation_send','task_report'].includes(event.name))){
           runtime.tasks.waitForReadRecovery(actor,lease,observations.retry_at!);return;
         }

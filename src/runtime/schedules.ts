@@ -106,42 +106,46 @@ export class Schedules {
   dispatch(actor: Actor, now = Date.now()): void {
     this.admin(actor);
     check(Number.isSafeInteger(now) && now >= 0 && now <= 8_000_000_000_000_000, 'invalid', 'Invalid clock');
-    transaction(this.db, () => {
-      if (this.db.prepare('SELECT paused FROM settings WHERE id=1').get()!.paused === 1) return;
-      for (const row of this.list(actor).filter(item => item.enabled)) {
-        if (row.autonomous && (this.db.prepare('SELECT autonomous FROM settings WHERE id=1').get()!.autonomous !== 1 || this.db.prepare('SELECT enabled FROM agent_autonomy WHERE agent_id=?').get(row.agent_id)?.enabled === 0)) continue;
-        const recent = this.db.prepare(`SELECT t.id,t.state FROM schedule_runs r JOIN tasks t ON t.id=r.task_id
-          WHERE r.schedule_id=? ORDER BY r.scheduled_at DESC LIMIT 3`).all(row.id);
-        if (this.db.prepare(`SELECT 1 FROM schedule_runs r JOIN tasks t ON t.id=r.task_id
-          WHERE r.schedule_id=? AND t.state NOT IN ('completed','failed','cancelled') LIMIT 1`).get(row.id)) continue;
-        let reason: string | null = row.run_count >= row.max_runs ? '起動回数の上限に達しました。' : null;
-        if (row.model_calls >= row.max_model_calls) reason = '定期実行のモデル呼び出し上限に達しました。';
-        if (row.run_count - row.failure_reset >= 3 && recent.length === 3 && recent.every(task => task.state !== 'completed'))
-          reason = '3回続けて完了しなかったため、定期実行を停止しました。';
-        if (reason) {
-          this.db.prepare('UPDATE schedules SET enabled=0,wait_reason=? WHERE id=?').run(reason, row.id);
-          this.db.prepare(`INSERT INTO updates(room_id,author_id,kind,title,detail,task_id,created_at)
-            VALUES (?,?,?,?,?,?,?)`).run(row.room_id, row.agent_id, row.run_count >= row.max_runs ? 'decision' : 'question',
-            `定期実行を停止：${row.prompt.slice(0, 180)}`, reason, recent[0]?.id ?? null, Date.now());
-          continue;
-        }
-        if (row.next_at > now) continue;
-        // Dormancy or revoked room access leaves the occurrence pending without creating a task.
-        try { this.recipient(actor, row.agent_id, row.room_id); } catch { continue; }
-        if (row.autonomous && this.db.prepare('SELECT visibility FROM rooms WHERE id=?').get(row.room_id)!.visibility !== 'shared') continue;
-        const next = row.next_at + (Math.floor((now - row.next_at) / row.interval_ms) + 1) * row.interval_ms;
-        let revision = row.source_revision;
-        if (row.trigger_kind === 'shared_changes') {
-          if (this.db.prepare('SELECT visibility FROM rooms WHERE id=?').get(row.room_id)!.visibility !== 'shared') continue;
-          revision = this.sourceRevision(row.agent_id, row.room_id);
-          if (revision === row.source_revision) {
-            this.db.prepare('UPDATE schedules SET next_at=? WHERE id=?').run(next, row.id); continue;
-          }
-        }
-        const task = this.tasks.create(actor, row.agent_id, row.room_id, row.prompt, Date.now() + row.timeout_ms);
-        this.db.prepare('INSERT INTO schedule_runs VALUES (?,?,?)').run(row.id, row.next_at, task.id);
-        this.db.prepare('UPDATE schedules SET next_at=?,run_count=run_count+1,source_revision=? WHERE id=?').run(next, revision, row.id);
+    if (this.db.prepare('SELECT paused FROM settings WHERE id=1').get()!.paused === 1) return;
+    let failure: unknown;
+    for (const row of this.list(actor).filter(item => item.enabled)) {
+      // One bad schedule rolls back only its own occurrence and is retried next tick; it must not block the others.
+      try { transaction(this.db, () => this.occur(actor, row, now)); } catch (error) { failure ??= error; }
+    }
+    if (failure) throw failure;
+  }
+  private occur(actor: Actor, row: Schedule, now: number): void {
+    if (row.autonomous && (this.db.prepare('SELECT autonomous FROM settings WHERE id=1').get()!.autonomous !== 1 || this.db.prepare('SELECT enabled FROM agent_autonomy WHERE agent_id=?').get(row.agent_id)?.enabled === 0)) return;
+    const recent = this.db.prepare(`SELECT t.id,t.state FROM schedule_runs r JOIN tasks t ON t.id=r.task_id
+      WHERE r.schedule_id=? ORDER BY r.scheduled_at DESC LIMIT 3`).all(row.id);
+    if (this.db.prepare(`SELECT 1 FROM schedule_runs r JOIN tasks t ON t.id=r.task_id
+      WHERE r.schedule_id=? AND t.state NOT IN ('completed','failed','cancelled') LIMIT 1`).get(row.id)) return;
+    let reason: string | null = row.run_count >= row.max_runs ? '起動回数の上限に達しました。' : null;
+    if (row.model_calls >= row.max_model_calls) reason = '定期実行のモデル呼び出し上限に達しました。';
+    if (row.run_count - row.failure_reset >= 3 && recent.length === 3 && recent.every(task => task.state !== 'completed'))
+      reason = '3回続けて完了しなかったため、定期実行を停止しました。';
+    if (reason) {
+      this.db.prepare('UPDATE schedules SET enabled=0,wait_reason=? WHERE id=?').run(reason, row.id);
+      this.db.prepare(`INSERT INTO updates(room_id,author_id,kind,title,detail,task_id,created_at)
+        VALUES (?,?,?,?,?,?,?)`).run(row.room_id, row.agent_id, row.run_count >= row.max_runs ? 'decision' : 'question',
+        `定期実行を停止：${row.prompt.slice(0, 180)}`, reason, recent[0]?.id ?? null, Date.now());
+      return;
+    }
+    if (row.next_at > now) return;
+    // Dormancy or revoked room access leaves the occurrence pending without creating a task.
+    try { this.recipient(actor, row.agent_id, row.room_id); } catch { return; }
+    if (row.autonomous && this.db.prepare('SELECT visibility FROM rooms WHERE id=?').get(row.room_id)!.visibility !== 'shared') return;
+    const next = row.next_at + (Math.floor((now - row.next_at) / row.interval_ms) + 1) * row.interval_ms;
+    let revision = row.source_revision;
+    if (row.trigger_kind === 'shared_changes') {
+      if (this.db.prepare('SELECT visibility FROM rooms WHERE id=?').get(row.room_id)!.visibility !== 'shared') return;
+      revision = this.sourceRevision(row.agent_id, row.room_id);
+      if (revision === row.source_revision) {
+        this.db.prepare('UPDATE schedules SET next_at=? WHERE id=?').run(next, row.id); return;
       }
-    });
+    }
+    const task = this.tasks.create(actor, row.agent_id, row.room_id, row.prompt, Date.now() + row.timeout_ms);
+    this.db.prepare('INSERT INTO schedule_runs VALUES (?,?,?)').run(row.id, row.next_at, task.id);
+    this.db.prepare('UPDATE schedules SET next_at=?,run_count=run_count+1,source_revision=? WHERE id=?').run(next, revision, row.id);
   }
 }

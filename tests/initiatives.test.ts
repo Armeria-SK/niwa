@@ -98,3 +98,14 @@ test('artifact revisions coalesce during cooldown; membership removal and deleti
  const privateRoom=r.createRoom(admin,'個別',[other.id]);r.tasks.cancel(admin,child.task.id);r.tasks.create(admin,other.id,privateRoom.id,'非公開');const privateLease=r.tasks.claim(admin)!;
  r.initiatives.save(r.agentSession(other.id),privateLease,{id:null,expected_revision:0,body:{...body(other.id),purpose:'private-canary'},state:'active',review_at:0});r.applyAgentDeletions(admin,[{id:other.id,deleted_at:Date.now()}]);assert.equal(db.prepare("SELECT count(*) n FROM initiatives WHERE body LIKE '%private-canary%'").get()!.n,0);
 });
+
+test('initiative prompt stays bounded however much evidence and history accumulates, so the wake still starts',t=>{
+ const {r,admin,bot,actor,room,db}=fixture(t);r.initiatives.enable(admin,true);
+ r.tasks.create(admin,bot.id,room.id,'初回');const lease=r.tasks.claim(admin)!;
+ const item=r.initiatives.save(actor,lease,{id:null,expected_revision:0,body:{...body(bot.id),purpose:'x'.repeat(2000),method:'y'.repeat(2000),last_result:'z'.repeat(2000)},state:'active',review_at:0});
+ const add=db.prepare('INSERT INTO initiative_evidence VALUES (?,?,?,?,?)');for(let i=0;i<200;i++)add.run(item.id,'ref'+i,'根拠'.repeat(1000),'finding',lease.task.id);
+ r.tasks.finish(actor,lease,'初回終了');
+ const prompt=r.initiatives.prompt(admin,item.id);assert.ok(prompt.length<14000);assert.match(prompt,/"根拠":192/);assert.match(prompt,/ref199/);assert.doesNotMatch(prompt,/ref0"/);
+ const now=Date.now();r.autonomousWakes.dispatch(admin,now);r.autonomousWakes.dispatch(admin,now+60001);
+ const cycle=r.tasks.claim(admin)!;assert.equal(r.initiatives.current(actor,cycle.task.id)!.id,item.id);assert.match(cycle.task.prompt,/継続する取り組み/);
+});

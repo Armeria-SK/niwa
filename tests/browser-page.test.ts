@@ -12,7 +12,10 @@ import { CdpPipe } from '../src/tools/browser/cdp.ts';
 import { BrowserPage } from '../src/tools/browser/page.ts';
 import { BrowserRequests } from '../src/tools/browser/requests.ts';
 import { browserWorker } from '../src/tools/browser/worker.ts';
-import { BrowserSession } from '../src/tools/browser/session.ts';
+import { BrowserSession, snapshotSchema } from '../src/tools/browser/session.ts';
+import { BrowserActionError } from '../src/tools/browser/action-error.ts';
+import { Value } from '@sinclair/typebox/value';
+import vm from 'node:vm';
 
 const executable = [process.env.NIWA_TEST_CHROMIUM, 'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe', '/usr/bin/chromium'].find(path => path && existsSync(path));
@@ -157,6 +160,51 @@ test('JSON SPA requests stay paused until an exact response arrives and expire o
     for(let until=Date.now()+3000;Date.now()<until && !page.requests?.length;){await delay(20);page=await session.snapshot();}
     const expired=page.requests![0]!;
     await session.navigate('https://fixture.example.com/next');
-    await assert.rejects(session.completeRequest({...expired,status:200,text:'{}'}),/rejected/);
+    await assert.rejects(session.completeRequest({...expired,status:200,text:'{}'}),/expired/);
   } finally {await session.close();await rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
+});
+
+// Runs the real observation/interaction scripts against a minimal fake DOM, so no browser binary is needed.
+function fakePage(elements: Record<string, unknown>[]) {
+  const document = { nodeType: 9, title: 'Fake', body: { innerText: 'body' }, querySelectorAll: () => elements };
+  const context = vm.createContext({ document, location: { href: 'https://fixture.example.com/' }, getComputedStyle: () => ({ visibility: 'visible' }), window: { scrollBy() {} }, Event: class {},
+    HTMLElement: { prototype: { click() {} } } });
+  const cdp = { onEvent: () => () => {}, async send(method: string, params: Record<string, unknown>) {
+    if (method === 'Target.createBrowserContext') return { browserContextId: 'c' };
+    if (method === 'Target.createTarget') return { targetId: 't' };
+    if (method === 'Target.attachToTarget') return { sessionId: 's' };
+    if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'f' } } };
+    if (method === 'Page.createIsolatedWorld') return { executionContextId: 1 };
+    if (method === 'Runtime.evaluate') {
+      try { return { result: { value: vm.runInContext(String(params.expression), context) } }; }
+      catch (error) { return { exceptionDetails: { exception: { description: String((error as Error).stack) } } }; }
+    }
+    return {};
+  } } as unknown as CdpPipe;
+  return new BrowserPage(cdp);
+}
+const link = (href: string, extra: Record<string, unknown> = {}) => ({ tagName: 'A', href, innerText: 'Link', getClientRects: () => [1], getAttribute: () => null, matches: () => true, shadowRoot: null, ...extra });
+
+test('one overlong link or role cannot invalidate the whole observation', async () => {
+  const page = fakePage([link('https://fixture.example.com/ok'), link('data:text/csv;base64,' + 'A'.repeat(50_000), { innerText: 'Export' }),
+    link('https://fixture.example.com/', { getAttribute: (name: string) => name === 'role' ? 'r'.repeat(300) : null })]);
+  await page.open();
+  const snapshot = await page.snapshot();
+  assert.ok(Value.Check(snapshotSchema, snapshot), 'snapshot must pass the trusted-side validation');
+  assert.equal(snapshot.elements[0]!.href, 'https://fixture.example.com/ok');
+  assert.equal('href' in snapshot.elements[1]!, false); assert.match(snapshot.elements[1]!.name, /^Export \[link too long\]$/);
+  assert.equal(snapshot.elements[2]!.role.length, 100);
+});
+
+test('page-side refusals surface as fixed action codes instead of a generic worker failure', async () => {
+  const button = { tagName: 'BUTTON', type: 'submit', innerText: 'Go', getClientRects: () => [1], getAttribute: () => null, shadowRoot: null, isConnected: true,
+    matches: (selector: string) => !selector.includes(':disabled') && selector.includes('button') };
+  const page = fakePage([button]);
+  await page.open();
+  const snapshot = await page.snapshot();
+  await assert.rejects(page.interact({ action: 'click', revision: snapshot.revision, ref: 0 }), (error: unknown) => error instanceof BrowserActionError && error.code === 'use_follow_or_form');
+  await assert.rejects(page.interact({ action: 'fill', revision: snapshot.revision, ref: 0, value: 'x' }), (error: unknown) => error instanceof BrowserActionError && error.code === 'dedicated_operation');
+  await assert.rejects(page.interact({ action: 'click', revision: 'old', ref: 0 }), (error: unknown) => error instanceof BrowserActionError && error.code === 'stale_reference');
+  // The failed attempts left the observation usable.
+  await assert.rejects(page.interact({ action: 'click', revision: snapshot.revision, ref: 0 }), BrowserActionError);
 });

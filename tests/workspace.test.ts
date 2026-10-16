@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, symlinkSync, linkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, readdirSync, writeFileSync, symlinkSync, linkSync } from 'node:fs';
 import { join, parse } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Workspace } from '../src/tools/files/workspace.ts';
 import { createWorkspaceServer } from '../src/tools/files/server.ts';
-import { workspaceReader, workspaceWriter, workspaceDownloader, configuredWorkspaceReader } from '../src/tools/files/client.ts';
+import { workspaceReader, workspaceWriter, workspaceDownloader, configuredWorkspaceReader, callWorkspace, WorkspaceRequestError } from '../src/tools/files/client.ts';
 import { randomUUID, createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { WorkspaceWriteLog } from '../src/tools/files/write-log.ts';
@@ -306,4 +306,45 @@ test('ENOSPC before atomic replacement preserves original bytes and cleans tempo
   finally {fs.writeFileSync=original;syncBuiltinESMExports();}
   assert.equal(f.files.read('kept.bin').content,'original');
   assert.deepEqual((await import('node:fs')).readdirSync(f.shared),['kept.bin']);
+});
+
+test('a parent swapped for a symlink after the check cannot redirect reads, listings or writes outside the workspace', { skip: process.platform !== 'linux' }, t => {
+  const f = fixture(t); const outside = join(f.root, 'private'); mkdirSync(join(outside, 'deep'), { recursive: true });
+  writeFileSync(join(outside, 'secret.txt'), 'outside secret'); writeFileSync(join(outside, 'deep', 'secret.txt'), 'outside secret');
+  const populate = () => { mkdirSync(join(f.shared, 'sub', 'deep'), { recursive: true });
+    writeFileSync(join(f.shared, 'sub', 'secret.txt'), 'inside'); writeFileSync(join(f.shared, 'sub', 'deep', 'secret.txt'), 'inside'); };
+  populate();
+  let armed = false;
+  const swap = () => { if (!armed) return; armed = false; rmSync(join(f.shared, 'sub'), { recursive: true }); symlinkSync(outside, join(f.shared, 'sub')); };
+  const reset = () => { rmSync(join(f.shared, 'sub'), { recursive: true }); populate(); };
+  const files = new Workspace(f.shared, swap);
+  assert.equal(files.read('sub/secret.txt').content, 'inside');
+  armed = true; assert.throws(() => files.read('sub/secret.txt'), /invalid_path/); reset();
+  armed = true; assert.throws(() => files.download('sub/deep/secret.txt'), /invalid_path/); reset();
+  armed = true; assert.throws(() => files.list('sub'), /invalid_path/); reset();
+  // The swapped parent is an intermediate directory, so O_NOFOLLOW on the last component alone would not notice.
+  armed = true; assert.throws(() => files.write('sub/deep/new.txt', 'attacker', null), /invalid_path/); reset();
+  armed = true; assert.throws(() => files.write('sub/secret.txt', 'attacker', createHash('sha256').update('inside').digest('hex')), /invalid_path/); reset();
+  assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'outside secret');
+  assert.deepEqual(readdirSync(outside).sort(), ['deep', 'secret.txt']); assert.deepEqual(readdirSync(join(outside, 'deep')), ['secret.txt']);
+  assert.equal(files.write('sub/deep/new.txt', 'fine', null).path, 'sub/deep/new.txt');
+  assert.equal(readFileSync(join(f.shared, 'sub', 'deep', 'new.txt'), 'utf8'), 'fine');
+  assert.deepEqual(readdirSync(join(f.shared, 'sub', 'deep')).sort(), ['new.txt', 'secret.txt']);
+});
+
+test('broker refusals keep their bounded code and only busy is retryable', async t => {
+  const f = fixture(t); const replies: [number, string][] = [[503, '{"error":"busy"}'], [409, '{"error":"conflict"}'], [400, '{"error":"request_failed"}'], [400, '{"error":"Bad Value <script>"}'], [400, 'not json']];
+  const server = createServer((request, response) => { request.resume(); const [status, body] = replies.shift()!; response.writeHead(status, { 'content-type': status === 400 && body === 'not json' ? 'text/plain' : 'application/json' }).end(body); });
+  const endpoint = join(f.root, 'refusal.sock'); await new Promise<void>(resolve => server.listen(endpoint, resolve));
+  t.after(() => new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }));
+  const ask = () => callWorkspace(endpoint, () => {}, { operation: 'read', path: 'a' }).catch(error => error as Error & { code?: string; retryable?: boolean; status?: number });
+  const busy = await ask();
+  assert.ok(busy instanceof WorkspaceRequestError); assert.equal(busy.code, 'busy'); assert.equal(busy.retryable, true); assert.equal(busy.status, 503);
+  const conflict = await ask();
+  assert.ok(conflict instanceof WorkspaceRequestError); assert.equal(conflict.code, 'conflict'); assert.equal(conflict.retryable, false); assert.match(conflict.message, /conflict/);
+  const opaque = await ask();
+  assert.ok(opaque instanceof WorkspaceRequestError); assert.equal(opaque.code, 'request_failed');
+  for (let i = 0; i < 2; i++) { const unusable = await ask() as Error; assert.ok(!(unusable instanceof WorkspaceRequestError)); assert.match(unusable.message, /Workspace request failed/); }
+  replies.push([503, '{"error":"busy"}']);
+  assert.deepEqual(await workspaceWriter(endpoint, () => {})({ operation_id: 'busy-write', path: 'a.txt', content: 'x', expected_revision: null }), { error: 'busy', retryable: true });
 });

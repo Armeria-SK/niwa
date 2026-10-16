@@ -6,7 +6,6 @@ import { MemoryCredentialStore } from '../src/auth/credential-store.ts';
 import { collectModelEvents } from '../src/providers/shared/adapter.ts';
 import { credential, profile, request, response } from './fixtures/model.ts';
 import { Subscription } from '../src/auth/subscription.ts';
-import { ConnectionGate } from '../src/providers/shared/serial.ts';
 import { OAuthAccount } from '../src/auth/account.ts';
 
 test('parallel subscription authentication failures share one credential refresh', async () => {
@@ -47,7 +46,7 @@ test('catalog capacity survives profile and serialized connection without treati
   }
 });
 
-test('independent subscription tasks run concurrently through the gateway gate and cancellation stays local', async () => {
+test('independent subscription tasks run concurrently and cancellation stays local', async () => {
   const store = new MemoryCredentialStore(); await store.write(credential);
   let calls = 0; let release!: () => void; let cancelStarted!: () => void;
   const started = new Promise<void>(resolve => { cancelStarted = resolve; });
@@ -59,15 +58,14 @@ test('independent subscription tasks run concurrently through the gateway gate a
       return response(JSON.parse(String(options?.body)).input[0].content[0].text);
     },
   });
-  const gate = new ConnectionGate();
-  const firstAdapter = gate.wrap(connection.create(profile)); const secondAdapter = gate.wrap(connection.create(profile));
+  const firstAdapter = connection.create(profile); const secondAdapter = connection.create(profile);
   assert.notEqual(firstAdapter, secondAdapter);
   const first = collectModelEvents(firstAdapter.run({ ...request, messages: [{ role: 'user', content: 'first-bot' }] }, { timeout_ms: 2000 }));
   await setImmediate();
   const abort = new AbortController();
   const cancelled = collectModelEvents(secondAdapter.run(request, { timeout_ms: 2000, signal: abort.signal }));
   await started;
-  const third = collectModelEvents(gate.wrap(connection.create(profile)).run({ ...request, messages: [{ role: 'user', content: 'third-bot' }] }, { timeout_ms: 2000 }));
+  const third = collectModelEvents(connection.create(profile).run({ ...request, messages: [{ role: 'user', content: 'third-bot' }] }, { timeout_ms: 2000 }));
   abort.abort();
   assert.equal((await cancelled).at(-1)?.type, 'failed');
   const thirdEvents = await third; assert.equal(thirdEvents.at(-1)?.type, 'completed');

@@ -69,7 +69,7 @@ export class Tasks {
     this.#access.room(actor, roomId);
     check(this.#access.participant(agentId, roomId), 'forbidden', 'Recipient cannot access this conversation');
     text(prompt);
-    const duration=prompt.match(/(?:制限時間|タイムボックス|期限)[:：\s]*(\d{1,4})\s*(秒|分|時間)/) ?? prompt.match(/(?<![\d.．-])(\d{1,4})\s*(秒|分|時間)(?:以内|で)/);
+    const duration=prompt.match(/(?:制限時間|タイムボックス|期限)[:：\s]*(\d{1,4})\s*(秒|分|時間)/);
     if(duration) {const seconds=Number(duration[1])*({秒:1,分:60,時間:3600}[duration[2]!] ?? 0);if(seconds>0 && seconds<=86400) deadlineAt=Math.min(deadlineAt,Date.now()+seconds*1000);}
     check(Number.isSafeInteger(deadlineAt) && deadlineAt > Date.now(), 'invalid', 'Task deadline must be in the future');
     return transaction(this.#db, () => {
@@ -99,15 +99,15 @@ export class Tasks {
     this.#admin(actor);
     return new Set(this.#db.prepare("SELECT id,agent_id FROM tasks WHERE state='queued' AND paused=0 AND internal_autonomous=0 AND NOT EXISTS(SELECT 1 FROM execution_bindings e WHERE e.task_id=tasks.id AND e.waiting=1 AND e.state='pending')").all().filter(row=>this.#autonomyAllowed(String(row.id))).map(row=>String(row.agent_id)));
   }
-  /** Claims one task atomically; waiting parents consume no execution slot. */
-  claim(actor: Actor, excludedAgents: ReadonlySet<string> = new Set()): TaskLease | undefined {
+  /** Claims one task atomically; waiting parents consume no execution slot. `unwinding` counts aborted jobs still running outside the DB. */
+  claim(actor: Actor, excludedAgents: ReadonlySet<string> = new Set(), unwinding = 0): TaskLease | undefined {
     this.#admin(actor);
     return transaction(this.#db, () => {
       this.expire(actor);
       if (this.#paused()) return undefined;
       const { concurrency_limit } = this.#db.prepare('SELECT concurrency_limit FROM settings WHERE id=1').get()!;
       const { count } = this.#db.prepare("SELECT count(*) AS count FROM tasks WHERE state='running'").get()!;
-      if (typeof concurrency_limit === 'number' && Number(count) >= concurrency_limit) return undefined;
+      if (typeof concurrency_limit === 'number' && Number(count) + unwinding >= concurrency_limit) return undefined;
       const next = (this.#db.prepare(`SELECT t.id,t.agent_id FROM tasks t JOIN agents a ON a.id=t.agent_id
         WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS (SELECT 1 FROM execution_bindings e WHERE e.task_id=t.id AND e.waiting=1 AND e.state='pending') AND NOT EXISTS
           (SELECT 1 FROM tasks running WHERE running.agent_id=t.agent_id AND running.state='running')
@@ -484,8 +484,14 @@ export class Tasks {
   }
   finishPrompt(actor:Actor,lease:TaskLease,id:number,events:readonly ModelEvent[]){
     this.get(actor,lease.task.id);const usage=events.filter(e=>e.type==='usage').at(-1);
-    this.#db.prepare('UPDATE prompt_runs SET status=?,input_tokens=?,output_tokens=? WHERE id=? AND task_id=?').run(events.some(e=>e.type==='failed')?'failed':events.some(e=>e.type==='completed')?'completed':'unknown',usage?.input_tokens??null,usage?.output_tokens??null,id,lease.task.id);
+    const status=events.some(e=>e.type==='failed')?'failed':events.some(e=>e.type==='completed')?'completed':'unknown';
+    this.#db.prepare('UPDATE prompt_runs SET status=?,input_tokens=?,output_tokens=? WHERE id=? AND task_id=?').run(status,usage?.input_tokens??null,usage?.output_tokens??null,id,lease.task.id);
+    // A successful response ends the failure streak so backoff and progress describe only consecutive failures.
+    if(status==='completed')this.#db.prepare('DELETE FROM provider_failures WHERE task_id=?').run(lease.task.id);
   }
+  /** A reply made stale by a correction is not delivered; it must not count as a finished phase. */
+  discardPrompt(actor:Actor,lease:TaskLease,id:number){this.#owned(actor,lease);this.#db.prepare("UPDATE prompt_runs SET status='discarded' WHERE id=? AND task_id=?").run(id,lease.task.id);}
+  promptAttempts(actor:Actor,lease:TaskLease,phase:string):number{this.#owned(actor,lease);return Number(this.#db.prepare("SELECT count(*) AS count FROM prompt_runs WHERE task_id=? AND phase=? AND status NOT IN ('failed','discarded')").get(lease.task.id,phase)!.count);}
   promptRuns(actor:Actor,id:string){this.get(actor,id);return this.#db.prepare('SELECT * FROM prompt_runs WHERE task_id=? ORDER BY id').all(id);}
   steps(actor: Actor, id: string): { step: number; memory_revision: number; rules_revision: number; discarded: number; events: ModelEvent[] }[] {
     const task = this.get(actor, id);

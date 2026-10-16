@@ -37,15 +37,20 @@ export async function inspectOllamaModel(baseUrl: string, model: string, fetchIm
   if (data.remote_host || data.remote_model) throw new Error('Niwa requires a local Ollama model');
   return { id: model, tools: data.capabilities.includes('tools'), thinking: data.capabilities.includes('thinking') };
 }
+/** Acquires a request slot for one endpoint; the returned function releases it. */
+export type OllamaSlot = (signal: AbortSignal) => Promise<() => void>;
 export class OllamaAdapter implements ModelAdapter {
   readonly adapter_id = 'ollama';
   readonly capabilities: ModelAdapterCapabilities;
   readonly #model: OllamaModel;
   readonly #url: URL;
   readonly #fetch: typeof fetch;
-  constructor(baseUrl: string, model: OllamaModel, fetchImpl = fetch) {
+  readonly #slot: OllamaSlot | undefined;
+  readonly #queueMs: number;
+  /** `slot` limits concurrent requests per endpoint; waiting for it ends at the caller's abort or `queueMs` (before the turn collector gives up). */
+  constructor(baseUrl: string, model: OllamaModel, fetchImpl = fetch, slot?: OllamaSlot, queueMs = 600_000) {
     this.#model = Object.freeze({ ...model, id: modelName(model.id) });
-    this.#url = ollamaUrl(baseUrl, 'chat'); this.#fetch = fetchImpl;
+    this.#url = ollamaUrl(baseUrl, 'chat'); this.#fetch = fetchImpl; this.#slot = slot; this.#queueMs = queueMs;
     this.capabilities = Object.freeze({
       execution_mode: 'model_api', auth_mode: 'none', billing_mode: 'none', owns_agent_loop: false,
       supports_niwa_tool_loop: model.tools, supports_tool_calls: model.tools, supports_structured_output: false,
@@ -69,14 +74,23 @@ export class OllamaAdapter implements ModelAdapter {
           tool_calls: message.tool_calls.map(call => ({ function: { name: call.name, arguments: call.arguments } })),
         } : {}) };
       });
-      sent = true;
-      const data = record(await httpJson(this.#url, { fetch: this.#fetch, timeoutMs: options.timeout_ms,
-        ...(options.signal ? { signal: options.signal } : {}), maxBytes: 8 * 1024 * 1024,
-        body: { model: this.#model.id, stream: false, messages: [{ role: 'system', content: safe.system_instructions }, ...messages],
-          tools: safe.tools.map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.input_schema } })),
-          options: { ...safe.model_options, num_predict: safe.budget.max_output_tokens },
-        },
-      }));
+      let release: (() => void) | undefined;
+      if (this.#slot) {
+        const wait = AbortSignal.timeout(this.#queueMs);
+        try { release = await this.#slot(options.signal ? AbortSignal.any([options.signal, wait]) : wait); }
+        catch { throw new HttpError(options.signal?.aborted ? 'aborted' : 'timeout'); }
+      }
+      let data: Record<string, unknown>;
+      try {
+        sent = true;
+        data = record(await httpJson(this.#url, { fetch: this.#fetch, timeoutMs: options.timeout_ms,
+          ...(options.signal ? { signal: options.signal } : {}), maxBytes: 8 * 1024 * 1024,
+          body: { model: this.#model.id, stream: false, messages: [{ role: 'system', content: safe.system_instructions }, ...messages],
+            tools: safe.tools.map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.input_schema } })),
+            options: { ...safe.model_options, num_predict: safe.budget.max_output_tokens },
+          },
+        }));
+      } finally { release?.(); }
       const message = record(data.message);
       if (data.done !== true || message.role !== 'assistant' || typeof message.content !== 'string') throw new HttpError('invalid');
       if (message.content) yield { type: 'text_delta', text: message.content };

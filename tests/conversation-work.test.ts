@@ -63,6 +63,32 @@ test('multiple ongoing jobs do not cause an implicit followup to select a job',t
  assert.equal(r.tasks.workState(aa,lease).request_context?.related_task_id,null);
 });
 
+test('an unattached followup reaches only its own task, never the delegates of the Bot\'s other jobs',t=>{
+ const {r,admin,a,aa,b,room}=fixture(t);
+ r.submit(admin,randomUUID(),room.id,'人工依頼P1',a.id);
+ const child=r.tasks.delegate(aa,r.tasks.claim(admin)!,b.id,'人工の調査');
+ r.submit(admin,randomUUID(),room.id,'人工依頼P2',a.id,undefined,{kind:'new'});
+ const lease=r.tasks.claim(admin)!,actor=r.agentSession(b.id);assert.equal(lease.task.id,child.id);
+ const revision=r.tasks.requestBrief(actor,lease).revision;
+ const followup=r.submit(admin,randomUUID(),room.id,'P2は価格を円で',a.id).task!;
+ assert.equal(r.tasks.followupContext(admin,a.id,room.id),null);
+ assert.equal(r.tasks.get(admin,followup.id).agent_id,a.id);
+ const brief=r.tasks.requestBrief(actor,lease);
+ assert.equal(brief.revision,revision);assert.ok(!brief.administrator_messages.some(m=>String(m.body).includes('P2は価格')));
+});
+
+test('an unaddressed administrator remark is background context and does not change the correction revision',t=>{
+ const {r,admin,a,aa,b,room}=fixture(t);
+ r.submit(admin,randomUUID(),room.id,'人工依頼P1',a.id);
+ r.tasks.delegate(aa,r.tasks.claim(admin)!,b.id,'人工の調査');
+ const lease=r.tasks.claim(admin)!,actor=r.agentSession(b.id),own=r.tasks.requestBrief(actor,lease);
+ const remark=r.post(admin,room.id,'みなさんお疲れさまです');
+ const brief=r.tasks.requestBrief(actor,lease);
+ assert.equal(brief.revision,own.revision);assert.ok(brief.administrator_messages.some(m=>m.message_id===remark.id));
+ r.submit(admin,randomUUID(),room.id,'価格は対象外です',a.id);
+ assert.notEqual(r.tasks.requestBrief(actor,lease).revision,own.revision);
+});
+
 test('autonomous work and its delegates are excluded from implicit user followup context',t=>{
  const {root,r,admin,a,aa,b,room}=fixture(t);
  const autonomous=r.tasks.create(admin,a.id,room.id,'人工の自発活動');
@@ -196,4 +222,28 @@ test('approving a paused operation records exact authorization without releasing
  r.tasks.resume(admin,task.id);const resumed=r.tasks.claim(admin)!;
  assert.equal(resumed.task.id,task.id);assert.equal(r.authorizeAction(aa,resumed,'synthetic-operation','人工操作',action),true);
  assert.equal(r.authorizeAction(aa,resumed,'synthetic-operation','変更した人工操作',{...action,body:'changed'}),false);
+});
+// Memory DB writes are not covered by the control transaction, so a rejected recipient must leave every earlier recipient's memory untouched.
+function twoRecipients(t:{after(fn:()=>void):void}){const root=mkdtempSync('/tmp/niwa-atomic-'),r=new Runtime(root),admin=r.administrator(),a=r.bootstrap(admin),aa=r.agentSession(a.id),room=r.createRoom(admin,'人工の案件');t.after(()=>{r.close();rmSync(root,{recursive:true,force:true});});
+ const [x,y]=[r.createAgent(aa,'担当一'),r.createAgent(aa,'担当二')].sort((p,q)=>p.id<q.id?-1:1);return {root,r,admin,aa,x:x!,y:y!,room};}
+const memoryRows=(root:string,agent:string,sql:string,task:string)=>{const d=new DatabaseSync(join(root,'agents',agent,'memory.db'),{readOnly:true});try{return d.prepare(sql).all(task);}finally{d.close();}};
+test('a follow-up rejected for a later dormant recipient keeps the earlier recipient plan',t=>{
+ const {root,r,admin,aa,x,y,room}=twoRecipients(t);
+ const task=r.submit(admin,randomUUID(),room.id,'人工の調査',x.id).task!,lease=r.tasks.claim(admin)!,xa=r.agentSession(x.id);
+ assert.equal(lease.task.id,task.id);
+ r.tasks.updatePlan(xa,lease,'p1',0,['残り作業A','残り作業B']);r.tasks.wait(xa,lease,'waiting_user','どちらの対象ですか');r.setDormant(aa,y.id,true);
+ const sql='SELECT remaining FROM task_plans WHERE task_id=?',before=memoryRows(root,x.id,sql,task.id);assert.equal(before.length,1);
+ assert.throws(()=>r.submit(admin,randomUUID(),room.id,'対象はAです',[x.id,y.id]),/dormant/);
+ assert.equal(r.tasks.get(admin,task.id).state,'waiting_user');assert.equal(r.tasks.replies(admin,task.id).length,0);
+ assert.deepEqual(memoryRows(root,x.id,sql,task.id),before);
+});
+test('an amendment rejected for a later recipient keeps the earlier recipient steps and plan',t=>{
+ const {root,r,admin,x,y,room}=twoRecipients(t);
+ const task=r.submit(admin,randomUUID(),room.id,'人工の調査',x.id).task!,lease=r.tasks.claim(admin)!,xa=r.agentSession(x.id);
+ r.tasks.saveStep(xa,lease,r.context(xa,room.id).revision,[{type:'text',text:'途中までの考察'} as any]);r.tasks.updatePlan(xa,lease,'p1',0,['残り作業A']);
+ const ctl=r.tasks.controlRevision(admin,task.id),sql='SELECT discarded FROM task_steps WHERE task_id=?',plan='SELECT remaining FROM task_plans WHERE task_id=?';
+ assert.deepEqual(memoryRows(root,x.id,sql,task.id).map(row=>row.discarded),[0]);
+ assert.throws(()=>r.submit(admin,randomUUID(),room.id,'範囲を変更',[x.id,y.id],undefined,{kind:'amend',task_id:task.id,expected_revision:ctl}),/Target does not belong/);
+ assert.equal(r.tasks.get(admin,task.id).state,'running');assert.equal(r.tasks.replies(admin,task.id).length,0);
+ assert.deepEqual(memoryRows(root,x.id,sql,task.id).map(row=>row.discarded),[0]);assert.equal(memoryRows(root,x.id,plan,task.id).length,1);
 });

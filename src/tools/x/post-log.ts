@@ -7,12 +7,14 @@ import { validateXPost, type XPost, type XPostResult } from './api.ts';
 
 export interface XPostOperation { operation_id: string; agent_id: string; room_id: string; task_id: string; post: XPost; allow_start: boolean }
 type Sender = (post: XPost, signal?: AbortSignal) => Promise<XPostResult>;
+/** Equal text is a duplicate only inside this window; later it is a deliberate new post. Receipts for one operation_id never expire. */
+const DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 /** Single shared account queue; only hashes and confirmed IDs are journaled, never credentials or post bodies. */
 export class XPostLog {
   #db; #tail: Promise<unknown> = Promise.resolve(); #closed = false;
-  constructor(file: string, private accountId: string, private send: Sender) {
+  constructor(file: string, private accountId: string, private send: Sender, private now: () => number = Date.now) {
     if (!isAbsolute(file) || !/^[0-9]{1,19}$/.test(accountId)) throw new Error('Invalid X journal configuration');
     assertDirectoryPath(dirname(file));
     try { const info = lstatSync(file); if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new Error('Unsafe X journal'); }
@@ -38,9 +40,11 @@ export class XPostLog {
     if (!input.allow_start) return { error: 'outcome_unknown' };
     if (signal?.aborted) return { error: 'cancelled' };
     const contentHash = hash([this.accountId, input.post]);
-    const duplicate = this.#db.prepare("SELECT output FROM x_posts WHERE content_hash=? AND (output IS NULL OR json_extract(output,'$.id') IS NOT NULL) ORDER BY created_at LIMIT 1").get(contentHash);
+    const now = this.now();
+    const duplicate = this.#db.prepare("SELECT output FROM x_posts WHERE content_hash=? AND created_at>? AND (output IS NULL OR json_extract(output,'$.id') IS NOT NULL) ORDER BY created_at LIMIT 1").get(contentHash, now - DUPLICATE_WINDOW_MS);
     const encoded = duplicate?.output ?? null;
-    this.#db.prepare('INSERT INTO x_posts VALUES (?,?,?,?,?)').run(input.operation_id, inputHash, contentHash, encoded, Date.now());
+    // A copied receipt must not renew the window of the post it copies, so it is indexed under a different hash.
+    this.#db.prepare('INSERT INTO x_posts VALUES (?,?,?,?,?)').run(input.operation_id, inputHash, duplicate ? hash(['copy', contentHash]) : contentHash, encoded, now);
     if (duplicate) return encoded === null ? { error: 'outcome_unknown' } : JSON.parse(String(encoded)) as XPostResult;
     return undefined;
     });

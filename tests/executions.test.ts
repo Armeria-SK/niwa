@@ -55,6 +55,10 @@ test('task execution wait frees model slot, commits with CAS, and membership rem
  const resumed=r.tasks.claim(admin)!;assert.equal(resumed.task.id,al.task.id);assert.equal(r.workareas.executionResult(aa,id,resumed).state,'completed');
  assert.equal((await r.workareas.execute(aa,project.id,{operation:'read',path:'result.txt'},transport,resumed)).content,'result');
  waiting=gate();const second=randomUUID();await r.workareas.execution(aa,project.id,{operation:'execution_start',operation_id:second,allow_start:true,seconds:20,preview:false},transport,resumed);await tick();
+ {const seen:(AbortSignal|undefined)[]=[],ctl=new AbortController(),spy=async(input:import('../src/tools/workareas/store.ts').WorkareaRequest,s?:AbortSignal)=>{seen.push(s);return transport(input,s);};
+  for(const operation of ['execution_list','execution_status'] as const)await r.workareas.execution(aa,project.id,{operation,execution_id:second},spy,resumed,ctl.signal);
+  assert.deepEqual(seen,[ctl.signal,ctl.signal]);ctl.abort();
+  await assert.rejects(r.workareas.execution(aa,project.id,{operation:'execution_list'},spy,resumed,ctl.signal));assert.equal(seen.length,2);}
  await r.workareas.project(admin,{id:project.id,name:'共同制作',room_id:room.id,members:[b.id],expected_revision:1});await r.workareas.syncExecutions(transport);assert.equal(aborted,true);
  assert.equal((await store.execute({operation:'execution_status',area:project.id,epoch:r.workareas.epoch(),execution_id:second})).state,'cancelled');
 });
@@ -76,4 +80,37 @@ test('lost status and inspect replies do not restart a managed execution',async 
   return {code:0,stdout:'[]',stderr:''};
  });
  assert.equal((await runner.run(root,image,[['true']],standardProfile,10,`niwa-program-${randomUUID()}`,AbortSignal.timeout(5000))).stdout,'kept');assert.equal(starts,1);assert.equal(removed,1);assert.equal(reads,2);
+});
+
+test('a busy or unreachable executor never stops a healthy execution, while lost authorization still does',async t=>{
+ const root=mkdtempSync(join(tmpdir(),'niwa-execution-busy-'));mkdirSync(join(root,'files'));mkdirSync(join(root,'catalog'),{mode:0o700});writeFileSync(join(root,'catalog','catalog.json'),'[]',{mode:0o600});
+ const r=new Runtime(join(root,'state')),admin=r.administrator(),a=r.bootstrap(admin),aa=r.agentSession(a.id),room=r.createRoom(admin,'人工案件');
+ r.workareas.enable(admin,true);r.tasks.create(admin,a.id,room.id,'A');const al=r.tasks.claim(admin)!;
+ const project=await r.workareas.project(admin,{name:'共同制作',room_id:room.id,members:[a.id]});r.workareas.select(aa,al,project.id);
+ const catalog=new PackageCatalog(join(root,'catalog')),registry=new EnvironmentRegistry(join(root,'env.db'),image,catalog,async()=>{throw Error('unused');},async()=>true);
+ let aborted=false;
+ const runner:ManagedRunner={run:async(_root,_image,_commands,_profile,_seconds,_name,signal)=>{await new Promise<never>((_,reject)=>signal.addEventListener('abort',()=>{aborted=true;reject(Error('stopped'));},{once:true}));throw Error('unreachable');},status:async()=>null,cleanup:async()=>{},preview:async()=>{throw Error('unused');}};
+ const store=new WorkareaStore(join(root,'files'),async()=>({code:0,stdout:'',stderr:''}),async()=>{},registry,{runner,pool:new ResourcePool(config)});
+ const direct=(input:import('../src/tools/workareas/store.ts').WorkareaRequest,signal?:AbortSignal)=>store.execute(input,signal);
+ t.after(async()=>{await store.stop();store.close();registry.close();r.close();rmSync(root,{recursive:true,force:true});});
+ const definition={name:'test',base_image:image,catalog_revision:catalog.revision,dependencies:[],lockfiles:[],workdir:'/workspace',prepare:[],run:['true'],verify:['true'],profile:'standard'};
+ const version=await r.workareas.execute(aa,project.id,{operation:'environment_prepare',definition,allow_start:true},direct,al);
+ await r.workareas.execute(aa,project.id,{operation:'environment_test',environment:version.id as string,operation_id:randomUUID(),allow_start:true},direct,al);
+ await r.workareas.execute(aa,project.id,{operation:'environment_activate',environment:version.id as string,operation_id:randomUUID(),allow_start:true},direct,al);
+ const id=randomUUID();await r.workareas.execution(aa,project.id,{operation:'execution_start',operation_id:id,allow_start:true,seconds:20,preview:false},direct,al);await tick();
+ const operations:string[]=[];
+ const flaky=(failure:'throw'|'busy')=>(input:import('../src/tools/workareas/store.ts').WorkareaRequest,signal?:AbortSignal)=>{
+  operations.push(input.operation);
+  if(input.operation==='execution_heartbeat'){if(failure==='throw')return Promise.reject(Error('Workspace request failed (busy)'));return Promise.resolve({error:'busy',retryable:true});}
+  return direct(input,signal);
+ };
+ await r.workareas.syncExecutions(flaky('throw'));await r.workareas.syncExecutions(flaky('busy'));
+ assert.ok(operations.includes('execution_heartbeat'));assert.ok(!operations.includes('execution_stop'));assert.equal(aborted,false);
+ assert.equal((await direct({operation:'execution_status',area:project.id,epoch:r.workareas.epoch(),execution_id:id})).state,'running');
+ assert.equal(r.workareas.executionResult(aa,id,al).state,'pending');
+ // A recovered transient failure keeps heartbeating normally and the execution stays live.
+ await r.workareas.syncExecutions(direct);assert.equal(aborted,false);
+ // Losing authorization is different: that must stop it.
+ r.workareas.enable(admin,false);await r.workareas.syncExecutions(flaky('throw'));
+ assert.equal(aborted,true);assert.ok(operations.includes('execution_stop'));
 });

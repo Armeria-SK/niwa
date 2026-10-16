@@ -62,7 +62,23 @@ test('preparation response loss is durable and does not trigger a new installati
  const registry=new EnvironmentRegistry(join(f.root,'failure.db'),base,new PackageCatalog(join(f.root,'catalog')),async()=>{calls++;throw Error('connection lost');},async()=>true);t.after(()=>registry.close());
  const def={...f.definition,dependencies:[{name:'example',version:'1.0'}]};
  const first=await registry.prepare(f.area,f.epoch,def,true);assert.equal('state' in first&&first.state,'outcome_unknown');
- assert.deepEqual(await registry.prepare(f.area,f.epoch,def,true),first);assert.equal(calls,1);
+ // A replay of the lost response (allow_start false) never starts again; only an explicit new attempt may.
+ assert.deepEqual(await registry.prepare(f.area,f.epoch,def,false),first);assert.equal(calls,1);
+ assert.match(String((first as {hint?:string}).hint),/environment_prepare/);
+ const retry=await registry.prepare(f.area,f.epoch,def,true);assert.equal(calls,2);assert.ok('id' in retry&&'id' in first&&retry.id!==first.id);
+ assert.deepEqual(await registry.prepare(f.area,f.epoch,def,false),retry);assert.equal(calls,2);
+});
+
+test('a failed preparation can be retried explicitly, while in-progress and succeeded ones stay idempotent',async t=>{
+ const f=setup(t);let attempts=0;
+ const registry=new EnvironmentRegistry(join(f.root,'retry.db'),base,new PackageCatalog(join(f.root,'catalog')),async()=>{attempts++;return attempts===1?{error:'installation_failed'} as const:{image:derived,installed:[{name:'example',version:'1.0'}]};},async()=>true);t.after(()=>registry.close());
+ const def={...f.definition,dependencies:[{name:'example',version:'1.0'}]};
+ const failed=await registry.prepare(f.area,f.epoch,def,true);assert.equal('state' in failed&&failed.state,'failed');assert.match(String((failed as {hint?:string}).hint),/環境|prepare/);
+ assert.deepEqual(await registry.prepare(f.area,f.epoch,def,false),failed);assert.equal(attempts,1);
+ const ready=await registry.prepare(f.area,f.epoch,def,true);assert.equal('state' in ready&&ready.state,'ready');assert.equal(attempts,2);
+ assert.deepEqual(await registry.prepare(f.area,f.epoch,def,true),ready);assert.equal(attempts,2);
+ assert.deepEqual(await registry.prepare(f.area,f.epoch,def,false),ready);
+ assert.equal((await registry.resolve(f.area,f.epoch,(ready as {id:string}).id)).image,derived);
 });
 
 test('two Bot leases share only the selected project environment and retain private/independent boundaries',async t=>{

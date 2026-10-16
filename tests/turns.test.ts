@@ -105,6 +105,65 @@ test('failed read recovery returns a bounded report and resumes the waiting pare
  assert.ok(f.runtime.tasks.promptRuns(f.admin,lease.task.id).some(p=>p.phase==='task_summary_save'));
 });
 
+test('a correction during the recovery report discards it and regenerates the report with the correction',async t=>{
+ const f=fixture(t);const task=f.runtime.submit(f.admin,randomUUID(),f.room.id,'根拠を調べる',f.leader.id).task!,lease=f.runtime.tasks.claim(f.admin)!;
+ f.runtime.reviewMemory(f.actor,lease,{memories:[]});
+ for(let i=0;i<8;i++)f.runtime.tasks.observe(f.actor,lease,'failed'+i,'web_read',{url:`https://example.test/${i}`},{error:'Unavailable'});
+ for(let i=0;i<3;i++)f.runtime.tasks.recordPrompt(f.actor,lease,{version:'structured-v5',phase:'read_recovery',rules_revision:f.runtime.commonRules(f.actor).revision,memory_revision:f.runtime.context(f.actor,f.room.id).revision,input_bytes:10,estimated_input_tokens:3,removed_messages:0});
+ let reports=0;
+ await new TurnRunner(f.runtime,async()=>model(request=>{
+  if(!request.tools.some(t=>t.name==='conversation_send')||request.tools.length!==2)return complete('完了');
+  const brief=JSON.parse(request.messages.at(-1)!.content!).work_state.request_brief;
+  if(++reports===1){f.runtime.submit(f.admin,randomUUID(),f.room.id,'価格は対象外です。確認できた範囲で返してください',f.leader.id);return tool('conversation_send',{body:'訂正前の確認結果',recipient_ids:[]});}
+  assert.ok(brief.administrator_messages.some((m:{body:string})=>m.body.includes('価格は対象外')));
+  return tool('conversation_send',{body:'訂正を反映した確認結果',recipient_ids:[]});
+ }),{}, {promptVersion:'structured-v5'}).run(lease);
+ assert.equal(reports,2);assert.equal(f.runtime.tasks.get(f.admin,task.id).state,'completed');
+ assert.deepEqual(f.runtime.messages(f.admin,f.room.id).filter(m=>m.author_id===f.leader.id).map(m=>m.body),['訂正を反映した確認結果']);
+ assert.ok(f.runtime.tasks.promptRuns(f.admin,task.id).some(p=>p.phase==='read_recovery_report'&&p.status==='discarded'));
+});
+
+test('an unaddressed room remark does not discard a running answer',async t=>{
+ const f=fixture(t);const task=f.runtime.submit(f.admin,randomUUID(),f.room.id,'人工の構成比較',f.leader.id).task!,lease=f.runtime.tasks.claim(f.admin)!;
+ let calls=0,resolutions=0;
+ await new TurnRunner(f.runtime,async()=>{resolutions++;return model(()=>{calls++;f.runtime.post(f.admin,f.room.id,'みなさんお疲れさまです');return complete('人工の構成比較');});}).run(lease);
+ assert.equal(calls,1);assert.equal(resolutions,1);assert.equal(f.runtime.tasks.get(f.admin,task.id).state,'completed');
+});
+
+function summaryFixture(f:ReturnType<typeof fixture>){
+ const task=f.runtime.submit(f.admin,randomUUID(),f.room.id,'人工の構成比較',f.leader.id).task!,lease=f.runtime.tasks.claim(f.admin)!;
+ f.runtime.tasks.updatePlan(f.actor,lease,'plan',0,['構成を比較して返す']);
+ return {task,lease};
+}
+const summaryAdapter=(onSummary:(request:ModelRequest)=>ModelEvent[]):ModelAdapter=>{
+ const base=model(()=>complete('人工の最終回答'));
+ return {...base,async *run(request,options){
+  if(request.tools.length===1&&request.tools[0]!.name==='task_summary_save'){yield* onSummary(request);return;}
+  yield* base.run(request,options);
+ }};
+};
+
+test('an unusable completion summary is retried a bounded number of times, then the finished answer is sent',async t=>{
+ const f=fixture(t),{task,lease}=summaryFixture(f);let summaries=0,first=lease;
+ const runner=new TurnRunner(f.runtime,async()=>summaryAdapter(()=>{summaries++;return complete('形式に合わない出力');}),{}, {promptVersion:'structured-v5'});
+ for(let i=0;i<6&&f.runtime.tasks.get(f.admin,task.id).state!=='completed';i++){
+  if(i)f.runtime.tasks.retryProviders(f.admin,Date.now()+120_000);
+  await runner.run(i?f.runtime.tasks.claim(f.admin)!:first);
+ }
+ assert.equal(summaries,3);assert.equal(f.runtime.tasks.get(f.admin,task.id).state,'completed');
+ assert.ok(f.runtime.messages(f.admin,f.room.id).some(m=>m.author_id===f.leader.id&&m.body==='人工の最終回答'));
+});
+
+test('a summary whose sources are rejected is counted as an attempt and cannot loop forever',async t=>{
+ const f=fixture(t),{task,lease}=summaryFixture(f);let summaries=0;
+ await new TurnRunner(f.runtime,async()=>summaryAdapter(request=>{
+  summaries++;const state=JSON.parse(request.messages.at(-1)!.content!).work_state;
+  return tool('task_summary_save',{conclusion:'人工の引継ぎ',reason:'出所の版が古い',unresolved:[],next_steps:[],sources:[{kind:state.summary_sources[0].kind,source_id:state.summary_sources[0].source_id,revision:'0'.repeat(64)}]});
+ }),{}, {promptVersion:'structured-v5'}).run(lease);
+ assert.equal(summaries,3);assert.equal(f.runtime.tasks.get(f.admin,task.id).state,'completed');
+ assert.ok(f.runtime.messages(f.admin,f.room.id).some(m=>m.author_id===f.leader.id&&m.body==='人工の最終回答'));
+});
+
 test('a recovery report cannot invoke unoffered retrieval or execution tools',async t=>{
  const f=fixture(t);f.runtime.tasks.create(f.admin,f.leader.id,f.room.id,'根拠を調べる');const lease=f.runtime.tasks.claim(f.admin)!;
  for(let i=0;i<8;i++)f.runtime.tasks.observe(f.actor,lease,'failed'+i,'web_read',{url:`https://example.test/${i}`},{error:'Unavailable'});

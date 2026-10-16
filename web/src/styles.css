@@ -330,6 +330,8 @@
   .thread-list .empty-state h3 { font-size: 12px; }
   .thread-list .empty-state p { font-size: 10px; }
   .toast { position: fixed; left: 50%; bottom: 29px; transform: translate(-50%, 12px); opacity: 0; pointer-events: none; background: #31462d; color: white; border: 1px solid #506548; border-radius: 11px; box-shadow: 0 7px 25px #24311922; display: flex; align-items: center; gap: 12px; padding: 11px 13px 11px 16px; font-size: 12px; max-width: min(600px, calc(100vw - 32px)); width: max-content; z-index: 120; transition: opacity .18s, transform .18s; }
+  .field-hint code { overflow-wrap: anywhere; }
+  .offline-notice { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); background: #7a3d2b; color: white; border-radius: 11px; box-shadow: 0 7px 25px #24311922; padding: 9px 16px; font-size: 12px; max-width: min(600px, calc(100vw - 32px)); z-index: 130; }
   .toast.visible { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
   .toast > svg { color: #b9cfab; }
   .toast .icon-button { color: #d1deca; width: 25px; height: 25px; }

@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { Value } from '@sinclair/typebox/value';
 import { browserOperationSchema } from './client.ts';
 import type { BrowserSession } from './session.ts';
+import { BrowserActionError } from './action-error.ts';
 
 type Session = Pick<BrowserSession, 'navigate' | 'snapshot' | 'follow' | 'close'> & Partial<Pick<BrowserSession, 'prepareForm' | 'interact' | 'completeRequest'>>;
 /** Bind to the protected executor Unix socket only. Caller identities come from the trusted runtime, not model arguments. */
@@ -43,9 +44,9 @@ export function createBrowserServer(create: () => Session, reserve?: (signal:Abo
             action.kind === 'form' ? await entry.session.prepareForm?.(action.revision, action.ref, action.fields, controller.signal) :
             action.kind === 'follow' ? await entry.session.follow(action.revision, action.ref, controller.signal) : await entry.session.snapshot(controller.signal);
           if (!response.destroyed) response.end(JSON.stringify(result));
-        } catch (error) { sessions.delete(key); await entry.session.close(); throw error; }
+        } catch (error) { if (!(error instanceof BrowserActionError)) { sessions.delete(key); await entry.session.close(); } throw error; }
         finally { entry.busy = false; entry.used = Date.now(); }
-      } catch { if (!response.destroyed) response.writeHead(400).end('{}'); }
+      } catch (error) { if (!response.destroyed) response.writeHead(400).end(error instanceof BrowserActionError ? JSON.stringify({ error: error.code }) : '{}'); }
       finally { active.delete(controller); response.off('close', disconnect); }
     })();
     work.add(pending); void pending.finally(() => work.delete(pending));

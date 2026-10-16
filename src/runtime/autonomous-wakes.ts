@@ -63,6 +63,7 @@ export class AutonomousWakes {
 
   dispatch(actor: Actor, now = Date.now()): void {
     this.admin(actor);
+    let failure: unknown;
     transaction(this.db, () => {
       // Settle completed cycles even when stopped; never reset a persisted rest on restart.
       for (const row of this.db.prepare(`SELECT w.*,t.state,t.result,t.updated_at FROM autonomous_wakes w JOIN tasks t ON t.id=w.task_id
@@ -95,6 +96,8 @@ export class AutonomousWakes {
         ORDER BY w.last_started_at,w.next_at,a.rowid`).all(now,now);
       const candidate=candidates.filter(c=>!busy.has(String(c.agent_id))).find(c=>!this.initiatives.enabled()||this.initiatives.candidate(actor,String(c.agent_id),now)||!this.initiatives.list(actor).some(i=>i.owner_id===c.agent_id&&i.state==='resting'));
       if (!candidate) return;
+      // A candidate that cannot start (e.g. an oversized prompt) is rolled back and deferred so it cannot block the others or crash the tick.
+      try { transaction(this.db, () => {
       const initiative=this.initiatives.candidate(actor,String(candidate.agent_id),now);
       const room = initiative ? {id:initiative.room_id} : this.db.prepare(`SELECT r.id FROM rooms r LEFT JOIN room_preferences p ON p.room_id=r.id
         WHERE r.visibility='shared' AND coalesce(p.archived,0)=0 AND r.id NOT IN (SELECT id FROM deleted_content WHERE kind='room')
@@ -112,6 +115,11 @@ export class AutonomousWakes {
       this.db.prepare('UPDATE tasks SET internal_autonomous=1 WHERE id=?').run(task.id);
       this.db.prepare("UPDATE autonomous_wakes SET task_id=?,last_started_at=?,evidence=?,reason=? WHERE agent_id=?")
         .run(task.id,now,initiative?String(initiative.evidence.length):this.evidence(String(candidate.agent_id)),initiative?`継続する取り組み：${initiative.review_reason}`:'予定なしの定期判定から起動',candidate.agent_id!);
+      }); } catch (error) {
+        failure=error;
+        this.db.prepare("UPDATE autonomous_wakes SET next_at=?,reason='起動に失敗したため待機中' WHERE agent_id=?").run(now+15*MINUTE,candidate.agent_id!);
+      }
     });
+    if (failure) throw failure;
   }
 }

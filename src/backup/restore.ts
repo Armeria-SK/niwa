@@ -9,6 +9,7 @@ import { Runtime } from '../runtime/runtime.ts';
 import { assertDirectoryPath, initializeProduct, productPaths } from '../config/paths.ts';
 import { initializeInstallation, readInstallation } from '../config/installation.ts';
 import { acquireProcessLock } from '../runtime/process-lock.ts';
+import { WebAuth } from '../web/auth.ts';
 import { validateBackupManifest, type BackupManifest } from './backups.ts';
 
 /** Prepare a new state directory. The caller must hold the source service lock until activation. */
@@ -52,8 +53,10 @@ export async function prepareRestore(backup: string, target: string, deletions: 
   }
 }
 
-/** Restore into an explicitly named new installation; the existing installation stays intact. */
-export async function restoreInstallation(root: string, id: string, destination: string) {
+/** Restore into an explicitly named new installation; the existing installation stays intact. `origin` and `port` replace the copied values, checked like the installer does. */
+export async function restoreInstallation(root: string, id: string, destination: string, overrides: { origin?: string; port?: number } = {}) {
+  if (overrides.origin !== undefined) new WebAuth(overrides.origin, 'a'.repeat(43));
+  if (overrides.port !== undefined && !(Number.isInteger(overrides.port) && overrides.port >= 1 && overrides.port <= 65535)) throw new Error('Invalid port');
   const source = productPaths(root); const target = productPaths(destination);
   const relation = relative(source.root, target.root);
   if (!/^[0-9a-f-]{36}$/.test(id) || (!isAbsolute(relation) && relation !== '..' && !relation.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`))) throw new Error('Restore requires a new directory outside the source installation');
@@ -66,7 +69,7 @@ export async function restoreInstallation(root: string, id: string, destination:
     await fs.mkdir(target.root, { mode: 0o700 }); created = true;
     initializeProduct(target.root); runtime = new Runtime(source.state);
     const manifest = await prepareRestore(join(source.backups, id), join(target.runtime, 'restored-state'), runtime.deletionRecords(runtime.administrator()), runtime.deletedAgents(runtime.administrator()), runtime.deletedContent(runtime.administrator()));
-    initializeInstallation(target.root, manifest.installation);
+    initializeInstallation(target.root, { ...manifest.installation, ...overrides });
     await fs.rmdir(target.state);
     await fs.rename(join(target.runtime, 'restored-state'), target.state);
     return target;

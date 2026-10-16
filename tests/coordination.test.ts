@@ -92,6 +92,10 @@ test('planned next owners never dispatch work; one explicit fixed-version handof
  r.tasks.finish(actor,resumed,'改訂・レビュー・凍結まで完了');
  assert.ok(r.tasks.create(admin,leader.id,room.id,'20分の動画の内容を調べる').deadline_at>Date.now()+86400000);
  assert.ok(r.tasks.create(admin,leader.id,room.id,'0.5時間以内の表現を確認').deadline_at>Date.now()+86400000);
+ assert.ok(r.tasks.create(admin,leader.id,room.id,'3分で読める要約を作って').deadline_at>Date.now()+86400000);
+ assert.ok(r.tasks.create(admin,leader.id,room.id,'@Bob 10分で確認します').deadline_at>Date.now()+86400000);
+ assert.ok(r.tasks.create(admin,leader.id,room.id,'30分以内に返事して').deadline_at>Date.now()+86400000);
+ assert.ok(r.tasks.create(admin,leader.id,room.id,'制限時間：3分で要約').deadline_at<Date.now()+200000);
 });
 
 test('work receipt is durable once, visible in its room and never dispatches a reply',t=>{

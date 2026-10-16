@@ -7,6 +7,7 @@ import { BrowserRequests } from './requests.ts';
 import type { BrowserSnapshot } from './page.ts';
 import { formSchema } from './form.ts';
 import { requestApprovalSchema } from './pending-request.ts';
+import { BrowserActionError } from './action-error.ts';
 
 export const snapshotSchema = Type.Object({
   revision: Type.String({ minLength: 1, maxLength: 64 }), url: Type.String({ maxLength: 4096 }),
@@ -33,6 +34,7 @@ export class BrowserSession {
   async #action(method: string, input: unknown, url?: string, signal?: AbortSignal): Promise<BrowserSnapshot> {
     if (this.#busy) throw new Error('Browser session busy');
     const broker = url ? this.broker(url) : undefined;
+    const previous = this.#snapshot;
     this.#busy = true; this.#snapshot = undefined; this.#active = broker;
     const abort = () => { void this.close().catch(() => {}); };
     signal?.addEventListener('abort', abort, { once: true });
@@ -41,8 +43,11 @@ export class BrowserSession {
       if (!Value.Check(snapshotSchema, result) || new Set(result.elements.map(el => el.ref)).size !== result.elements.length)
         throw new Error('Invalid browser observation');
       this.#snapshot = result; return structuredClone(result);
-    } catch (error) { await this.close(); throw error; }
-    finally { signal?.removeEventListener('abort', abort); this.#active = undefined; this.#busy = false; }
+    } catch (error) {
+      // A model mistake leaves the page untouched: keep the session and its current observation. Protocol or integrity failures close it.
+      if (error instanceof BrowserActionError) this.#snapshot = previous; else await this.close();
+      throw error;
+    } finally { signal?.removeEventListener('abort', abort); this.#active = undefined; this.#busy = false; }
   }
   navigate(url: string, signal?: AbortSignal) { return this.#action('browser.navigate', { url }, url, signal); }
   completeRequest(input: Parameters<import('./page.ts').BrowserPage['completeRequest']>[0], signal?: AbortSignal) {
@@ -56,15 +61,15 @@ export class BrowserSession {
   snapshot(signal?: AbortSignal) { return this.#action('browser.snapshot', {}, undefined, signal); }
   follow(revision: string, ref: number, signal?: AbortSignal) {
     const element = this.#snapshot?.elements.find(item => item.ref === ref);
-    if (!revision || revision !== this.#snapshot?.revision || !element?.href) throw new Error('Browser reference is stale or is not a link');
+    if (!revision || revision !== this.#snapshot?.revision || !element?.href) throw new BrowserActionError(revision && revision === this.#snapshot?.revision ? 'link_changed' : 'stale_reference');
     return this.#action('browser.follow', { revision, ref }, element.href, signal);
   }
   interact(input: BrowserInteraction, signal?: AbortSignal) {
-    if (!input.revision || input.revision !== this.#snapshot?.revision) throw new Error('Stale interaction reference');
+    if (!input.revision || input.revision !== this.#snapshot?.revision) throw new BrowserActionError('stale_reference');
     return this.#action('browser.interact', input, undefined, signal);
   }
   prepareForm(revision: string, ref: number, fields: { ref: number; value: string }[], signal?: AbortSignal) {
-    if (!revision || revision !== this.#snapshot?.revision || !this.#snapshot.elements.some(element => element.ref === ref)) throw new Error('Stale form reference');
+    if (!revision || revision !== this.#snapshot?.revision || !this.#snapshot.elements.some(element => element.ref === ref)) throw new BrowserActionError('stale_reference');
     return this.#action('browser.form', { revision, ref, fields }, undefined, signal);
   }
   #closing: Promise<void> | undefined;

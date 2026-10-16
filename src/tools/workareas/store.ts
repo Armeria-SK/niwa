@@ -7,7 +7,7 @@ import {chmodSync,closeSync,writeFileSync,fstatSync,fsyncSync,lstatSync,mkdirSyn
 import {join} from 'node:path';
 import {openDatabase,transaction} from '../../storage/database.ts';
 import {assertDirectoryPath} from '../../config/paths.ts';
-import {Workspace,WorkspaceError} from '../files/workspace.ts';
+import {Workspace,WorkspaceError,outputRejection,rejectionMessage} from '../files/workspace.ts';
 import type {JsonObject} from '../../contracts/model.ts';
 import type {ProgramRequest,ProgramOutput} from '../../sandbox/program.ts';
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -38,12 +38,17 @@ export class WorkareaStore {
   assertDirectoryPath(root);const device=lstatSync(root).dev;const entries:string[]=[];let bytes=0,count=0;
   const walk=(dir:string,relative:string)=>{for(const item of readdirSync(dir,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){
    const name=relative?`${relative}/${item.name}`:item.name,path=join(dir,item.name),stat=lstatSync(path);
-   if(++count>1000 || stat.dev!==device || stat.isSymbolicLink())throw new WorkspaceError('invalid_path');
+   if(++count>1000)throw outputRejection('too_many_entries',name);
+   if(stat.dev!==device)throw outputRejection('cross_device',name);
+   if(stat.isSymbolicLink())throw outputRejection('symlink',name);
    if(stat.isDirectory()){entries.push(`d:${name}`);if(destination)mkdirSync(join(destination,name),{mode:0o700});walk(path,name);}
    else {
-    if(!stat.isFile() || stat.nlink!==1 || stat.size>8*1024*1024 || (bytes+=stat.size)>64*1024*1024)throw new WorkspaceError('unsupported');
+    if(!stat.isFile())throw outputRejection('not_regular_file',name);
+    if(stat.nlink!==1)throw outputRejection('hardlink',name);
+    if(stat.size>8*1024*1024)throw outputRejection('file_too_large',name);
+    if((bytes+=stat.size)>64*1024*1024)throw outputRejection('total_too_large',name);
     const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
-    try{const current=fstatSync(fd);if(current.ino!==stat.ino||current.dev!==device||current.nlink!==1)throw new WorkspaceError('invalid_path');
+    try{const current=fstatSync(fd);if(current.ino!==stat.ino||current.dev!==device||current.nlink!==1)throw outputRejection('changed_during_read',name);
      const data=readFileSync(fd);manifest?.push({path:name,sha256:digest(data),stamp:String(fstatSync(fd,{bigint:true}).ctimeNs)});if(sync){chmodSync(path,stat.mode&0o100?0o700:0o600);fsyncSync(fd);}entries.push(`f:${name}:${digest(data)}:${Number(!!(stat.mode&0o100))}`);
      if(destination)writeFileSync(join(destination,name),data,{flag:'wx',mode:stat.mode&0o100?0o700:0o600});
     }finally{closeSync(fd);}
@@ -138,7 +143,7 @@ export class WorkareaStore {
   if(isRun&&this.busy.has(input.area))return {error:'busy'};
   const container=`niwa-program-${randomUUID()}`,stage=join(this.root,'runs',id);
   this.db.prepare('INSERT INTO receipts VALUES (?,?,?,?,NULL)').run(id,input.area,encoded,isRun?container:null);
-  let result:JsonObject;
+  let result:JsonObject,ran:ProgramOutput|undefined;
   try{
    if(input.operation==='publish'){
     if(!input.artifact||!uuid.test(input.artifact))throw new WorkspaceError('invalid_path');
@@ -162,7 +167,7 @@ export class WorkareaStore {
      const commands=input.operation==='environment_test'?[...version!.definition.prepare,version!.definition.verify]:input.operation==='environment_run'?[...version!.definition.prepare,version!.definition.run,version!.definition.verify]:[input.command??[]];
      const seconds=input.seconds??300;
      if(!Number.isSafeInteger(seconds)||seconds<1||seconds>(input.managed?input.resources!.seconds:300))throw new WorkspaceError('unsupported');
-     const deadline=Date.now()+seconds*1000,cancellation=AbortSignal.any([AbortSignal.timeout(seconds*1000),...(signal?[signal]:[])]);
+     const deadline=Date.now()+seconds*1000,cancellation=AbortSignal.any([AbortSignal.timeout(seconds*1000+(input.managed?0:15000)),...(signal?[signal]:[])]);
      let output:ProgramOutput={code:0,stdout:'',stderr:''};
      if(input.managed){
       if(!this.managed||!version||!input.resources)throw new WorkspaceError('unsupported');
@@ -170,10 +175,10 @@ export class WorkareaStore {
      }else for(const command of commands){
       cancellation.throwIfAborted();
       const step=await this.run(stage,{command,seconds:Math.max(1,Math.ceil((deadline-Date.now())/1000))},cancellation,container,version?.image);
-      output={code:step.code,stdout:(output.stdout+step.stdout).slice(-32768),stderr:(output.stderr+step.stderr).slice(-32768)};
+      output={code:step.code,stdout:(output.stdout+step.stdout).slice(-32768),stderr:(output.stderr+step.stderr).slice(-32768),...(step.timed_out||output.timed_out?{timed_out:true}:{}),...(step.output_truncated||output.output_truncated?{output_truncated:true}:{})};
       if(step.code!==0)break;
      }
-     signal?.throwIfAborted();checkLocks();const afterFiles:{path:string;sha256:string;stamp?:string}[]=[];this.tree(stage,undefined,false,afterFiles);const verification={command_sha256:digest(Buffer.from(JSON.stringify(commands))),area:input.area,environment:version?.id??null,image:version?.image??this.environments?.baseImage??null,executed_at:executedAt,files:inputFiles.filter(f=>afterFiles.some(a=>a.path===f.path&&a.sha256===f.sha256&&a.stamp===f.stamp)).map(({path,sha256})=>({path,sha256}))};const candidate=this.save(area.base,stage);
+     ran=output;signal?.throwIfAborted();checkLocks();const afterFiles:{path:string;sha256:string;stamp?:string}[]=[];this.tree(stage,undefined,false,afterFiles);const verification={command_sha256:digest(Buffer.from(JSON.stringify(commands))),area:input.area,environment:version?.id??null,image:version?.image??this.environments?.baseImage??null,executed_at:executedAt,files:inputFiles.filter(f=>afterFiles.some(a=>a.path===f.path&&a.sha256===f.sha256&&a.stamp===f.stamp)).map(({path,sha256})=>({path,sha256}))};const candidate=this.save(area.base,stage);
      if(input.operation==='environment_test'){
       // Validation runs on a disposable snapshot; preparing never publishes its files or changes the active version.
       if(output.code===0)this.environments!.tested(input.area,input.epoch,version!.id,area.revision);
@@ -181,7 +186,7 @@ export class WorkareaStore {
      }else result={...output,verification,candidate,base_revision:area.revision,...(version?{environment:version.id,image:version.image}: {})}; // Authorization and CAS happen separately after execution.
     }
    }
-  }catch(error){result={error:error instanceof WorkspaceError?error.code:'outcome_unknown'};}
+  }catch(error){result=error instanceof WorkspaceError?{error:error.code,...(error.detail?{rule:error.detail.rule,path:error.detail.path,message:rejectionMessage(error.detail.rule)}:{}),...(error.detail?.output??ran??{})}:{error:'outcome_unknown'};}
   finally{if(isRun)this.busy.delete(input.area);rmSync(stage,{recursive:true,force:true});}
   this.db.prepare('UPDATE receipts SET result=? WHERE id=?').run(JSON.stringify(result),id);return result;
  }

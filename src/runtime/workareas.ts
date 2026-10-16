@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {setTimeout as delay} from 'node:timers/promises';
 import type {DatabaseSync} from 'node:sqlite';
 import type {Actor,Runtime} from './runtime.ts';
 import type {TaskLease} from '../domain/task.ts';
@@ -69,7 +70,7 @@ export class Workareas {
   const prior=this.gates.get(id)??Promise.resolve();const result=prior.catch(()=>{}).then(action);this.gates.set(id,result);
   try{return await result;}finally{if(this.gates.get(id)===result)this.gates.delete(id);}
  }
- async execution(actor:Actor,id:string,input:Omit<WorkareaRequest,'area'|'epoch'>,transport:WorkareaTransport,lease?:TaskLease){
+ async execution(actor:Actor,id:string,input:Omit<WorkareaRequest,'area'|'epoch'>,transport:WorkareaTransport,lease?:TaskLease,signal?:AbortSignal){
   this.authorize(actor,id,lease);check(this.settings(actor).enabled,'forbidden','Workareas disabled');
   if(lease)check(!this.runtime.tasks.independentActivity(actor,lease),'forbidden','Independent activity cannot execute');
   check(['execution_start','execution_list','execution_status','execution_stop','execution_preview'].includes(input.operation),'forbidden','Internal operation');
@@ -80,13 +81,13 @@ export class Workareas {
    if(existing)check(existing.task_id===lease.task.id&&existing.area_id===id,'conflict','Execution scope changed');
    else this.db.prepare('INSERT INTO execution_bindings(id,task_id,area_id,epoch,lease) VALUES (?,?,?,?,?)').run(input.operation_id,lease.task.id,id,epoch,lease.token);
    this.startingExecutions.add(input.operation_id);
-   try{const result=await transport({...input,area:id,epoch,task_id:lease.task.id,deadline:this.runtime.tasks.get(actor,lease.task.id).deadline_at});
+   try{const result=await transport({...input,area:id,epoch,task_id:lease.task.id,deadline:this.runtime.tasks.get(actor,lease.task.id).deadline_at},signal);
     if(result.error)this.db.prepare("UPDATE execution_bindings SET state='failed',result=? WHERE id=?").run(JSON.stringify(result),input.operation_id);
     return result;
    }catch{return {id:input.operation_id,state:'reconciling'};}finally{this.startingExecutions.delete(input.operation_id);}
   }
   if(input.operation==='execution_stop'&&lease){const row=this.db.prepare('SELECT task_id FROM execution_bindings WHERE id=?').get(input.execution_id??'');check(row?.task_id===lease.task.id,'forbidden','Only the owning task or administrator can stop this execution');}
-  const result=await transport({...input,area:id,epoch});this.authorize(actor,id,lease);return result;
+  signal?.throwIfAborted();const result=await transport({...input,area:id,epoch},signal);this.authorize(actor,id,lease);return result;
  }
  async syncExecutions(transport:WorkareaTransport){
   const admin=this.runtime.administrator();
@@ -97,8 +98,17 @@ export class Workareas {
     const actor=this.runtime.agentSession(this.runtime.tasks.get(admin,String(row.task_id)).agent_id),lease={task:this.runtime.tasks.get(admin,String(row.task_id)),token:String(row.lease)};
     const allowed=()=>{this.authorize(actor,area,lease,true);check(this.settings(admin).enabled&&epoch===this.epoch()&&this.selectedForTask(lease.task.id)===area&&this.runtime.tasks.executionAllowed(actor,lease.task.id,lease.token,!!row.waiting),'forbidden','Execution authorization expired');};
     let current:JsonObject;
-    try{allowed();current=await transport({operation:'execution_heartbeat',area,epoch,execution_id:id});}
-    catch{current=await transport({operation:'execution_stop',area,epoch,execution_id:id});}
+    let authorized=true;try{allowed();}catch{authorized=false;}
+    if(authorized){
+     // A busy or briefly unreachable executor says nothing about the execution; stopping a healthy one here would be wrong. The next sync retries within the executor's lease.
+     let beat:JsonObject|undefined;
+     for(let attempt=0;attempt<3&&!beat;attempt++){
+      try{const reply=await transport({operation:'execution_heartbeat',area,epoch,execution_id:id});if(!reply.retryable)beat=reply;}catch{}
+      if(!beat&&attempt<2)await delay(200);
+     }
+     if(!beat)continue;
+     current=beat;
+    }else{current=await transport({operation:'execution_stop',area,epoch,execution_id:id});if(current.retryable)continue;}
     if(current.error){this.db.prepare("UPDATE execution_bindings SET state='outcome_unknown',waiting=0,result=? WHERE id=?").run(JSON.stringify(current),id);continue;}
     if(['queued','running'].includes(String(current.state)))continue;
     await this.lock(area,async()=>{

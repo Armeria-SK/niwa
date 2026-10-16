@@ -42,6 +42,7 @@ import { providerLimitSchema } from '../storage/provider-limit-schema.ts';
 import { modelRouteSchema } from '../storage/model-route-schema.ts';
 import { providerRetrySchema } from '../storage/provider-retry-schema.ts';
 import { commonRulesSchema } from '../storage/common-rules-schema.ts';
+import { commonRulesDefaultSchema } from '../storage/common-rules-default-schema.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -50,6 +51,7 @@ import { ProviderLimits } from './provider-limits.ts';
 import { submissionSchema } from '../storage/submission-schema.ts';
 import { modelSchema } from '../storage/model-schema.ts';
 import { fallbackSchema } from '../storage/fallback-schema.ts';
+import { modelParallelSchema } from '../storage/model-parallel-schema.ts';
 import { externalSchema } from '../storage/external-schema.ts';
 import { historySearchSchema } from '../storage/history-search-schema.ts';
 import { profileSchema as profileMigration } from '../storage/profile-schema.ts';
@@ -93,7 +95,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -388,10 +390,16 @@ export class Runtime {
       ON CONFLICT(agent_id) DO UPDATE SET provider=excluded.provider,model=excluded.model,reason=excluded.reason,attempted_at=excluded.attempted_at`)
       .run(agentId, provider, model, reason, Date.now());
   }
-  modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null } {
+  modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null; maxParallel: number } {
     this.#admin(actor);
-    const row = this.#db.prepare('SELECT ollama_url,fallback_model FROM model_settings WHERE id=1').get()!;
-    return { ollamaUrl: row.ollama_url as string | null, fallbackModel: row.fallback_model as string | null };
+    const row = this.#db.prepare('SELECT ollama_url,fallback_model,max_parallel FROM model_settings WHERE id=1').get()!;
+    return { ollamaUrl: row.ollama_url as string | null, fallbackModel: row.fallback_model as string | null, maxParallel: row.max_parallel as number };
+  }
+  /** Requests per Ollama endpoint that Niwa sends at once; match the server's OLLAMA_NUM_PARALLEL. Read per request, so no interruption is needed. */
+  configureOllamaParallel(actor: Actor, count: number): void {
+    this.#admin(actor);
+    check(Number.isInteger(count) && count >= 1 && count <= 8, 'invalid', 'Invalid parallel request count');
+    this.#db.prepare('UPDATE model_settings SET max_parallel=? WHERE id=1').run(count);
   }
   /** Host must verify local model capabilities against this exact endpoint before saving. */
   configureFallback(actor: Actor, url: string, model: string | null): void {
@@ -907,18 +915,29 @@ export class Runtime {
         message.reply_to = replyTo;
       }
       let task: Task | null = null;
-      for (const recipient of recipients) {
+      // Every check for every recipient stays in this pass: memory DB writes in the next pass are not rolled back with the control transaction.
+      const kind=requestContext?.kind ?? (isStatusInquiry(body)?'status':undefined);
+      const plan = recipients.map(recipient => {
         this.#room(this.agentSession(recipient), roomId);
         check(this.#agent(recipient).status === 'active', 'forbidden', 'Recipient is dormant');
-        const kind=requestContext?.kind ?? (isStatusInquiry(body)?'status':undefined);
         const linked=replyTo ? this.#db.prepare('SELECT task_id FROM task_message_links WHERE message_id=?').all(replyTo).map(row=>this.tasks.get(actor,String(row.task_id))).filter(t=>t.agent_id===recipient&&t.room_id===roomId) : [];
         const related=requestContext?.task_id ? this.tasks.get(actor,requestContext.task_id) : linked.length===1?linked[0]:undefined;
         if(related)check(related.room_id===roomId&&related.agent_id===recipient,'forbidden','Target does not belong to this recipient and conversation');
         if(kind==='amend'||kind==='cancel') {
           check(related,'invalid','Select the work to change');
           check(this.tasks.controlRevision(actor,related.id)===requestContext?.expected_revision,'conflict','Work changed; refresh before applying');
-          if(kind==='amend')this.tasks.instruct(actor,related.id,body);else this.tasks.cancel(actor,related.id);
-          this.tasks.linkMessage(actor,message.id,related.id,kind);task??=this.tasks.get(actor,related.id);continue;
+          if(kind==='amend')check(!['completed','cancelled'].includes(related.state),'conflict','Task has finished');
+        }
+        if(kind==='status')check(!this.settings(actor).paused,'forbidden','Runtime is paused');
+        const questions = this.tasks.list(actor).filter(task => task.agent_id === recipient && task.room_id === roomId && task.state === 'waiting_user');
+        const question = related ? questions.find(item => item.id === related.id) : questions.length === 1 ? questions[0] : undefined;
+        const answering = kind!=='new' && !!question && !this.#db.prepare("SELECT 1 FROM approval_requests WHERE task_id=? AND status='pending'").get(question.id);
+        return { recipient, related, question: answering ? question : undefined };
+      });
+      for (const { recipient, related, question } of plan) {
+        if(kind==='amend'||kind==='cancel') {
+          if(kind==='amend')this.tasks.instruct(actor,related!.id,body);else this.tasks.cancel(actor,related!.id);
+          this.tasks.linkMessage(actor,message.id,related!.id,kind);task??=this.tasks.get(actor,related!.id);continue;
         }
         if(kind==='status') {
           const inquiry=this.tasks.create(actor,recipient,roomId,body);
@@ -931,9 +950,7 @@ export class Runtime {
           this.tasks.linkMessage(actor,reply.id,inquiry.id,'response');
           this.tasks.completeInquiry(actor,inquiry.id,result);task??=this.tasks.get(actor,inquiry.id);continue;
         }
-        const questions = this.tasks.list(actor).filter(task => task.agent_id === recipient && task.room_id === roomId && task.state === 'waiting_user');
-        const question = related ? questions.find(item => item.id === related.id) : questions.length === 1 ? questions[0] : undefined;
-        if (kind!=='new' && question && !this.#db.prepare("SELECT 1 FROM approval_requests WHERE task_id=? AND status='pending'").get(question.id)) {
+        if (question) {
           this.tasks.resume(actor, question.id, body, { preservePause: true });
           this.tasks.linkMessage(actor, message.id, question.id, 'followup');
           task ??= this.tasks.get(actor, question.id);
@@ -1234,7 +1251,8 @@ export class Runtime {
       !['memory_review', 'memory_search', 'memory_remember', 'task_history_read', 'task_summary_save', 'conversation_send', 'task_rest', 'task_acknowledge'].includes(event.name)));
     const worked = state.remaining_plan.revision > 0 || state.external_operations.length > 0 || state.artifacts.length > 0 || state.child_results.length > 0 ||
       workedTools || !!this.#db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(lease.task.id);
-    return worked && !this.#summary(actor, lease.task.room_id, lease.task.id) && this.completionSummarySources(actor, lease).length > 0;
+    // A summary the model cannot produce must not block the finished answer forever.
+    return worked && this.tasks.promptAttempts(actor, lease, 'task_summary_save') < 3 && !this.#summary(actor, lease.task.room_id, lease.task.id) && this.completionSummarySources(actor, lease).length > 0;
   }
   /** Validate dependencies before returning derived text; summaries never become execution authority. */
   #summary(actor: Actor, roomId: string, id: string): { room_id: string; body: string; revision: number } | undefined {
