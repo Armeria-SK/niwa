@@ -63,6 +63,32 @@ test('multiple ongoing jobs do not cause an implicit followup to select a job',t
  assert.equal(r.tasks.workState(aa,lease).request_context?.related_task_id,null);
 });
 
+test('an unattached followup reaches only its own task, never the delegates of the Bot\'s other jobs',t=>{
+ const {r,admin,a,aa,b,room}=fixture(t);
+ r.submit(admin,randomUUID(),room.id,'人工依頼P1',a.id);
+ const child=r.tasks.delegate(aa,r.tasks.claim(admin)!,b.id,'人工の調査');
+ r.submit(admin,randomUUID(),room.id,'人工依頼P2',a.id,undefined,{kind:'new'});
+ const lease=r.tasks.claim(admin)!,actor=r.agentSession(b.id);assert.equal(lease.task.id,child.id);
+ const revision=r.tasks.requestBrief(actor,lease).revision;
+ const followup=r.submit(admin,randomUUID(),room.id,'P2は価格を円で',a.id).task!;
+ assert.equal(r.tasks.followupContext(admin,a.id,room.id),null);
+ assert.equal(r.tasks.get(admin,followup.id).agent_id,a.id);
+ const brief=r.tasks.requestBrief(actor,lease);
+ assert.equal(brief.revision,revision);assert.ok(!brief.administrator_messages.some(m=>String(m.body).includes('P2は価格')));
+});
+
+test('an unaddressed administrator remark is background context and does not change the correction revision',t=>{
+ const {r,admin,a,aa,b,room}=fixture(t);
+ r.submit(admin,randomUUID(),room.id,'人工依頼P1',a.id);
+ r.tasks.delegate(aa,r.tasks.claim(admin)!,b.id,'人工の調査');
+ const lease=r.tasks.claim(admin)!,actor=r.agentSession(b.id),own=r.tasks.requestBrief(actor,lease);
+ const remark=r.post(admin,room.id,'みなさんお疲れさまです');
+ const brief=r.tasks.requestBrief(actor,lease);
+ assert.equal(brief.revision,own.revision);assert.ok(brief.administrator_messages.some(m=>m.message_id===remark.id));
+ r.submit(admin,randomUUID(),room.id,'価格は対象外です',a.id);
+ assert.notEqual(r.tasks.requestBrief(actor,lease).revision,own.revision);
+});
+
 test('autonomous work and its delegates are excluded from implicit user followup context',t=>{
  const {root,r,admin,a,aa,b,room}=fixture(t);
  const autonomous=r.tasks.create(admin,a.id,room.id,'人工の自発活動');

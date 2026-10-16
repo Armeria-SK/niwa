@@ -1234,7 +1234,8 @@ export class Runtime {
       !['memory_review', 'memory_search', 'memory_remember', 'task_history_read', 'task_summary_save', 'conversation_send', 'task_rest', 'task_acknowledge'].includes(event.name)));
     const worked = state.remaining_plan.revision > 0 || state.external_operations.length > 0 || state.artifacts.length > 0 || state.child_results.length > 0 ||
       workedTools || !!this.#db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(lease.task.id);
-    return worked && !this.#summary(actor, lease.task.room_id, lease.task.id) && this.completionSummarySources(actor, lease).length > 0;
+    // A summary the model cannot produce must not block the finished answer forever.
+    return worked && this.tasks.promptAttempts(actor, lease, 'task_summary_save') < 3 && !this.#summary(actor, lease.task.room_id, lease.task.id) && this.completionSummarySources(actor, lease).length > 0;
   }
   /** Validate dependencies before returning derived text; summaries never become execution authority. */
   #summary(actor: Actor, roomId: string, id: string): { room_id: string; body: string; revision: number } | undefined {

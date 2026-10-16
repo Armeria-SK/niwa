@@ -20,6 +20,7 @@ export function requestBrief(db: DatabaseSync, task: Task) {
   }
   const origin = lineage.at(-1)!;
   const owners = new Set(lineage.map(item => item.agent_id));
+  const context = new Set<string>();
   const messages = db.prepare(`SELECT id AS message_id,body,reply_to,created_at FROM messages
     WHERE room_id=? AND author_id='administrator' AND created_at>=? ORDER BY created_at,rowid`)
     .all(task.room_id, new Date(origin.created_at).toISOString()).filter(message => {
@@ -28,11 +29,15 @@ export function requestBrief(db: DatabaseSync, task: Task) {
         WHERE l.message_id=? AND t.room_id=?`).all(message.message_id!, task.room_id);
       if (links.some(link => seen.has(String(link.id)))) return true;
       // Untargeted room remarks are context, not automatic amendments or new assignments.
-      if (!links.length) return String(message.created_at) > new Date(origin.created_at).toISOString() &&
-        (!message.reply_to || !!db.prepare(`SELECT 1 FROM task_message_links
-        WHERE message_id=? AND task_id IN (${lineage.map(() => '?').join(',')})`).get(message.reply_to, ...seen));
-      return links.some(link => owners.has(String(link.agent_id)) && link.kind === 'followup' &&
-        (!link.related_task_id || seen.has(String(link.related_task_id))));
+      if (!links.length) {
+        if (String(message.created_at) <= new Date(origin.created_at).toISOString()) return false;
+        // Unaddressed remarks stay visible as background but never count as a correction.
+        if (!message.reply_to) { context.add(String(message.message_id)); return true; }
+        return !!db.prepare(`SELECT 1 FROM task_message_links
+          WHERE message_id=? AND task_id IN (${lineage.map(() => '?').join(',')})`).get(message.reply_to, ...seen);
+      }
+      // An unattached followup (no related task) belongs only to the task it was linked to.
+      return links.some(link => owners.has(String(link.agent_id)) && link.kind === 'followup' && seen.has(String(link.related_task_id)));
     });
   const replies = db.prepare(`SELECT task_id,sequence,body,created_at FROM task_replies
     WHERE task_id IN (${lineage.map(() => '?').join(',')}) ORDER BY sequence`).all(...seen);
@@ -43,5 +48,7 @@ export function requestBrief(db: DatabaseSync, task: Task) {
     administrator_messages: messages,
     administrator_replies: replies,
   };
-  return {...brief, revision: createHash('sha256').update(JSON.stringify(brief)).digest('hex')};
+  // Only corrections change the revision; background remarks must not discard in-flight answers.
+  const corrections = {...brief, administrator_messages: messages.filter(message => !context.has(String(message.message_id)))};
+  return {...brief, revision: createHash('sha256').update(JSON.stringify(corrections)).digest('hex')};
 }
