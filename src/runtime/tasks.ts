@@ -489,6 +489,9 @@ export class Tasks {
     // A successful response ends the failure streak so backoff and progress describe only consecutive failures.
     if(status==='completed')this.#db.prepare('DELETE FROM provider_failures WHERE task_id=?').run(lease.task.id);
   }
+  /** A reply made stale by a correction is not delivered; it must not count as a finished phase. */
+  discardPrompt(actor:Actor,lease:TaskLease,id:number){this.#owned(actor,lease);this.#db.prepare("UPDATE prompt_runs SET status='discarded' WHERE id=? AND task_id=?").run(id,lease.task.id);}
+  promptAttempts(actor:Actor,lease:TaskLease,phase:string):number{this.#owned(actor,lease);return Number(this.#db.prepare("SELECT count(*) AS count FROM prompt_runs WHERE task_id=? AND phase=? AND status NOT IN ('failed','discarded')").get(lease.task.id,phase)!.count);}
   promptRuns(actor:Actor,id:string){this.get(actor,id);return this.#db.prepare('SELECT * FROM prompt_runs WHERE task_id=? ORDER BY id').all(id);}
   steps(actor: Actor, id: string): { step: number; memory_revision: number; rules_revision: number; discarded: number; events: ModelEvent[] }[] {
     const task = this.get(actor, id);
