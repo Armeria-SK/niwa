@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {setTimeout as delay} from 'node:timers/promises';
 import type {DatabaseSync} from 'node:sqlite';
 import type {Actor,Runtime} from './runtime.ts';
 import type {TaskLease} from '../domain/task.ts';
@@ -97,8 +98,17 @@ export class Workareas {
     const actor=this.runtime.agentSession(this.runtime.tasks.get(admin,String(row.task_id)).agent_id),lease={task:this.runtime.tasks.get(admin,String(row.task_id)),token:String(row.lease)};
     const allowed=()=>{this.authorize(actor,area,lease,true);check(this.settings(admin).enabled&&epoch===this.epoch()&&this.selectedForTask(lease.task.id)===area&&this.runtime.tasks.executionAllowed(actor,lease.task.id,lease.token,!!row.waiting),'forbidden','Execution authorization expired');};
     let current:JsonObject;
-    try{allowed();current=await transport({operation:'execution_heartbeat',area,epoch,execution_id:id});}
-    catch{current=await transport({operation:'execution_stop',area,epoch,execution_id:id});}
+    let authorized=true;try{allowed();}catch{authorized=false;}
+    if(authorized){
+     // A busy or briefly unreachable executor says nothing about the execution; stopping a healthy one here would be wrong. The next sync retries within the executor's lease.
+     let beat:JsonObject|undefined;
+     for(let attempt=0;attempt<3&&!beat;attempt++){
+      try{const reply=await transport({operation:'execution_heartbeat',area,epoch,execution_id:id});if(!reply.retryable)beat=reply;}catch{}
+      if(!beat&&attempt<2)await delay(200);
+     }
+     if(!beat)continue;
+     current=beat;
+    }else{current=await transport({operation:'execution_stop',area,epoch,execution_id:id});if(current.retryable)continue;}
     if(current.error){this.db.prepare("UPDATE execution_bindings SET state='outcome_unknown',waiting=0,result=? WHERE id=?").run(JSON.stringify(current),id);continue;}
     if(['queued','running'].includes(String(current.state)))continue;
     await this.lock(area,async()=>{

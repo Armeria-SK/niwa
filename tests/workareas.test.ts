@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,rmSync,writeFileSync,symlinkSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,writeFileSync,symlinkSync,linkSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
@@ -83,7 +83,8 @@ test('revocation while a program runs prevents commit; dormancy retains data and
 test('program-produced links are rejected and crash receipts never rerun an unknown operation',async t=>{
  const f=fixture(t,async root=>{symlinkSync(f.root,join(root,'escape'));return {code:0,stdout:'',stderr:''};});
  const id=f.r.workareas.personal(f.aa,f.al).area_id!,input={operation:'run',operation_id:randomUUID(),allow_start:true,command:['true'],seconds:10};
- const first=await f.r.workareas.execute(f.aa,id,input,f.transport,f.al);assert.equal(first.error,'invalid_path');
+ const first=await f.r.workareas.execute(f.aa,id,input,f.transport,f.al);assert.equal(first.error,'output_rejected');
+ assert.equal(first.rule,'symlink');assert.equal(first.path,'escape');assert.match(String(first.message),/シンボリックリンク/);
  assert.deepEqual(await f.r.workareas.execute(f.aa,id,input,f.transport,f.al),first);
  for(const path of ['../state/control.db','/etc/passwd','a/../../secrets/key'])await assert.rejects(f.r.workareas.execute(f.aa,id,{operation:'read',path},f.transport,f.al));
 });
@@ -178,4 +179,35 @@ test('independent activity cannot use a new personal area to bypass a held opera
  }
  assert.equal(r.tasks.get(admin,f.al.task.id).state,'waiting_user');
  const read=await executeAsyncTurnTool(r,aa,lease,{name:'workspace_list',tool_call_id:'list',arguments:{path:''}},'list',undefined,{workareas:transport});assert.ok(read.error);
+});
+
+test('rejected program output names the rule and path, keeps the run output and leaves the workarea untouched',async t=>{
+ const makers:Record<string,(root:string)=>void>={
+  symlink:root=>{mkdirSync(join(root,'node_modules','.bin'),{recursive:true});symlinkSync('../pkg/cli.js',join(root,'node_modules','.bin','cli'));},
+  hardlink:root=>{writeFileSync(join(root,'one'),'x');linkSync(join(root,'one'),join(root,'two'));},
+  file_too_large:root=>{mkdirSync(join(root,'data'));writeFileSync(join(root,'data','huge.bin'),Buffer.alloc(8*1024*1024+1));},
+  too_many_entries:root=>{for(let i=0;i<1001;i++)writeFileSync(join(root,`f${i}`),'');},
+ };
+ const paths:Record<string,string>={symlink:'node_modules/.bin/cli',hardlink:'one',file_too_large:'data/huge.bin',too_many_entries:'f996'};
+ let current='symlink';
+ const f=fixture(t,async root=>{makers[current]!(root);return {code:3,stdout:'installed 12 packages',stderr:'npm warn deprecated',output_truncated:true};});
+ const id=f.r.workareas.personal(f.aa,f.al).area_id!;
+ const before=await f.r.workareas.execute(f.aa,id,write('keep.txt','kept'),f.transport,f.al);
+ for(const rule of Object.keys(makers)){
+  current=rule;
+  const result=await f.r.workareas.execute(f.aa,id,{operation:'run',operation_id:randomUUID(),allow_start:true,command:['true'],seconds:10},f.transport,f.al);
+  assert.equal(result.error,'output_rejected',rule);assert.equal(result.rule,rule);assert.ok(String(result.message).includes(rule));
+  if(rule!=='too_many_entries')assert.equal(result.path,paths[rule]);else assert.match(String(result.path),/^f\d+$/);
+  assert.deepEqual([result.code,result.stdout,result.stderr,result.output_truncated],[3,'installed 12 packages','npm warn deprecated',true]);
+ }
+ assert.equal((await f.r.workareas.execute(f.aa,id,{operation:'read',path:'keep.txt'},f.transport,f.al)).content,'kept');
+ assert.equal(((await f.r.workareas.execute(f.aa,id,{operation:'list',path:''},f.transport,f.al)).entries as unknown[]).length,1);
+ assert.equal(before.area_revision,(await f.r.workareas.execute(f.aa,id,{operation:'read',path:'keep.txt'},f.transport,f.al)).area_revision);
+});
+
+test('a timed-out program reports its flags and partial output instead of an unknown outcome',async t=>{
+ const f=fixture(t,async root=>{writeFileSync(join(root,'partial.txt'),'half');return {code:124,stdout:'step 1 done',stderr:'',timed_out:true};});
+ const id=f.r.workareas.personal(f.aa,f.al).area_id!;
+ const result=await f.r.workareas.execute(f.aa,id,{operation:'run',operation_id:randomUUID(),allow_start:true,command:['sleep','99'],seconds:1},f.transport,f.al);
+ assert.equal(result.error,undefined);assert.equal(result.timed_out,true);assert.equal(result.code,124);assert.equal(result.stdout,'step 1 done');
 });

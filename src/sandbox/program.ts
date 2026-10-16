@@ -1,13 +1,14 @@
-import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lstatSync } from 'node:fs';
 import { isAbsolute, relative } from 'node:path';
 import { assertDirectoryPath } from '../config/paths.ts';
 import { validatePodmanInfo } from './preflight.ts';
+import { capture, tailText } from './capture.ts';
 
 export interface ProgramEnvironment { workspace: string; image: string; uid: number; gid: number; home: string; runtime: string }
 export interface ProgramRequest { command: string[]; seconds: number }
-export interface ProgramOutput { code: number; stdout: string; stderr: string }
+/** `timed_out` and `output_truncated` are only present when true; truncated/timed-out output keeps just its last 32 KiB. */
+export interface ProgramOutput { code: number; stdout: string; stderr: string; timed_out?: true; output_truncated?: true }
 export type PodmanCall = (args: string[], seconds: number, signal?: AbortSignal, maxBytes?: number) => Promise<ProgramOutput>;
 
 /** Only trusted executor configuration chooses mounts, identity and an already installed image. */
@@ -31,7 +32,14 @@ export function programArguments(environment: ProgramEnvironment, request: Progr
 export async function executeProgram(environment: ProgramEnvironment, request: ProgramRequest, call: PodmanCall, signal?: AbortSignal, name = `niwa-program-${randomUUID()}`): Promise<ProgramOutput> {
   const args = programArguments(environment, request, name);
   signal?.throwIfAborted();
-  try { return await call(args, request.seconds + 10, signal); }
+  try {
+    const started = Date.now(), output = await call(args, request.seconds + 10, signal);
+    // Podman's own --timeout kills the container first (exit 124/137); the client kill after +10s is flagged by the caller.
+    const timedOut = output.timed_out === true || ([124, 137].includes(output.code) && Date.now() - started >= request.seconds * 1000);
+    if (!timedOut && !output.output_truncated) return output;
+    const tail = (value: string) => tailText(Buffer.from(value), 32768);
+    return { code: output.code, stdout: tail(output.stdout), stderr: tail(output.stderr), ...(timedOut ? { timed_out: true as const } : {}), ...(output.output_truncated ? { output_truncated: true as const } : {}) };
+  }
   finally {
     // Kill the container, not only the attached Podman client; cancellation must not cancel cleanup.
     const removed = await call(['rm', '--force', '--ignore', name], 15);
@@ -54,15 +62,13 @@ export function configuredProgramRunner(environment: ProgramEnvironment, current
     if (!relation || (!relation.startsWith('../') && relation !== '..') || info.uid !== environment.uid || (info.mode & 0o077))
       throw new Error('Executor state must be private and outside the shared mount');
   }
-  const call: PodmanCall = (args, seconds, signal, maxBytes = 65536) => new Promise((resolve, reject) => {
-    if(!Number.isSafeInteger(maxBytes)||maxBytes<1||maxBytes>96*1024*1024){reject(new Error('Invalid output limit'));return;}
-    execFile('/usr/bin/podman', args, { cwd: environment.home, encoding: 'utf8', timeout: seconds * 1000, maxBuffer: maxBytes,
-      killSignal: 'SIGKILL', signal, env: { PATH: '/usr/bin:/bin', HOME: environment.home, XDG_RUNTIME_DIR: environment.runtime } },
-    (error, stdout, stderr) => {
-      if (error && (typeof error.code !== 'number' || error.killed || error.signal)) reject(new Error('Isolated program interrupted; outcome unknown'));
-      else resolve({ code: error?.code as number ?? 0, stdout, stderr });
-    });
-  });
+  // Output keeps only the last 64 KiB per stream so noisy programs finish; an explicit maxBytes is a strict limit for machine-read output.
+  const call: PodmanCall = async (args, seconds, signal, maxBytes) => {
+    if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 96 * 1024 * 1024)) throw new Error('Invalid output limit');
+    const result = await capture('/usr/bin/podman', args, { cwd: environment.home, timeoutMs: seconds * 1000, signal, ...(maxBytes === undefined ? {} : { strict: maxBytes }),
+      env: { PATH: '/usr/bin:/bin', HOME: environment.home, XDG_RUNTIME_DIR: environment.runtime } });
+    return { code: result.code, stdout: result.stdout, stderr: result.stderr, ...(result.timedOut ? { timed_out: true as const } : {}), ...(result.truncated ? { output_truncated: true as const } : {}) };
+  };
   const run = (request: ProgramRequest, signal?: AbortSignal, name?: string) => {
     assertDirectoryPath(environment.workspace);
     return executeProgram({ ...environment, image: currentImage() }, request, call, signal, name);

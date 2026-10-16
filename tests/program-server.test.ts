@@ -9,6 +9,8 @@ import { once } from 'node:events';
 import { ProgramLog } from '../src/sandbox/program-log.ts';
 import { createProgramServer } from '../src/sandbox/server.ts';
 import { configuredProgramExecutor, programExecutor } from '../src/sandbox/client.ts';
+import { WorkspaceError } from '../src/tools/files/workspace.ts';
+const configuredExecutor = (path: string) => programExecutor(path, () => {});
 
 const input = { operation_id: 'operation', agent_id: 'bot', room_id: 'room', task_id: 'task', command: ['python3', 'work.py'], seconds: 10, allow_start: true };
 async function fixture(t: { after: (fn: () => Promise<void>) => void }, run: ConstructorParameters<typeof ProgramLog>[2]) {
@@ -76,4 +78,41 @@ test('service stop cancels active executions and waits before its receipt store 
   const f = await fixture(t, async (_request, signal) => { started(); await once(signal!, 'abort'); finished = true; throw Error('stopped'); });
   const response = f.send(input); const rejected = assert.rejects(response); await start;
   await f.broker.stop(); await rejected; assert.equal(finished, true); assert.equal(f.log.pending().length, 1);
+});
+
+test('a saturated executor still accepts heartbeats, status and stop, and refusals carry bounded codes', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-busy-')); const path = join(root, 'socket');
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); let running = 0;
+  const workareas = { async execute(operation: { operation: string }) {
+    if (operation.operation === 'run') { running++; await gate; return { done: true }; }
+    if (operation.operation === 'execution_preview') throw new WorkspaceError('unsupported');
+    if (operation.operation === 'environment_retire') throw new WorkspaceError('conflict');
+    if (operation.operation === 'explode') throw new Error('secret internal detail');
+    return { handled: operation.operation };
+  }, published: () => ({}), async stop() {} };
+  const log = { execute: async () => ({ error: 'outcome_unknown' as const }) };
+  const broker = createProgramServer(log, undefined, workareas as never); broker.server.listen(path); await once(broker.server, 'listening');
+  t.after(async () => { release(); await broker.stop(); rmSync(root, { recursive: true, force: true }); });
+  const send = (route: string, body: unknown) => new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const req = request({ socketPath: path, method: 'POST', path: route, headers: { 'content-type': 'application/json' } }, response => {
+      let content = ''; response.setEncoding('utf8'); response.on('data', chunk => { content += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode!, body: content })); response.on('error', reject);
+    }); req.on('error', reject); req.end(JSON.stringify(body));
+  });
+  const area = { area: randomUUID(), epoch: randomUUID() };
+  const heavy = Array.from({ length: 4 }, () => send('/workareas', { ...area, operation: 'run' }));
+  for (let i = 0; i < 100 && running < 4; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(running, 4);
+  assert.deepEqual(await send('/workareas', { ...area, operation: 'run' }), { status: 503, body: '{"error":"busy"}' });
+  assert.deepEqual(await send('/programs', input), { status: 503, body: '{"error":"busy"}' });
+  assert.deepEqual(await configuredExecutor(path)(input), { error: 'busy', retryable: true });
+  for (const operation of ['execution_heartbeat', 'execution_stop', 'execution_status', 'execution_list'])
+    assert.deepEqual(await send('/workareas', { ...area, operation, execution_id: randomUUID() }), { status: 200, body: JSON.stringify({ handled: operation }) });
+  assert.deepEqual(await send('/workareas', { ...area, operation: 'execution_preview' }), { status: 503, body: '{"error":"busy"}' });
+  release(); for (const response of await Promise.all(heavy)) assert.equal(response.status, 200);
+  assert.deepEqual(await send('/workareas', { ...area, operation: 'execution_preview' }), { status: 400, body: '{"error":"unsupported"}' });
+  assert.deepEqual(await send('/workareas', { ...area, operation: 'environment_retire' }), { status: 409, body: '{"error":"conflict"}' });
+  assert.deepEqual(await send('/workareas', { ...area, operation: 'explode' }), { status: 400, body: '{"error":"request_failed"}' });
+  // Slots are released after every outcome, including failures.
+  assert.equal((await send('/workareas', { ...area, operation: 'run' })).status, 200);
 });
