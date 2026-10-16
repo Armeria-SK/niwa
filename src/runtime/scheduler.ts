@@ -11,6 +11,7 @@ export class Scheduler {
   #timer: ReturnType<typeof setInterval> | undefined;
   #stopped = false;
   #nextWakeCheck = 0;
+  #logged = new Map<string, number>();
 
   constructor(runtime: Runtime, runner: Pick<TurnRunner, 'run'>) {
     this.#runtime = runtime; this.#admin = runtime.administrator(); this.#runner = runner;
@@ -20,27 +21,39 @@ export class Scheduler {
     this.#timer = setInterval(() => this.tick(), 100);
     this.tick();
   }
+  /** A throwing phase must not stop the timer, the other phases or startup; identical errors log once a minute per phase. */
+  #guard(phase: string, work: () => void): void {
+    try { work(); } catch (error) {
+      const message = `${error instanceof Error ? error.name : 'Error'}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300);
+      const key = `${phase}:${message}`, now = Date.now();
+      if (now < (this.#logged.get(key) ?? 0)) return;
+      if (this.#logged.size > 100) this.#logged.clear();
+      this.#logged.set(key, now + 60_000); console.error(`scheduler ${phase} failed: ${message}`);
+    }
+  }
   tick(): void {
     if (this.#stopped) return;
     const tasks = this.#runtime.tasks;
-    tasks.recoverCountLimits(this.#admin);
-    tasks.expire(this.#admin);
-    tasks.retryProviders(this.#admin);
-    this.#runtime.schedules.dispatch(this.#admin);
+    this.#guard('recoverCountLimits', () => tasks.recoverCountLimits(this.#admin));
+    this.#guard('expire', () => tasks.expire(this.#admin));
+    this.#guard('retryProviders', () => tasks.retryProviders(this.#admin));
+    this.#guard('schedules', () => this.#runtime.schedules.dispatch(this.#admin));
     if (Date.now() >= this.#nextWakeCheck) {
-      this.#runtime.autonomousWakes.dispatch(this.#admin);
       this.#nextWakeCheck = Date.now() + 1000;
+      this.#guard('autonomousWakes', () => this.#runtime.autonomousWakes.dispatch(this.#admin));
     }
-    const requested = tasks.queuedRequestAgents(this.#admin);
-    for (const job of this.#jobs.values()) {
-      if (job.lease.task.internal_autonomous && requested.has(job.lease.task.agent_id) && tasks.active(job.actor,job.lease)) {
-        tasks.interrupt(this.#admin,job.lease);
+    this.#guard('interrupt', () => {
+      const requested = tasks.queuedRequestAgents(this.#admin);
+      for (const job of this.#jobs.values()) {
+        if (job.lease.task.internal_autonomous && requested.has(job.lease.task.agent_id) && tasks.active(job.actor,job.lease)) {
+          tasks.interrupt(this.#admin,job.lease);
+        }
+        if (!tasks.active(job.actor, job.lease)) job.abort.abort();
       }
-      if (!tasks.active(job.actor, job.lease)) job.abort.abort();
-    }
+    });
     // An invalidated lease can still have a model request unwinding. Do not overlap it.
     const busy = new Set([...this.#jobs.values()].map(job => job.lease.task.agent_id));
-    for (let lease = tasks.claim(this.#admin, busy); lease; lease = tasks.claim(this.#admin, busy)) {
+    this.#guard('claim', () => { for (let lease = tasks.claim(this.#admin, busy); lease; lease = tasks.claim(this.#admin, busy)) {
       const current = lease;
       const actor = this.#runtime.agentSession(current.task.agent_id);
       const abort = new AbortController();
@@ -53,7 +66,7 @@ export class Scheduler {
         this.#jobs.delete(current.task.id);
       });
       this.#jobs.set(current.task.id, { actor, lease: current, abort, done });
-    }
+    } });
   }
   async stop(): Promise<void> {
     this.#stopped = true;

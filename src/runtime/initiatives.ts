@@ -30,7 +30,7 @@ export class Initiatives{
    WHEN t.state='waiting_child' THEN '子タスクの結果' WHEN t.state='waiting_provider' THEN 'モデル接続・利用枠'
    WHEN EXISTS(SELECT 1 FROM updates u WHERE u.task_id=t.id AND u.kind='question') THEN '質問への回答' ELSE '仕事の見直し' END AS reason
    FROM tasks t WHERE (t.id IN (SELECT task_id FROM initiative_tasks WHERE initiative_id=?) OR t.id=?) AND t.state IN ('waiting_user','waiting_child','waiting_provider')`).all(id,body.wait.task_id),
-  evidence:this.db.prepare('SELECT reference,conclusion,kind FROM initiative_evidence WHERE initiative_id=?').all(id)};}
+  evidence:this.db.prepare('SELECT reference,conclusion,kind FROM initiative_evidence WHERE initiative_id=? ORDER BY rowid').all(id)};}
  list(actor:Actor){this.principal(actor);return this.db.prepare('SELECT id FROM initiatives ORDER BY rowid DESC').all().flatMap(r=>{try{return [this.get(actor,String(r.id))];}catch{return [];}});}
  current(actor:Actor,task:string){const row=this.db.prepare('SELECT initiative_id FROM initiative_tasks WHERE task_id=?').get(task);if(!row)return null;try{return this.get(actor,String(row.initiative_id));}catch{return null;}}
  select(actor:Actor,lease:TaskLease,id:string){check(this.enabled()&&!this.db.prepare('SELECT paused FROM settings WHERE id=1').get()!.paused&&this.runtime.tasks.active(actor,lease),'forbidden','Active task and enabled initiatives required');
@@ -118,7 +118,14 @@ export class Initiatives{
   this.db.prepare('UPDATE initiatives SET body=?,revision=revision+1,state=?,review_at=? WHERE id=?').run(JSON.stringify(body),input.rest_minutes?'resting':current.state,input.rest_minutes?Date.now()+input.rest_minutes*60000:current.review_at,current.id);
  }
  due(actor:Actor,now:number){return this.list(actor).filter(r=>r.state==='active'&&r.review_at<=now);}
- prompt(actor:Actor,id:string){const row=this.get(actor,id);return `継続する取り組み：${JSON.stringify(row)}。既存の実物・方法と結果を引き継ぎ、次の具体的行動を選びます。保留操作は解除しません。停滞回数は見直し回数であり品質評価ではありません。新しい根拠のない言い換えを進展と扱わず方法を変えるか休息してください。`;}
+ prompt(actor:Actor,id:string){const row=this.get(actor,id);return `継続する取り組み：${this.brief(row)}。既存の実物・方法と結果を引き継ぎ、次の具体的行動を選びます。保留操作は解除しません。停滞回数は見直し回数であり品質評価ではありません。新しい根拠のない言い換えを進展と扱わず方法を変えるか休息してください。`;}
+ /** The prompt shares Tasks' 20,000 character limit, so bound unbounded history and note what was omitted. */
+ private brief(row:ReturnType<Initiatives['get']>){const clip=(v:unknown,n:number)=>{const t=String(v??'');return t.length>n?t.slice(0,n)+'…':t;};
+  const omitted=(items:unknown[],n:number)=>Math.max(0,items.length-n);
+  const body=Object.fromEntries(Object.entries(row.body).map(([k,v])=>[k,typeof v==='string'?clip(v,600):k==='participants'?(v as string[]).slice(0,20):k==='wait'?{...row.body.wait,detail:clip(row.body.wait.detail,600)}:v]));
+  const brief=JSON.stringify({...row,body,tasks:row.tasks.slice(0,10).map(t=>({...t,wait_reason:clip(t.wait_reason,200)})),waits:row.waits.slice(0,5).map(w=>({...w,wait_reason:clip(w.wait_reason,200)})),
+   evidence:row.evidence.slice(-8).map(e=>({...e,conclusion:clip(e.conclusion,240)})),省略:{タスク:omitted(row.tasks,10),待ち:omitted(row.waits,5),根拠:omitted(row.evidence,8),参加者:omitted(row.body.participants,20)}});
+  return clip(brief,12000);}
  bind(task:string,id:string,now:number){const row=this.row(id);this.db.prepare('INSERT INTO initiative_tasks VALUES (?,?)').run(task,id);
   this.db.prepare(`UPDATE initiatives SET last_checked=?,review_at=?,signal=?,review_reason='見直し時刻',stagnant=stagnant+1 WHERE id=?`).run(now,now+Math.min(1440,15*2**Math.min(row.stagnant,6))*60000,this.signal(row),id);
  }

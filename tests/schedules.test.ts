@@ -283,3 +283,15 @@ test('individual autonomy off preserves an autonomous occurrence without consumi
  r.autonomousWakes.configure(f.admin,f.leader.id,true);r.schedules.dispatch(f.admin,f.input.next_at+60000);
  assert.equal(r.tasks.list(f.admin).length,1);assert.equal(r.schedules.list(f.admin)[0]!.run_count,1);
 });
+
+test('one schedule that cannot start rolls back alone and does not block the others', t => {
+  const f = fixture(t); const r = f.runtime; const admin = f.admin;
+  const bad = { ...f.input, id: randomUUID() }, good = { ...f.input, id: randomUUID(), prompt: '別の定期調査' };
+  r.schedules.create(admin, bad); r.schedules.create(admin, good);
+  const db = new DatabaseSync(join(f.root, 'control.db'));
+  try { db.prepare("UPDATE schedules SET prompt='' WHERE id=?").run(bad.id); } finally { db.close(); }
+  assert.throws(() => r.schedules.dispatch(admin, f.input.next_at), /Text is empty/);
+  const rows = r.schedules.list(admin);
+  assert.equal(rows.find(row => row.id === bad.id)!.run_count, 0);
+  assert.equal(rows.find(row => row.id === good.id)!.run_count, 1); assert.equal(r.tasks.list(admin).length, 1);
+});

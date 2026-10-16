@@ -22,6 +22,16 @@ test('resumed and queued work exposes completed responses separately from actual
  const failed=r.tasks.progress(admin,lease.task.id);
  assert.equal(failed.run_count,5);assert.equal(failed.provider_failures,1);assert.equal(failed.model_responses_completed,1);assert.equal(failed.kind,'network');
 });
+test('a successful model response clears the provider failure streak and its backoff',t=>{
+ const {r,admin,aa,room,lease}=fixture(t);const run=(l:typeof lease)=>r.tasks.recordPrompt(aa,l,{version:'structured-v5',phase:'model',rules_revision:1,memory_revision:r.context(aa,room.id).revision,input_bytes:10,estimated_input_tokens:3,removed_messages:0});
+ r.tasks.providerFailure(aa,lease,{code:'NETWORK_ERROR',message:'人工の切断',retryable:true});assert.equal(r.tasks.progress(admin,lease.task.id).provider_failures,1);
+ r.tasks.retryProviders(admin,Date.now()+3600000);let current=r.tasks.claim(admin)!;
+ r.tasks.providerFailure(aa,current,{code:'NETWORK_ERROR',message:'人工の切断',retryable:true});assert.equal(r.tasks.progress(admin,lease.task.id).provider_failures,2);
+ r.tasks.retryProviders(admin,Date.now()+3600000);current=r.tasks.claim(admin)!;
+ r.tasks.finishPrompt(aa,current,run(current),[{type:'completed',finish_reason:'tool_calls'}]);assert.equal(r.tasks.progress(admin,lease.task.id).provider_failures,0);
+ r.tasks.providerFailure(aa,current,{code:'NETWORK_ERROR',message:'人工の切断',retryable:true});
+ assert.equal(r.tasks.progress(admin,lease.task.id).provider_failures,1);assert.ok(r.tasks.get(admin,lease.task.id).provider_retry_at!-Date.now()<=60000);
+});
 test('runtime facts appear without work_note; internal budget differs from connection wait',t=>{
  const {r,admin,aa,room,lease}=fixture(t);const rev=r.context(aa,room.id).revision;
  r.tasks.activity(aa,lease,'call','model');assert.equal(r.workNotes(admin,room.id).length,0);assert.equal(r.tasks.progress(admin,lease.task.id).label,'返答を考え中');
