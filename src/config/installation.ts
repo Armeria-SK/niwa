@@ -14,12 +14,21 @@ const schema = Type.Object({ version: Type.Literal(1), origin: Type.String({ max
   promptVersion: Type.Optional(Type.Union([Type.Literal('legacy-v4'),Type.Literal('structured-v5')])),
   port: Type.Integer({ minimum: 1, maximum: 65535 }), workspaceExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
   programExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })), browserExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
-  workareasEnabled: Type.Optional(Type.Boolean()), packagesEnabled: Type.Optional(Type.Boolean()),
-  // X posting was removed; an existing value is still accepted so older configs keep loading, and is ignored.
-  xAccountId: Type.Optional(Type.String({ pattern: '^[0-9]{1,19}$' })) }, { additionalProperties: false });
+  workareasEnabled: Type.Optional(Type.Boolean()), packagesEnabled: Type.Optional(Type.Boolean()) }, { additionalProperties: false });
 export type Installation = Static<typeof schema>;
 const savedMcpSchema=Type.Object({version:Type.Literal(1),servers:Type.Array(mcpServerSchema,{maxItems:8})},{additionalProperties:false});
-function validate(value: unknown, source = 'config/niwa.json'): Installation {
+const ignoredLogged=new Set<string>();
+/** Settings of removed features stay in older configs and backups; drop unknown top-level keys so they still load. Known keys stay strict. */
+function withoutUnknownKeys(value: unknown, source: string): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const unknown = Object.keys(value).filter(key => !Object.hasOwn(schema.properties, key));
+  if (!unknown.length) return value;
+  const note = `${source}: ${unknown.sort().join(', ')}`;
+  if (!ignoredLogged.has(note)) { ignoredLogged.add(note); console.error(`Ignoring unknown settings in ${note}`); }
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !unknown.includes(key)));
+}
+function validate(input: unknown, source = 'config/niwa.json'): Installation {
+  const value = withoutUnknownKeys(input, source);
   if (!Value.Check(schema, value)) throw new Error(`Invalid ${source}`);
   const config = value as Installation;
   const ids=new Set<string>();
@@ -32,8 +41,8 @@ function validate(value: unknown, source = 'config/niwa.json'): Installation {
   new WebAuth(config.origin, 'a'.repeat(43)); // Same origin rules as the HTTP service.
   return config;
 }
-export function initializeInstallation(root: string, config: Installation): ProductPaths {
-  validate(config);
+export function initializeInstallation(root: string, input: Installation): ProductPaths {
+  const config = validate(input);
   const paths = initializeProduct(root);
   writeFileSync(join(paths.config, 'niwa.json'), JSON.stringify(config, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   return paths;

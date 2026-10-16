@@ -331,3 +331,24 @@ test('installation restore refuses a running source, preserves it, and creates a
     assert.deepEqual(readInstallation(moved), { version: 1, origin: 'https://niwa2.test', port: 4321 });
   } finally { await backups.stop(); runtime.close(); rmSync(base, { recursive: true, force: true }); }
 });
+
+test('settings of removed features in a config or an older backup are ignored, while known settings stay strict', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'niwa-removed-setting-'));
+  const root = join(base, 'source'), destination = join(base, 'restored');
+  const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
+  const paths = initializeInstallation(root, installation), file = join(paths.config, 'niwa.json');
+  const legacy = { ...installation, xAccountId: '123' };
+  writeFileSync(file, JSON.stringify(legacy));
+  assert.deepEqual(readInstallation(root), installation);
+  writeFileSync(file, JSON.stringify({ ...legacy, port: 'not a port' }));
+  assert.throws(() => readInstallation(root), /Invalid config\/niwa\.json/);
+  writeFileSync(file, JSON.stringify(installation));
+  const runtime = new Runtime(paths.state); runtime.bootstrap(runtime.administrator());
+  const backups = new Backups(runtime, paths, legacy as never);
+  try {
+    const manifest = await backups.create(); await backups.stop(); runtime.close();
+    assert.equal((manifest.installation as { xAccountId?: string }).xAccountId, '123');
+    await restoreInstallation(root, manifest.id, destination);
+    assert.deepEqual(JSON.parse(readFileSync(join(destination, 'config', 'niwa.json'), 'utf8')), installation);
+  } finally { await backups.stop(); runtime.close(); rmSync(base, { recursive: true, force: true }); }
+});
