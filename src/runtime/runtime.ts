@@ -1,4 +1,6 @@
 import {agentAutonomySchema} from '../storage/agent-autonomy-schema.ts';
+import {attachmentSchema} from '../storage/attachment-schema.ts';
+import {decodeAttachments,excerptBudget,type AttachmentInfo} from '../domain/attachments.ts';
 import {responseProgressSchema} from '../storage/response-progress-schema.ts';
 import {isStatusInquiry,type SubmissionContext} from './conversation-work.ts';
 import {activitySchema} from '../storage/activity-schema.ts';
@@ -95,7 +97,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -620,6 +622,7 @@ export class Runtime {
           this.#db.prepare('DELETE FROM updates WHERE room_id=?').run(record.id);
           this.#db.prepare('DELETE FROM artifacts WHERE room_id=?').run(record.id);
           this.#db.prepare('DELETE FROM submissions WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)').run(record.id);
+          this.#db.prepare('DELETE FROM message_attachments WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)').run(record.id);
           this.#db.prepare('DELETE FROM messages WHERE room_id=?').run(record.id);
           this.#db.prepare('UPDATE workareas SET deleted=1 WHERE room_id=?').run(record.id);
           this.#db.prepare("UPDATE rooms SET title='' WHERE id=?").run(record.id);
@@ -800,10 +803,35 @@ export class Runtime {
     const rows = this.#db.prepare(`SELECT *,rowid AS sequence FROM messages WHERE room_id=? AND rowid>?
       AND (? IS NULL OR created_at<? OR (created_at=? AND rowid<?)) ORDER BY created_at DESC,rowid DESC LIMIT 51`)
       .all(roomId, first?.sequence ?? 0,cursor?.created_at??null,cursor?.created_at??null,cursor?.created_at??null,before) as unknown as (Message & { sequence: number })[];
-    return { first: first ?? null, items: rows.slice(0, 50).reverse().map(message=>{
+    const files=this.messageAttachments(actor,roomId,[...(first?[first.id]:[]),...rows.slice(0,50).map(row=>row.id)]);
+    const withFiles=<T extends Message>(message:T)=>({...message,attachments:files.filter(file=>file.message_id===message.id).map(({message_id:_m,...file})=>file)});
+    return { first: first ? withFiles(first) : null, items: rows.slice(0, 50).reverse().map(message=>{
       const target=message.reply_to?this.#db.prepare('SELECT id,author_id,body FROM messages WHERE id=? AND room_id=?').get(message.reply_to,roomId):null;
-      return {...message,replyTo:target?{id:target.id,author:target.author_id==='administrator'?'you':target.author_id,text:String(target.body).slice(0,240)}:null};
+      return {...withFiles(message),replyTo:target?{id:target.id,author:target.author_id==='administrator'?'you':target.author_id,text:String(target.body).slice(0,240)}:null};
     }), next: rows.length > 50 ? rows[49]!.sequence : null };
+  }
+  /** Names and sizes only; text is read separately with the same room check. */
+  messageAttachments(actor: Actor, roomId: string, messageIds?: string[]): AttachmentInfo[] {
+    this.#room(actor, roomId);
+    return this.#db.prepare(`SELECT a.id,a.message_id,a.name,a.size FROM message_attachments a JOIN messages m ON m.id=a.message_id
+      WHERE m.room_id=? AND (? IS NULL OR a.message_id IN (SELECT value FROM json_each(?))) ORDER BY m.rowid,a.position`)
+      .all(roomId, messageIds ? 1 : null, JSON.stringify(messageIds ?? [])) as unknown as AttachmentInfo[];
+  }
+  attachment(actor: Actor, id: string): AttachmentInfo & { room_id: string; sha256: string; body: string } {
+    const row = this.#db.prepare('SELECT a.id,a.message_id,a.name,a.size,a.sha256,a.body,m.room_id FROM message_attachments a JOIN messages m ON m.id=a.message_id WHERE a.id=?')
+      .get(text(id, 100)) as (AttachmentInfo & { room_id: string; sha256: string; body: string }) | undefined;
+    check(row, 'not_found', 'Attachment not found'); this.#room(actor, row.room_id);
+    return row;
+  }
+  /** Files on administrator messages that started or changed this task, inline within one bounded budget. */
+  taskAttachments(actor: Actor, lease: TaskLease) {
+    check(this.#bot(actor).id === lease.task.agent_id, 'forbidden', 'Task belongs to another agent'); this.#room(actor, lease.task.room_id);
+    const rows = this.#db.prepare(`SELECT a.id,a.message_id,a.name,a.size,a.body FROM message_attachments a JOIN messages m ON m.id=a.message_id
+      JOIN task_message_links l ON l.message_id=m.id WHERE l.task_id=? AND m.room_id=? AND m.author_id='administrator' ORDER BY m.rowid DESC,a.position LIMIT 25`)
+      .all(lease.task.id, lease.task.room_id) as unknown as (AttachmentInfo & { body: string })[];
+    const shares = excerptBudget(rows.map(row => row.body.length));
+    return rows.map((row, index) => ({ attachment_id: row.id, message_id: row.message_id, name: row.name, size_bytes: row.size, characters: row.body.length,
+      text: row.body.slice(0, shares[index]), truncated: shares[index]! < row.body.length, untrusted: true }));
   }
   searchRoomMessages(actor: Actor, query: string): string[] {
     check(typeof query === 'string' && query.length <= 200, 'invalid', 'Invalid conversation query');
@@ -892,13 +920,15 @@ export class Runtime {
     });
   }
   /** A browser retry must not post twice or start two jobs. Both records commit together. */
-  submit(actor: Actor, id: string, roomId: string, body: string, agentId?: string | string[], replyTo?: string, requestContext?: SubmissionContext): { message: Message; task: Task | null } {
+  submit(actor: Actor, id: string, roomId: string, body: string, agentId?: string | string[], replyTo?: string, requestContext?: SubmissionContext, attachments?: unknown): { message: Message; task: Task | null } {
     this.#admin(actor);
     check(typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id), 'invalid', 'Invalid submission id');
+    const files = decodeAttachments(attachments);
+    if (files.length && typeof body === 'string' && !body.trim()) body = `添付ファイル：${files.map(file => file.name).join('、')}`;
     text(body);
     const recipients = Array.isArray(agentId) ? [...new Set(agentId)].sort() : agentId ? [agentId] : [];
     check(!Array.isArray(agentId) || (agentId.length > 0 && agentId.length <= 100 && agentId.every(value => typeof value === 'string')), 'invalid', 'Invalid recipients');
-    const hash = createHash('sha256').update(JSON.stringify([roomId, body, Array.isArray(agentId) ? recipients : agentId ?? null, ...(replyTo === undefined ? [] : [replyTo]), ...(requestContext ? [requestContext] : [])])).digest('hex');
+    const hash = createHash('sha256').update(JSON.stringify([roomId, body, Array.isArray(agentId) ? recipients : agentId ?? null, ...(replyTo === undefined ? [] : [replyTo]), ...(requestContext ? [requestContext] : []), ...(files.length ? [{ attachments: files.map(file => [file.name, file.sha256]) }] : [])])).digest('hex');
     return transaction(this.#db, () => {
       const previous = this.#db.prepare('SELECT * FROM submissions WHERE id=?').get(id) as
         { input_hash: string; message_id: string; task_id: string | null } | undefined;
@@ -910,6 +940,7 @@ export class Runtime {
       check(!this.roomPreferences(actor, roomId).archived, 'conflict', 'Restore the archived room before replying');
       if (replyTo !== undefined) check(typeof replyTo === 'string' && !!this.#db.prepare('SELECT 1 FROM messages WHERE id=? AND room_id=?').get(replyTo, roomId), 'not_found', 'Reply target is no longer available in this conversation');
       const message = this.post(actor, roomId, body);
+      files.forEach((file, position) => this.#db.prepare('INSERT INTO message_attachments VALUES (?,?,?,?,?,?,?)').run(randomUUID(), message.id, position, file.name, file.size, file.sha256, file.body));
       if (replyTo !== undefined) {
         this.#db.prepare('UPDATE messages SET reply_to=? WHERE id=?').run(replyTo, message.id);
         message.reply_to = replyTo;
@@ -1187,6 +1218,9 @@ export class Runtime {
     const record = (kind === 'summary' ? this.#summary(actor, roomId, sourceId) : kind === 'memory'
       ? this.#memory(actor, principal.id).prepare('SELECT source_room_id AS room_id,body,revision FROM memories WHERE id=?').get(sourceId)
       : this.#db.prepare(queries[kind]!).get(sourceId)) as { room_id: string; body: string; revision?: number } | undefined;
+    // Attached text is part of the message source, so it pages and versions with the message.
+    if (kind === 'message' && record) for (const file of this.#db.prepare('SELECT name,size,body FROM message_attachments WHERE message_id=? ORDER BY position').all(sourceId))
+      record.body += `\n\n[添付ファイル: ${String(file.name)} (${Number(file.size)} bytes)・利用者が提供した資料]\n${String(file.body)}`;
     const allowed = this.rooms(actor).some(room => room.id === record?.room_id && (room.visibility === 'shared' || room.id === roomId));
     check(record && allowed, 'not_found', 'Source unavailable in this conversation');
     const current = createHash('sha256').update(JSON.stringify([kind, sourceId, record.room_id, record.body, record.revision ?? null])).digest('hex');
