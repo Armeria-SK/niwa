@@ -261,8 +261,8 @@ async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease
     const area=runtime.workareas.selected(actor,lease);if(!area)return {error:'Select a workarea'};
     runtime.workareas.authorize(actor,area,lease);
     if(call.name==='execution_wait')return runtime.tasks.waitExecution(actor,lease,args.execution_id as string);
-    if(call.name==='execution_start')return runtime.tasks.externalOnce(actor,lease,operationId,{name:call.name,arguments:call.arguments,area},(id,firstAttempt)=>runtime.workareas.execution(actor,area,{operation:call.name,...args,operation_id:id,allow_start:firstAttempt},external.workareas!,lease));
-    const result=await runtime.workareas.execution(actor,area,{operation:call.name,...args},external.workareas,lease);
+    if(call.name==='execution_start')return runtime.tasks.externalOnce(actor,lease,operationId,{name:call.name,arguments:call.arguments,area},(id,firstAttempt)=>runtime.workareas.execution(actor,area,{operation:call.name,...args,operation_id:id,allow_start:firstAttempt},external.workareas!,lease,signal));
+    const result=await runtime.workareas.execution(actor,area,{operation:call.name,...args},external.workareas,lease,signal);
     const recorded=runtime.workareas.executionResult(actor,args.execution_id as string,lease);
     return {...result,...(recorded.state!=='pending'?recorded:{})};
   }
