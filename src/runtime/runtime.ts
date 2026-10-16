@@ -758,7 +758,7 @@ export class Runtime {
     const artifactCount=this.artifacts(actor).filter(item=>item.room_id===roomId&&Number(item.created_at)>=since).length;
     const operations=this.#db.prepare(`SELECT l.tool_name,count(*) AS intents,sum(e.output IS NOT NULL) AS recorded,sum(e.output IS NULL) AS unknown
       FROM external_operation_labels l JOIN external_operations e USING(task_id,operation_id) JOIN tasks t ON t.id=l.task_id
-      WHERE t.room_id=? AND l.started_at>=? AND l.tool_name IN ('browser_form_submit','browser_request_submit','x_post') GROUP BY l.tool_name`).all(roomId,since);
+      WHERE t.room_id=? AND l.started_at>=? AND l.tool_name IN ('browser_form_submit','browser_request_submit') GROUP BY l.tool_name`).all(roomId,since);
     const pending=this.#db.prepare(`SELECT
       sum(EXISTS(SELECT 1 FROM approval_requests a WHERE a.task_id=t.id AND a.status='pending')) AS approvals,
       sum(coalesce(c.blocker,'')!='') AS blockers,sum(t.deadline_at<=?) AS overdue

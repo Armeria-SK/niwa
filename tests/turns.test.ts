@@ -910,7 +910,6 @@ for (const shared of [false, true]) test(`model instructions reflect room permis
       assert.equal(request.tools.some(tool => tool.name === name), shared);
       assert.ok(state.configured_tools_in_shared_room.includes(name));
     }
-    assert.ok(!state.configured_tools_in_shared_room.includes('x_post'));
     assert.match(request.system_instructions, /人工の事業方針/);
     assert.match(request.system_instructions, /Niwa全体の未実装と混同しません/);
     return complete('環境を確認しました');

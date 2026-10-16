@@ -140,7 +140,7 @@ def install():
     config = json.loads(config_path.read_text())
     require(config.get('origin') == 'http://127.0.0.1:3210' and config.get('port') == 3210,
             'This setup targets the local default origin and port')
-    require(not any(config.get(key) for key in ('browserExecutorUid', 'packagesEnabled', 'xAccountId')), 'Additional features need separate acceptance')
+    require(not any(config.get(key) for key in ('browserExecutorUid', 'packagesEnabled')), 'Additional features need separate acceptance')
     for key in ('workspaceExecutorUid', 'programExecutorUid'):
         require(config.get(key) in (None, executor.pw_uid), f'Unexpected {key}')
     original = config_path.read_text()

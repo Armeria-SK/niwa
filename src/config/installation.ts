@@ -14,7 +14,9 @@ const schema = Type.Object({ version: Type.Literal(1), origin: Type.String({ max
   promptVersion: Type.Optional(Type.Union([Type.Literal('legacy-v4'),Type.Literal('structured-v5')])),
   port: Type.Integer({ minimum: 1, maximum: 65535 }), workspaceExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
   programExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })), browserExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
-  workareasEnabled: Type.Optional(Type.Boolean()), packagesEnabled: Type.Optional(Type.Boolean()), xAccountId: Type.Optional(Type.String({ pattern: '^[0-9]{1,19}$' })) }, { additionalProperties: false });
+  workareasEnabled: Type.Optional(Type.Boolean()), packagesEnabled: Type.Optional(Type.Boolean()),
+  // X posting was removed; an existing value is still accepted so older configs keep loading, and is ignored.
+  xAccountId: Type.Optional(Type.String({ pattern: '^[0-9]{1,19}$' })) }, { additionalProperties: false });
 export type Installation = Static<typeof schema>;
 const savedMcpSchema=Type.Object({version:Type.Literal(1),servers:Type.Array(mcpServerSchema,{maxItems:8})},{additionalProperties:false});
 function validate(value: unknown, source = 'config/niwa.json'): Installation {

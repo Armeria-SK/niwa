@@ -102,7 +102,7 @@ test('MCP rejects unprotected sockets, missing tools and duplicate registrations
 test('MCP resources are downloadable only after administrator login in a valid conversation',async t=>{
  const f=await fixture(t),mcp=await McpConnector.connect([f.config]);
  const admin=f.runtime.administrator();f.runtime.bootstrap(admin);const room=f.runtime.createRoom(admin,'人工の会話');
- const origin='https://niwa.test',key='k'.repeat(43),server=createApiServer(f.runtime,new WebAuth(origin,key),undefined,undefined,undefined,undefined,undefined,undefined,mcp);
+ const origin='https://niwa.test',key='k'.repeat(43),server=createApiServer(f.runtime,new WebAuth(origin,key),undefined,undefined,undefined,undefined,undefined,mcp);
  server.listen(0,'127.0.0.1');await once(server,'listening');t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
  const port=(server.address() as {port:number}).port;let cookie='';
  const call=(path:string,body?:unknown)=>new Promise<{status:number;body:string;cookie:string;attachment:unknown}>((resolve,reject)=>{

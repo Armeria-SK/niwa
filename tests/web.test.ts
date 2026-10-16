@@ -142,22 +142,6 @@ test('HTTP authentication rejects forged identity and cross-origin mutations; lo
   assert.equal((await f.call('/api/state')).status, 401);
 });
 
-test('X callback ends on a small page with a link back to settings, not raw JSON', async t => {
-  const f = await fixture(t); const root = f.root;
-  const origin = 'https://niwa.test'; let fail = false;
-  const server = createApiServer(f.runtime, new WebAuth(origin, 'k'.repeat(43)), undefined, undefined, undefined, undefined, { finish: async () => { if (fail) throw new Error('x'); } } as never);
-  server.listen(0, '127.0.0.1'); await once(server, 'listening'); t.after(() => { server.close(); server.closeAllConnections(); void root; });
-  const get = (query: string) => new Promise<Response>((resolve, reject) => request(`http://127.0.0.1:${(server.address() as { port: number }).port}/api/x/callback?${query}`, { headers: { host: 'niwa.test' } }, incoming => {
-    const chunks: Buffer[] = []; incoming.on('data', chunk => chunks.push(Buffer.from(chunk)));
-    incoming.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: incoming.statusCode!, headers: Object.fromEntries(Object.entries(incoming.headers).map(([k, v]) => [k, String(v)])) })));
-  }).on('error', reject).end());
-  const state = 'a'.repeat(43);
-  const ok = await get(`state=${state}&code=c`); assert.equal(ok.status, 200);
-  assert.match(ok.headers.get('content-type')!, /text\/html/); assert.match(ok.headers.get('content-security-policy')!, /default-src 'none'/);
-  assert.match(await ok.text(), /href="\/#settings"/);
-  fail = true; const bad = await get(`state=${state}&code=c`); assert.equal(bad.status, 400); assert.match(await bad.text(), /href="\/#settings"/);
-});
-
 test('login lockout is per client address, counts only failures, and answers 429 with Retry-After', async t => {
   const f = await fixture(t); 
   const auth = new WebAuth('https://niwa.test', 'k'.repeat(43));
