@@ -70,7 +70,7 @@ export class Workareas {
   const prior=this.gates.get(id)??Promise.resolve();const result=prior.catch(()=>{}).then(action);this.gates.set(id,result);
   try{return await result;}finally{if(this.gates.get(id)===result)this.gates.delete(id);}
  }
- async execution(actor:Actor,id:string,input:Omit<WorkareaRequest,'area'|'epoch'>,transport:WorkareaTransport,lease?:TaskLease){
+ async execution(actor:Actor,id:string,input:Omit<WorkareaRequest,'area'|'epoch'>,transport:WorkareaTransport,lease?:TaskLease,signal?:AbortSignal){
   this.authorize(actor,id,lease);check(this.settings(actor).enabled,'forbidden','Workareas disabled');
   if(lease)check(!this.runtime.tasks.independentActivity(actor,lease),'forbidden','Independent activity cannot execute');
   check(['execution_start','execution_list','execution_status','execution_stop','execution_preview'].includes(input.operation),'forbidden','Internal operation');
@@ -81,13 +81,13 @@ export class Workareas {
    if(existing)check(existing.task_id===lease.task.id&&existing.area_id===id,'conflict','Execution scope changed');
    else this.db.prepare('INSERT INTO execution_bindings(id,task_id,area_id,epoch,lease) VALUES (?,?,?,?,?)').run(input.operation_id,lease.task.id,id,epoch,lease.token);
    this.startingExecutions.add(input.operation_id);
-   try{const result=await transport({...input,area:id,epoch,task_id:lease.task.id,deadline:this.runtime.tasks.get(actor,lease.task.id).deadline_at});
+   try{const result=await transport({...input,area:id,epoch,task_id:lease.task.id,deadline:this.runtime.tasks.get(actor,lease.task.id).deadline_at},signal);
     if(result.error)this.db.prepare("UPDATE execution_bindings SET state='failed',result=? WHERE id=?").run(JSON.stringify(result),input.operation_id);
     return result;
    }catch{return {id:input.operation_id,state:'reconciling'};}finally{this.startingExecutions.delete(input.operation_id);}
   }
   if(input.operation==='execution_stop'&&lease){const row=this.db.prepare('SELECT task_id FROM execution_bindings WHERE id=?').get(input.execution_id??'');check(row?.task_id===lease.task.id,'forbidden','Only the owning task or administrator can stop this execution');}
-  const result=await transport({...input,area:id,epoch});this.authorize(actor,id,lease);return result;
+  signal?.throwIfAborted();const result=await transport({...input,area:id,epoch},signal);this.authorize(actor,id,lease);return result;
  }
  async syncExecutions(transport:WorkareaTransport){
   const admin=this.runtime.administrator();

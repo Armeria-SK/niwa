@@ -99,15 +99,15 @@ export class Tasks {
     this.#admin(actor);
     return new Set(this.#db.prepare("SELECT id,agent_id FROM tasks WHERE state='queued' AND paused=0 AND internal_autonomous=0 AND NOT EXISTS(SELECT 1 FROM execution_bindings e WHERE e.task_id=tasks.id AND e.waiting=1 AND e.state='pending')").all().filter(row=>this.#autonomyAllowed(String(row.id))).map(row=>String(row.agent_id)));
   }
-  /** Claims one task atomically; waiting parents consume no execution slot. */
-  claim(actor: Actor, excludedAgents: ReadonlySet<string> = new Set()): TaskLease | undefined {
+  /** Claims one task atomically; waiting parents consume no execution slot. `unwinding` counts aborted jobs still running outside the DB. */
+  claim(actor: Actor, excludedAgents: ReadonlySet<string> = new Set(), unwinding = 0): TaskLease | undefined {
     this.#admin(actor);
     return transaction(this.#db, () => {
       this.expire(actor);
       if (this.#paused()) return undefined;
       const { concurrency_limit } = this.#db.prepare('SELECT concurrency_limit FROM settings WHERE id=1').get()!;
       const { count } = this.#db.prepare("SELECT count(*) AS count FROM tasks WHERE state='running'").get()!;
-      if (typeof concurrency_limit === 'number' && Number(count) >= concurrency_limit) return undefined;
+      if (typeof concurrency_limit === 'number' && Number(count) + unwinding >= concurrency_limit) return undefined;
       const next = (this.#db.prepare(`SELECT t.id,t.agent_id FROM tasks t JOIN agents a ON a.id=t.agent_id
         WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS (SELECT 1 FROM execution_bindings e WHERE e.task_id=t.id AND e.waiting=1 AND e.state='pending') AND NOT EXISTS
           (SELECT 1 FROM tasks running WHERE running.agent_id=t.agent_id AND running.state='running')

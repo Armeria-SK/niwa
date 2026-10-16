@@ -55,6 +55,10 @@ test('task execution wait frees model slot, commits with CAS, and membership rem
  const resumed=r.tasks.claim(admin)!;assert.equal(resumed.task.id,al.task.id);assert.equal(r.workareas.executionResult(aa,id,resumed).state,'completed');
  assert.equal((await r.workareas.execute(aa,project.id,{operation:'read',path:'result.txt'},transport,resumed)).content,'result');
  waiting=gate();const second=randomUUID();await r.workareas.execution(aa,project.id,{operation:'execution_start',operation_id:second,allow_start:true,seconds:20,preview:false},transport,resumed);await tick();
+ {const seen:(AbortSignal|undefined)[]=[],ctl=new AbortController(),spy=async(input:import('../src/tools/workareas/store.ts').WorkareaRequest,s?:AbortSignal)=>{seen.push(s);return transport(input,s);};
+  for(const operation of ['execution_list','execution_status'] as const)await r.workareas.execution(aa,project.id,{operation,execution_id:second},spy,resumed,ctl.signal);
+  assert.deepEqual(seen,[ctl.signal,ctl.signal]);ctl.abort();
+  await assert.rejects(r.workareas.execution(aa,project.id,{operation:'execution_list'},spy,resumed,ctl.signal));assert.equal(seen.length,2);}
  await r.workareas.project(admin,{id:project.id,name:'共同制作',room_id:room.id,members:[b.id],expected_revision:1});await r.workareas.syncExecutions(transport);assert.equal(aborted,true);
  assert.equal((await store.execute({operation:'execution_status',area:project.id,epoch:r.workareas.epoch(),execution_id:second})).state,'cancelled');
 });

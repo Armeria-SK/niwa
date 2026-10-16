@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setImmediate } from 'node:timers/promises';
+import { setImmediate, setTimeout as sleep } from 'node:timers/promises';
 import { Runtime } from '../src/runtime/runtime.ts';
 import { Scheduler } from '../src/runtime/scheduler.ts';
 import { randomUUID } from 'node:crypto';
@@ -101,4 +101,40 @@ test('a throwing phase is logged once and neither stops the other phases nor mak
     assert.equal(errors.mock.callCount(), 2); assert.match(String(errors.mock.calls[0]!.arguments[0]), /schedules.*synthetic schedule failure/);
     scheduler.tick(); assert.equal(errors.mock.callCount(), 2);
   } finally { await scheduler.stop(); }
+});
+
+function crowded(t: { after: (fn: () => void) => void }, limit: number) {
+  const f = fixture(t); const b = f.runtime.createAgent(f.actor, 'Bot B'); const c = f.runtime.createAgent(f.actor, 'Bot C');
+  f.runtime.updateSettings(f.admin, { concurrencyLimit: limit });
+  const ids = [f.leader.id, b.id, c.id].map((agent, i) => f.tasks.create(f.admin, agent, f.room.id, `依頼${i}`).id);
+  return { ...f, ids };
+}
+
+test('a cancelled job still unwinding keeps its concurrency slot until it settles', async t => {
+  const f = crowded(t, 2); let inflight = 0, max = 0;
+  const scheduler = new Scheduler(f.runtime, { async run(lease) {
+    inflight++; max = Math.max(max, inflight);
+    try { await sleep(lease.task.prompt === '依頼0' ? 200 : 400); } finally { inflight--; }
+  } });
+  scheduler.start(); await sleep(20);
+  assert.equal(inflight, 2);
+  f.tasks.cancel(f.admin, f.ids[0]!); scheduler.tick(); await setImmediate();
+  assert.equal(inflight, 2); assert.equal(f.tasks.get(f.admin, f.ids[2]!).state, 'queued');
+  await sleep(300); // 依頼0 has settled; the slot is released and 依頼2 runs
+  assert.equal(f.tasks.get(f.admin, f.ids[2]!).state, 'running');
+  assert.equal(max, 2);
+  await scheduler.stop();
+});
+
+test('a job aborted more than two minutes ago no longer holds a concurrency slot', async t => {
+  const f = crowded(t, 2); let clock = 1_000_000; const release: (() => void)[] = [];
+  const scheduler = new Scheduler(f.runtime, { async run() { await new Promise<void>(resolve => release.push(resolve)); } }, () => clock);
+  scheduler.tick(); await setImmediate();
+  assert.equal(release.length, 2);
+  f.tasks.cancel(f.admin, f.ids[0]!); scheduler.tick(); await setImmediate();
+  clock += 119_000; scheduler.tick(); await setImmediate();
+  assert.equal(f.tasks.get(f.admin, f.ids[2]!).state, 'queued');
+  clock += 2_000; scheduler.tick(); await setImmediate();
+  assert.equal(f.tasks.get(f.admin, f.ids[2]!).state, 'running');
+  release.forEach(resolve => resolve()); await scheduler.stop();
 });
