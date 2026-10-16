@@ -907,18 +907,29 @@ export class Runtime {
         message.reply_to = replyTo;
       }
       let task: Task | null = null;
-      for (const recipient of recipients) {
+      // Every check for every recipient stays in this pass: memory DB writes in the next pass are not rolled back with the control transaction.
+      const kind=requestContext?.kind ?? (isStatusInquiry(body)?'status':undefined);
+      const plan = recipients.map(recipient => {
         this.#room(this.agentSession(recipient), roomId);
         check(this.#agent(recipient).status === 'active', 'forbidden', 'Recipient is dormant');
-        const kind=requestContext?.kind ?? (isStatusInquiry(body)?'status':undefined);
         const linked=replyTo ? this.#db.prepare('SELECT task_id FROM task_message_links WHERE message_id=?').all(replyTo).map(row=>this.tasks.get(actor,String(row.task_id))).filter(t=>t.agent_id===recipient&&t.room_id===roomId) : [];
         const related=requestContext?.task_id ? this.tasks.get(actor,requestContext.task_id) : linked.length===1?linked[0]:undefined;
         if(related)check(related.room_id===roomId&&related.agent_id===recipient,'forbidden','Target does not belong to this recipient and conversation');
         if(kind==='amend'||kind==='cancel') {
           check(related,'invalid','Select the work to change');
           check(this.tasks.controlRevision(actor,related.id)===requestContext?.expected_revision,'conflict','Work changed; refresh before applying');
-          if(kind==='amend')this.tasks.instruct(actor,related.id,body);else this.tasks.cancel(actor,related.id);
-          this.tasks.linkMessage(actor,message.id,related.id,kind);task??=this.tasks.get(actor,related.id);continue;
+          if(kind==='amend')check(!['completed','cancelled'].includes(related.state),'conflict','Task has finished');
+        }
+        if(kind==='status')check(!this.settings(actor).paused,'forbidden','Runtime is paused');
+        const questions = this.tasks.list(actor).filter(task => task.agent_id === recipient && task.room_id === roomId && task.state === 'waiting_user');
+        const question = related ? questions.find(item => item.id === related.id) : questions.length === 1 ? questions[0] : undefined;
+        const answering = kind!=='new' && !!question && !this.#db.prepare("SELECT 1 FROM approval_requests WHERE task_id=? AND status='pending'").get(question.id);
+        return { recipient, related, question: answering ? question : undefined };
+      });
+      for (const { recipient, related, question } of plan) {
+        if(kind==='amend'||kind==='cancel') {
+          if(kind==='amend')this.tasks.instruct(actor,related!.id,body);else this.tasks.cancel(actor,related!.id);
+          this.tasks.linkMessage(actor,message.id,related!.id,kind);task??=this.tasks.get(actor,related!.id);continue;
         }
         if(kind==='status') {
           const inquiry=this.tasks.create(actor,recipient,roomId,body);
@@ -931,9 +942,7 @@ export class Runtime {
           this.tasks.linkMessage(actor,reply.id,inquiry.id,'response');
           this.tasks.completeInquiry(actor,inquiry.id,result);task??=this.tasks.get(actor,inquiry.id);continue;
         }
-        const questions = this.tasks.list(actor).filter(task => task.agent_id === recipient && task.room_id === roomId && task.state === 'waiting_user');
-        const question = related ? questions.find(item => item.id === related.id) : questions.length === 1 ? questions[0] : undefined;
-        if (kind!=='new' && question && !this.#db.prepare("SELECT 1 FROM approval_requests WHERE task_id=? AND status='pending'").get(question.id)) {
+        if (question) {
           this.tasks.resume(actor, question.id, body, { preservePause: true });
           this.tasks.linkMessage(actor, message.id, question.id, 'followup');
           task ??= this.tasks.get(actor, question.id);
