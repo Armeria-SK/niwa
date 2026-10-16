@@ -17,8 +17,10 @@ import { closeSync, mkdirSync, openSync, rmSync } from 'node:fs';
 import { agentDeletionSchema } from '../storage/agent-deletion-schema.ts';
 import { resolve, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { check, text, DomainError } from '../domain/types.ts';
-import type { Agent, Room, Message, Memory, Settings } from '../domain/types.ts';
+import { check, text, DomainError, MODEL_PROVIDERS } from '../domain/types.ts';
+import type { Agent, FallbackProvider, Room, Message, Memory, Settings } from '../domain/types.ts';
+import { normalizeCompatibleUrl } from '../providers/openai-compatible/url.ts';
+import { openaiCompatibleSchema } from '../storage/openai-compatible-schema.ts';
 import { openDatabase, transaction } from '../storage/database.ts';
 import { controlSchema, memoryMigrations } from '../storage/schema.ts';
 import { taskSchema } from '../storage/task-schema.ts';
@@ -93,7 +95,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, openaiCompatibleSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -271,7 +273,7 @@ export class Runtime {
     this.#admin(actor); this.#agent(agentId);
     check(Value.Check(profileSchema, patch), 'invalid', 'Invalid profile');
     if (selection) {
-      check(selection.provider === 'openai_subscription' || selection.provider === 'ollama', 'invalid', 'Invalid provider');
+      check(MODEL_PROVIDERS.includes(selection.provider), 'invalid', 'Invalid provider');
       text(selection.model, 256); text(selection.reasoning, 64);
     }
     this.#writeProfile(actor, agentId, patch, true, expected, selection);
@@ -356,7 +358,7 @@ export class Runtime {
   }
   configureGeneratedModel(actor: Actor, provider: Agent['provider'], model: string, reasoning: string): void {
     this.#admin(actor); text(model, 256); text(reasoning, 64);
-    check(provider === 'openai_subscription' || provider === 'ollama', 'invalid', 'Invalid provider');
+    check(MODEL_PROVIDERS.includes(provider), 'invalid', 'Invalid provider');
     this.#db.prepare('UPDATE generated_model SET provider=?,model=?,reasoning=? WHERE id=1').run(provider, model, reasoning);
   }
   commonRules(actor: Actor): { revision: number; body: string } {
@@ -382,23 +384,44 @@ export class Runtime {
   }
   recordModelRoute(actor: Actor, agentId: string, provider: Agent['provider'], model: string, reason: 'configured' | 'quota'): void {
     this.#admin(actor); this.#agent(agentId); text(model, 256);
-    check(provider === 'ollama' || provider === 'openai_subscription', 'invalid', 'Invalid provider');
+    check(MODEL_PROVIDERS.includes(provider), 'invalid', 'Invalid provider');
     check(reason === 'configured' || reason === 'quota', 'invalid', 'Invalid route reason');
     this.#db.prepare(`INSERT INTO model_routes(agent_id,provider,model,reason,attempted_at) VALUES(?,?,?,?,?)
       ON CONFLICT(agent_id) DO UPDATE SET provider=excluded.provider,model=excluded.model,reason=excluded.reason,attempted_at=excluded.attempted_at`)
       .run(agentId, provider, model, reason, Date.now());
   }
-  modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null } {
+  modelSettings(actor: Actor): { ollamaUrl: string | null; fallbackModel: string | null; fallbackProvider: FallbackProvider; compatibleUrl: string | null; compatibleParallel: number } {
     this.#admin(actor);
-    const row = this.#db.prepare('SELECT ollama_url,fallback_model FROM model_settings WHERE id=1').get()!;
-    return { ollamaUrl: row.ollama_url as string | null, fallbackModel: row.fallback_model as string | null };
+    const row = this.#db.prepare('SELECT ollama_url,fallback_model,fallback_provider,compatible_url,compatible_parallel FROM model_settings WHERE id=1').get()!;
+    return { ollamaUrl: row.ollama_url as string | null, fallbackModel: row.fallback_model as string | null, fallbackProvider: row.fallback_provider as FallbackProvider,
+      compatibleUrl: row.compatible_url as string | null, compatibleParallel: Number(row.compatible_parallel) };
   }
-  /** Host must verify local model capabilities against this exact endpoint before saving. */
-  configureFallback(actor: Actor, url: string, model: string | null): void {
+  /** Host must verify model capabilities against this exact endpoint before saving. */
+  configureFallback(actor: Actor, url: string, model: string | null, provider: FallbackProvider = 'ollama'): void {
     this.#admin(actor);
-    check(this.modelSettings(actor).ollamaUrl === url, 'conflict', 'Ollama configuration changed during discovery');
+    check(provider === 'ollama' || provider === 'openai_compatible', 'invalid', 'Invalid provider');
+    const settings = this.modelSettings(actor);
+    // Clearing needs no endpoint; a selection must match the endpoint it was verified against.
+    check(model === null || (provider === 'ollama' ? settings.ollamaUrl : settings.compatibleUrl) === url, 'conflict', 'Model endpoint changed during discovery');
     if (model !== null) text(model, 256);
-    this.#db.prepare('UPDATE model_settings SET fallback_model=? WHERE id=1').run(model);
+    this.#db.prepare('UPDATE model_settings SET fallback_model=?,fallback_provider=? WHERE id=1').run(model, model === null ? settings.fallbackProvider : provider);
+  }
+  /** Base URL of the OpenAI-compatible endpoint. The API key lives in the secrets directory, never in this database. */
+  configureCompatible(actor: Actor, url: string | null): void {
+    this.#admin(actor);
+    const normalized = url === null ? null : normalizeCompatibleUrl(url);
+    check(normalized !== undefined, 'invalid', 'Invalid OpenAI-compatible URL');
+    transaction(this.#db, () => {
+      if (this.modelSettings(actor).compatibleUrl === normalized) return;
+      this.#db.prepare("UPDATE model_settings SET fallback_model=CASE WHEN fallback_provider='openai_compatible' THEN NULL ELSE fallback_model END,compatible_url=? WHERE id=1").run(normalized);
+      this.#interruptTasks();
+    });
+  }
+  /** Requests Niwa sends at once to the OpenAI-compatible endpoint. Read per request, so running work keeps going. */
+  configureCompatibleParallel(actor: Actor, count: number): void {
+    this.#admin(actor);
+    check(Number.isInteger(count) && count >= 1 && count <= 8, 'invalid', 'Invalid parallel request count');
+    this.#db.prepare('UPDATE model_settings SET compatible_parallel=? WHERE id=1').run(count);
   }
   configureOllama(actor: Actor, url: string | null): void {
     this.#admin(actor);
@@ -409,14 +432,14 @@ export class Runtime {
       check(['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash, 'invalid', 'Invalid Ollama URL');
     }
     transaction(this.#db, () => {
-      this.#db.prepare('UPDATE model_settings SET fallback_model=CASE WHEN ollama_url IS ? THEN fallback_model ELSE NULL END,ollama_url=? WHERE id=1').run(url, url);
+      this.#db.prepare("UPDATE model_settings SET fallback_model=CASE WHEN ollama_url IS ? OR fallback_provider<>'ollama' THEN fallback_model ELSE NULL END,ollama_url=? WHERE id=1").run(url, url);
       this.#interruptTasks();
     });
   }
   /** The host verifies selection capabilities before invoking this persistence operation. */
   setAgentModel(actor: Actor, agentId: string, provider: Agent['provider'], model: string, reasoning: string): Agent {
     this.#admin(actor); this.#agent(agentId);
-    check(provider === 'openai_subscription' || provider === 'ollama', 'invalid', 'Invalid provider');
+    check(MODEL_PROVIDERS.includes(provider), 'invalid', 'Invalid provider');
     text(model, 256); text(reasoning, 64);
     return transaction(this.#db, () => {
       this.#db.prepare('UPDATE agents SET provider=?,model=?,reasoning=? WHERE id=?').run(provider, model, reasoning, agentId);

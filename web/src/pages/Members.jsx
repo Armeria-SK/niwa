@@ -2,6 +2,7 @@ import { DeleteMember } from '../DeleteMember.jsx';
 import { MemberScroll } from '../MemberScroll.jsx';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { modelListPath, nativeReasoning, providerLabel } from '../providers.js';
 import { SHAPES } from '../data.js';
 import { MemoryHistory } from '../MemoryHistory.jsx';
 import { useMemoryPage } from '../useMemoryPage.js';
@@ -42,10 +43,11 @@ function Profile({ member, onSave }) {
   const [models, setModels] = useState([]); const [modelError, setModelError] = useState('');
   const key = item => `${item.provider}:${item.model}`;
   const choices = [{ ...member, supported_efforts: [member.effort] }, ...models.filter(item => key(item) !== key(member))];
-  const efforts = draft.provider === 'ollama' ? ['native'] : models.find(item => key(item) === key(draft))?.supported_efforts || [draft.effort];
+  const [manual, setManual] = useState('');
+  const efforts = nativeReasoning(draft.provider) ? ['native'] : models.find(item => key(item) === key(draft))?.supported_efforts || [draft.effort];
   async function load(provider) {
     try {
-      const values = await api(provider === 'ollama' ? '/models' : '/subscription/models');
+      const values = await api(modelListPath(provider));
       setModels(current => [...current.filter(item => item.provider !== provider), ...values.map(item => ({ ...item, provider, model: item.model || item.model_id }))]); setModelError('');
     } catch (error) { setModelError(error.message); }
   }
@@ -57,8 +59,9 @@ function Profile({ member, onSave }) {
     <label className="field"><span>性格と話し方</span><textarea rows={5} value={draft.persona} onChange={e => change('persona', e.target.value)} /></label>
     {member.interests.some(interest=>interest.trim())?<div className="interest-block"><span className="field-label">気になっていること</span><div className="interest-tags">{member.interests.map(interest => <span key={interest}>{interest}</span>)}</div></div>:null}
     <div className="form-section-label">このBotのモデル</div>
-    <div className="field-pair"><label className="field"><span>モデル</span><select aria-label="モデル" value={key(draft)} onChange={e => { const model = choices.find(item => key(item) === e.target.value); setDraft(current => ({ ...current, provider: model.provider, model: model.model, effort: model.provider === 'ollama' ? 'native' : model.default_effort || model.supported_efforts?.[0] || member.effort })); setSaved(false); }}>{choices.map(item => <option key={key(item)} value={key(item)}>{item.model} · {item.provider === 'ollama' ? 'Ollama' : 'Codex'}</option>)}</select></label><label className="field"><span>推論の強さ</span><select aria-label="推論の強さ" value={draft.effort} disabled={draft.provider === 'ollama'} onChange={e => change('effort', e.target.value)}>{efforts.map(value => <option key={value}>{value}</option>)}</select></label></div>
-    <div className="inline-actions"><button type="button" className="button subtle" onClick={() => load('ollama')}>Ollamaのモデル一覧を取得</button><button type="button" className="button subtle" onClick={() => load('openai_subscription')}>Codexのモデル一覧を取得</button></div>{modelError ? <p role="alert">{modelError}</p> : null}
+    <div className="field-pair"><label className="field"><span>モデル</span><select aria-label="モデル" value={key(draft)} onChange={e => { const model = choices.find(item => key(item) === e.target.value); setDraft(current => ({ ...current, provider: model.provider, model: model.model, effort: nativeReasoning(model.provider) ? 'native' : model.default_effort || model.supported_efforts?.[0] || member.effort })); setSaved(false); }}>{choices.map(item => <option key={key(item)} value={key(item)}>{item.model} · {providerLabel(item.provider)}</option>)}</select></label><label className="field"><span>推論の強さ</span><select aria-label="推論の強さ" value={draft.effort} disabled={nativeReasoning(draft.provider)} onChange={e => change('effort', e.target.value)}>{efforts.map(value => <option key={value}>{value}</option>)}</select></label></div>
+    <div className="inline-actions"><button type="button" className="button subtle" onClick={() => load('ollama')}>Ollamaのモデル一覧を取得</button><button type="button" className="button subtle" onClick={() => load('openai_subscription')}>Codexのモデル一覧を取得</button><button type="button" className="button subtle" onClick={() => load('openai_compatible')}>OpenAI互換APIのモデル一覧を取得</button></div>
+    <div className="inline-actions"><label className="field"><span>OpenAI互換APIのモデルIDを直接入力</span><input value={manual} maxLength={256} onChange={e => setManual(e.target.value)} placeholder="例: gpt-4.1-mini" /></label><button type="button" className="button subtle" disabled={!manual.trim()} onClick={() => { const model = { provider: 'openai_compatible', model: manual.trim() }; setModels(current => [...current.filter(item => key(item) !== key(model)), model]); setDraft(current => ({ ...current, ...model, effort: 'native' })); setManual(''); setSaved(false); }}>このモデルを選ぶ</button></div>{modelError ? <p role="alert">{modelError}</p> : null}
     <p className="field-hint">モデルを変えても、人格と記憶は引き継ぎます。</p>
     </section>
     <section className="profile-appearance" aria-label="見た目"><h3>見た目</h3><AppearanceFields draft={draft} onChange={change} /></section>

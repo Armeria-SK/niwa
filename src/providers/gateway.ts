@@ -1,6 +1,6 @@
-import {ModelSetupError} from './shared/setup-error.ts';
-import type { Agent } from '../domain/types.ts';
-import { check } from '../domain/types.ts';
+import {ModelSetupError, setupFailure} from './shared/setup-error.ts';
+import type { Agent, FallbackProvider } from '../domain/types.ts';
+import { check, DomainError } from '../domain/types.ts';
 import type { Runtime } from '../runtime/runtime.ts';
 import type { ResolveAdapter } from '../runtime/turns.ts';
 import { inspectOllamaModel, listOllamaModels, OllamaAdapter } from './ollama/adapter.ts';
@@ -8,14 +8,91 @@ import type { Subscription } from '../auth/subscription.ts';
 import { createHash } from 'node:crypto';
 import { ConnectionGate } from './shared/serial.ts';
 import type { ModelAdapter } from './shared/adapter.ts';
+import { EndpointLimiter } from './shared/limiter.ts';
+import { listCompatibleModels, OpenAICompatibleAdapter } from './openai-compatible/adapter.ts';
+import { compatibleUrl, normalizeCompatibleUrl } from './openai-compatible/url.ts';
+import { validApiKey, type ApiKeyStore } from '../auth/api-key.ts';
+
+interface CompatibleTarget { readonly url: string; readonly key: string | undefined; readonly revision: number }
+const COMPATIBLE_MODEL = /^[^\x00-\x1f\x7f]{1,256}$/u;
 
 /** Host-owned selection and discovery. URLs and model identity never come from model tool calls. */
 export class ModelGateway {
   #runtime: Runtime;
   #fetch: typeof fetch;
   #gate = new ConnectionGate();
+  #limiter = new EndpointLimiter();
   readonly subscription: Subscription | undefined;
-  constructor(runtime: Runtime, fetchImpl = fetch, subscription?: Subscription) { this.#runtime = runtime; this.#fetch = fetchImpl; this.subscription = subscription; }
+  /** OpenAI-compatible API key. Absent when the host has no secrets directory (tests, embedded use). */
+  readonly compatibleKey: ApiKeyStore | undefined;
+  constructor(runtime: Runtime, fetchImpl = fetch, subscription?: Subscription, compatibleKey?: ApiKeyStore) {
+    this.#runtime = runtime; this.#fetch = fetchImpl; this.subscription = subscription; this.compatibleKey = compatibleKey;
+  }
+  /** The stored key is used only for the origin it was entered for, so changing the URL never sends it elsewhere. */
+  async #compatible(): Promise<CompatibleTarget> {
+    const url = this.#runtime.modelSettings(this.#runtime.administrator()).compatibleUrl;
+    check(url, 'conflict', 'OpenAI-compatible API is not configured');
+    const revision = this.compatibleKey?.revision ?? 0;
+    const record = await this.compatibleKey?.read();
+    return { url, key: record && record.origin === new URL(url).origin ? record.key : undefined, revision };
+  }
+  #compatibleCurrent(target: CompatibleTarget): () => void {
+    return () => check(this.#runtime.modelSettings(this.#runtime.administrator()).compatibleUrl === target.url && (this.compatibleKey?.revision ?? 0) === target.revision,
+      'conflict', 'OpenAI-compatible configuration changed during discovery');
+  }
+  #compatibleAdapter(target: CompatibleTarget, model: string): OpenAICompatibleAdapter {
+    const runtime = this.#runtime; const lane = compatibleUrl(target.url, 'chat/completions').href;
+    return new OpenAICompatibleAdapter({ baseUrl: target.url, apiKey: target.key, fetch: this.#fetch,
+      slot: signal => this.#limiter.acquire(lane, () => runtime.modelSettings(runtime.administrator()).compatibleParallel, signal) }, model);
+  }
+  async compatibleStatus() {
+    const settings = this.#runtime.modelSettings(this.#runtime.administrator());
+    const record = this.compatibleKey ? await this.compatibleKey.read() : undefined;
+    return { available: !!this.compatibleKey, url: settings.compatibleUrl, parallel: settings.compatibleParallel,
+      keyConfigured: !!record && !!settings.compatibleUrl && record.origin === new URL(settings.compatibleUrl).origin };
+  }
+  /** URL, parallelism and key are saved in that order; the key is bound to the saved URL's origin. */
+  async configureCompatible(input: { url?: string | null; apiKey?: string; parallel?: number }) {
+    const admin = this.#runtime.administrator();
+    // Validate everything first so a rejected field never leaves a partial save.
+    if (input.apiKey !== undefined) {
+      check(this.compatibleKey, 'conflict', 'API key storage unavailable');
+      check(validApiKey(input.apiKey), 'invalid', 'Invalid API key');
+    }
+    check(input.url === undefined || input.url === null || normalizeCompatibleUrl(input.url) !== undefined, 'invalid', 'Invalid OpenAI-compatible URL');
+    check(input.parallel === undefined || (Number.isInteger(input.parallel) && input.parallel >= 1 && input.parallel <= 8), 'invalid', 'Invalid parallel request count');
+    if (input.url !== undefined) this.#runtime.configureCompatible(admin, input.url);
+    if (input.parallel !== undefined) this.#runtime.configureCompatibleParallel(admin, input.parallel);
+    if (input.apiKey !== undefined) {
+      const url = this.#runtime.modelSettings(admin).compatibleUrl;
+      check(url, 'invalid', 'Save the OpenAI-compatible URL with the key');
+      await this.compatibleKey!.write({ origin: new URL(url).origin, key: input.apiKey });
+      this.#runtime.invalidateProvider(admin, 'openai_compatible');
+    }
+    return this.compatibleStatus();
+  }
+  async clearCompatibleKey() {
+    check(this.compatibleKey, 'conflict', 'API key storage unavailable');
+    await this.compatibleKey.clear();
+    this.#runtime.invalidateProvider(this.#runtime.administrator(), 'openai_compatible');
+    return this.compatibleStatus();
+  }
+  async compatibleCatalog(): Promise<{ provider: 'openai_compatible'; model: string }[]> {
+    const target = await this.#compatible();
+    return (await listCompatibleModels(target.url, target.key, this.#fetch)).map(model => ({ provider: 'openai_compatible', model }));
+  }
+  /** Lists models only, so the check itself is not billed. Failures carry a trusted message, never the key or response body. */
+  async checkCompatible(): Promise<{ ok: true; models: number } | { ok: false; code: string; message: string }> {
+    try { return { ok: true, models: (await this.compatibleCatalog()).length }; }
+    catch (error) {
+      if (error instanceof DomainError) return { ok: false, code: 'NOT_CONFIGURED', message: '接続先URLを保存してください。' };
+      const failure = setupFailure(error); return { ok: false, code: failure.code, message: failure.message };
+    }
+  }
+  async selectCompatible(agentId: string, model: string): Promise<Agent> {
+    (await this.#verify('openai_compatible', model, 'native'))();
+    return this.#runtime.setAgentModel(this.#runtime.administrator(), agentId, 'openai_compatible', model, 'native');
+  }
   #url(): string {
     const url = this.#runtime.modelSettings(this.#runtime.administrator()).ollamaUrl;
     check(url, 'conflict', 'Ollama is not configured');
@@ -43,6 +120,19 @@ export class ModelGateway {
       await this.subscription.profile(model, effort);
       return () => check(this.subscription!.revision === revision, 'conflict', 'Subscription account changed');
     }
+    if (provider === 'openai_compatible') {
+      check(effort === 'native' && typeof model === 'string' && COMPATIBLE_MODEL.test(model) && model.trim() === model, 'invalid', 'Invalid OpenAI-compatible selection');
+      const target = await this.#compatible();
+      let available: string[] | undefined;
+      try { available = await listCompatibleModels(target.url, target.key, this.#fetch); }
+      catch (error) {
+        // A server without a model list still accepts a typed model id; rejected credentials never do.
+        const code = setupFailure(error).code;
+        if (code === 'AUTHENTICATION_FAILED' || code === 'PERMISSION_DENIED' || code === 'ABORTED') throw error;
+      }
+      check(!available || available.includes(model), 'invalid', 'The model is not available');
+      return this.#compatibleCurrent(target);
+    }
     check(provider === 'ollama' && effort === 'native', 'invalid', 'Invalid Ollama selection');
     const url = this.#url();
     const installed = await listOllamaModels(url, this.#fetch);
@@ -50,15 +140,23 @@ export class ModelGateway {
     await inspectOllamaModel(url, model, this.#fetch);
     return () => check(this.#url() === url, 'conflict', 'Ollama configuration changed during discovery');
   }
-  async selectFallback(model: string | null): Promise<ReturnType<Runtime['modelSettings']>> {
+  async selectFallback(model: string | null, provider: FallbackProvider = 'ollama'): Promise<ReturnType<Runtime['modelSettings']>> {
+    const admin = this.#runtime.administrator();
+    if (provider === 'openai_compatible') {
+      // Chat Completions models are used with tools; the endpoint reports unsupported tools per request.
+      if (model !== null) (await this.#verify('openai_compatible', model, 'native'))();
+      this.#runtime.configureFallback(admin, this.#runtime.modelSettings(admin).compatibleUrl ?? '', model, provider);
+      return this.#runtime.modelSettings(admin);
+    }
+    check(provider === 'ollama', 'invalid', 'Invalid fallback provider');
     const url = this.#url();
     if (model !== null) {
       check((await listOllamaModels(url, this.#fetch)).includes(model), 'invalid', 'The model is not installed');
       const capability = await inspectOllamaModel(url, model, this.#fetch);
       check(capability.tools, 'invalid', 'The fallback model must support tools');
     }
-    this.#runtime.configureFallback(this.#runtime.administrator(), url, model);
-    return this.#runtime.modelSettings(this.#runtime.administrator());
+    this.#runtime.configureFallback(admin, url, model, provider);
+    return this.#runtime.modelSettings(admin);
   }
   async selectSubscription(agentId: string, model: string, effort: string): Promise<Agent> {
     (await this.#verify('openai_subscription', model, effort))();
@@ -81,7 +179,7 @@ export class ModelGateway {
       const runtime = this.#runtime; const admin = runtime.administrator();
       if (runtime.providerLimits.blocked(admin, key)) {
         const settings=runtime.modelSettings(admin);
-        if(!settings.ollamaUrl||!settings.fallbackModel)throw new ModelSetupError({code:'QUOTA_EXCEEDED',retryable:true,message:'接続先の利用枠回復を待っています。',reset_at:Math.ceil(runtime.providerLimits.nextProbe(admin,key)/1000)});
+        if(!settings.fallbackModel||!(settings.fallbackProvider==='ollama'?settings.ollamaUrl:settings.compatibleUrl))throw new ModelSetupError({code:'QUOTA_EXCEEDED',retryable:true,message:'接続先の利用枠回復を待っています。',reset_at:Math.ceil(runtime.providerLimits.nextProbe(admin,key)/1000)});
         const fallback = await this.#fallback(agent, signal);
         check(subscription.revision === generation, 'conflict', 'Subscription account changed'); return fallback;
       }
@@ -109,32 +207,46 @@ export class ModelGateway {
         },
       });
     }
+    if (agent.provider === 'openai_compatible') {
+      let target: CompatibleTarget;
+      try { target = await this.#compatible(); }
+      catch (error) { throw error instanceof DomainError ? new ModelSetupError({ code: 'INVALID_REQUEST', retryable: false, message: 'OpenAI互換APIの接続先URLを設定してください。' }) : error; }
+      signal?.throwIfAborted();
+      return this.#record(this.#compatibleAdapter(target, agent.model), agent.id, 'openai_compatible', agent.model, 'configured');
+    }
     check(agent.provider === 'ollama', 'conflict', 'Subscription login and capability verification are required');
     const url = this.#url();
     const model = await inspectOllamaModel(url, agent.model, this.#fetch);
     signal?.throwIfAborted();
     check(this.#url() === url, 'conflict', 'Ollama configuration changed during discovery');
-    return this.#record(new OllamaAdapter(url, model, this.#fetch), agent.id, agent.model, 'configured');
+    return this.#record(new OllamaAdapter(url, model, this.#fetch), agent.id, 'ollama', agent.model, 'configured');
   };
-  #record(adapter: ModelAdapter, agentId: string, model: string, reason: 'configured' | 'quota'): ModelAdapter {
+  #record(adapter: ModelAdapter, agentId: string, provider: Agent['provider'], model: string, reason: 'configured' | 'quota'): ModelAdapter {
     const runtime = this.#runtime;
     return { adapter_id: adapter.adapter_id, capabilities: adapter.capabilities,
       ...(adapter.context_window === undefined ? {} : { context_window: adapter.context_window }),
       async *run(request, options) {
         options?.signal?.throwIfAborted();
-        runtime.recordModelRoute(runtime.administrator(), agentId, 'ollama', model, reason);
+        runtime.recordModelRoute(runtime.administrator(), agentId, provider, model, reason);
         yield* adapter.run(request, options);
       },
     };
   }
   async #fallback(agent: Agent, signal?: AbortSignal): Promise<ModelAdapter> {
     const admin = this.#runtime.administrator(); const settings = this.#runtime.modelSettings(admin);
+    if (settings.fallbackProvider === 'openai_compatible') {
+      check(settings.compatibleUrl && settings.fallbackModel, 'conflict', 'A verified fallback model is required');
+      const target = await this.#compatible(); signal?.throwIfAborted();
+      const current = this.#runtime.modelSettings(admin);
+      check(current.compatibleUrl === target.url && current.fallbackProvider === 'openai_compatible' && current.fallbackModel === settings.fallbackModel, 'conflict', 'Fallback settings changed');
+      return this.#record(this.#compatibleAdapter(target, settings.fallbackModel), agent.id, 'openai_compatible', settings.fallbackModel, 'quota');
+    }
     check(settings.ollamaUrl && settings.fallbackModel, 'conflict', 'A verified fallback model is required');
     const model = await inspectOllamaModel(settings.ollamaUrl, settings.fallbackModel, this.#fetch);
     signal?.throwIfAborted();
     check(model.tools, 'conflict', 'Fallback model must support tools');
     const current = this.#runtime.modelSettings(admin);
     check(current.ollamaUrl === settings.ollamaUrl && current.fallbackModel === settings.fallbackModel, 'conflict', 'Fallback settings changed');
-    return this.#record(new OllamaAdapter(settings.ollamaUrl, model, this.#fetch), agent.id, settings.fallbackModel, 'quota');
+    return this.#record(new OllamaAdapter(settings.ollamaUrl, model, this.#fetch), agent.id, 'ollama', settings.fallbackModel, 'quota');
   }
 }

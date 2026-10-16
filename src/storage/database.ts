@@ -2,7 +2,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-export function openDatabase(path: string, schema: string | readonly string[]): DatabaseSync {
+/** A function step runs inside the migration transaction for changes plain SQL cannot express safely. */
+export type Migration = string | ((db: DatabaseSync) => void);
+export function openDatabase(path: string, schema: string | readonly Migration[]): DatabaseSync {
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   try {
@@ -12,7 +14,8 @@ export function openDatabase(path: string, schema: string | readonly string[]): 
       const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
       if (user_version > migrations.length) throw new Error('Database schema is newer than this application');
       for (let version = user_version; version < migrations.length; version++) {
-        db.exec(migrations[version]!);
+        const migration = migrations[version]!;
+        if (typeof migration === 'string') db.exec(migration); else migration(db);
         db.exec(`PRAGMA user_version = ${version + 1}`);
       }
     });

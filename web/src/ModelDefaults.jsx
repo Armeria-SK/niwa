@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from './api.js';
+import { modelListPath, nativeReasoning, providerLabel } from './providers.js';
 
 const selection = value => ({ provider: value.provider, model: value.model, reasoning: value.reasoning });
 const key = value => `${value.provider}:${value.model}`;
@@ -10,13 +11,14 @@ function ModelChoice({ initial, endpoint, title, hint }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [manual, setManual] = useState('');
   const choices = [draft, ...(key(saved) === key(draft) ? [] : [saved]), ...models.filter(item => key(item) !== key(draft) && key(item) !== key(saved))];
-  const efforts = draft.provider === 'ollama' ? ['native'] : models.find(item => key(item) === key(draft))?.supported_efforts || [draft.reasoning];
+  const efforts = nativeReasoning(draft.provider) ? ['native'] : models.find(item => key(item) === key(draft))?.supported_efforts || [draft.reasoning];
   async function load(provider) {
     setBusy(true); setError(''); setMessage('');
     try {
-      const values = await api(provider === 'ollama' ? '/models' : '/subscription/models');
-      setModels(values.map(item => provider === 'ollama' ? { ...item, reasoning: 'native' } : { ...item, provider, model: item.model_id, reasoning: item.default_effort || item.supported_efforts[0] }));
+      const values = await api(modelListPath(provider));
+      setModels(values.map(item => nativeReasoning(provider) ? { ...item, reasoning: 'native' } : { ...item, provider, model: item.model_id, reasoning: item.default_effort || item.supported_efforts[0] }));
       setMessage('利用できるモデルを取得しました。');
     } catch (error) { setError(error.message); }
     finally { setBusy(false); }
@@ -28,9 +30,10 @@ function ModelChoice({ initial, endpoint, title, hint }) {
     finally { setBusy(false); }
   }
   return <div role="group" aria-label={title}>
-    <div className="field-pair"><label className="field"><span>{title}</span><select disabled={busy} value={key(draft)} onChange={event => { setDraft(selection(choices.find(item => key(item) === event.target.value))); setMessage(''); }}>{choices.map(item => <option key={key(item)} value={key(item)}>{item.model} · {item.provider === 'ollama' ? 'Ollama' : 'Codex'}</option>)}</select></label>
-      <label className="field"><span>{title}の推論の強さ</span><select value={draft.reasoning} disabled={busy || draft.provider === 'ollama'} onChange={event => { setDraft(current => ({ ...current, reasoning: event.target.value })); setMessage(''); }}>{efforts.map(value => <option key={value}>{value}</option>)}</select></label></div>
-    <div className="inline-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => load('openai_subscription')}>Codexのモデルを取得</button><button type="button" className="button secondary" disabled={busy} onClick={() => load('ollama')}>Ollamaのモデルを取得</button><button type="button" className="button primary" disabled={busy || (key(draft) === key(saved) && draft.reasoning === saved.reasoning)} onClick={save}>モデルを保存</button></div>
+    <div className="field-pair"><label className="field"><span>{title}</span><select disabled={busy} value={key(draft)} onChange={event => { setDraft(selection(choices.find(item => key(item) === event.target.value))); setMessage(''); }}>{choices.map(item => <option key={key(item)} value={key(item)}>{item.model} · {providerLabel(item.provider)}</option>)}</select></label>
+      <label className="field"><span>{title}の推論の強さ</span><select value={draft.reasoning} disabled={busy || nativeReasoning(draft.provider)} onChange={event => { setDraft(current => ({ ...current, reasoning: event.target.value })); setMessage(''); }}>{efforts.map(value => <option key={value}>{value}</option>)}</select></label></div>
+    <div className="inline-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => load('openai_subscription')}>Codexのモデルを取得</button><button type="button" className="button secondary" disabled={busy} onClick={() => load('ollama')}>Ollamaのモデルを取得</button><button type="button" className="button secondary" disabled={busy} onClick={() => load('openai_compatible')}>OpenAI互換APIのモデルを取得</button><button type="button" className="button primary" disabled={busy || (key(draft) === key(saved) && draft.reasoning === saved.reasoning)} onClick={save}>モデルを保存</button></div>
+    <div className="inline-actions"><label className="field"><span>OpenAI互換APIのモデルIDを直接入力</span><input value={manual} disabled={busy} maxLength={256} onChange={event => setManual(event.target.value)} placeholder="例: gpt-4.1-mini" /></label><button type="button" className="button subtle" disabled={busy || !manual.trim()} onClick={() => { setDraft({ provider: 'openai_compatible', model: manual.trim(), reasoning: 'native' }); setManual(''); setMessage(''); }}>このモデルを選ぶ</button></div>
     <p className="field-hint">{hint}</p>
     {error ? <p className="field-error" role="alert">{error}</p> : null}
     <p className="saved-inline" role="status">{busy ? '接続先を確認しています…' : message}</p>

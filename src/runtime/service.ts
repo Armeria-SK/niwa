@@ -16,6 +16,7 @@ import { Backups } from '../backup/backups.ts';
 import { Subscription } from '../auth/subscription.ts';
 import { FileCredentialStore } from '../auth/credential-store.ts';
 import { readSearchKey } from '../auth/search-key.ts';
+import { FileApiKeyStore } from '../auth/api-key.ts';
 import { braveSearch } from '../tools/web/search.ts';
 import { configuredWorkspaceReader, configuredWorkspaceWriter, configuredWorkspaceDownloader } from '../tools/files/client.ts';
 import { configuredProgramExecutor } from '../sandbox/client.ts';
@@ -57,7 +58,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
     runtime = new Runtime(paths.state);
     const admin = runtime.administrator(); runtime.bootstrap(admin); runtime.tasks.recover(admin); runtime.tasks.recoverProviderWaits(admin,true);
     subscription = new Subscription(new FileCredentialStore(join(paths.secrets, 'codex.json')), () => runtime!.invalidateProvider(admin, 'openai_subscription'), {}, config.reasoningSummary===true);
-    const models = new ModelGateway(runtime, fetch, subscription);
+    const models = new ModelGateway(runtime, fetch, subscription, new FileApiKeyStore(join(paths.secrets, 'openai-compatible-key.json')));
     backups = new Backups(runtime, paths, config);
     const searchKey = readSearchKey(paths.secrets);
     const xClient = config.xAccountId ? readXClient(paths.secrets) : undefined;

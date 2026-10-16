@@ -17,6 +17,8 @@ import { memoryReviewSchema } from '../domain/memory-review.ts';
 import { summarySchema } from '../domain/summary.ts';
 
 /** Return a fresh adapter each time; calls after memory corrections must discard opaque continuation. */
+/** Adapters the gateway substitutes for a subscription at its usage limit. */
+const FALLBACK_ADAPTERS: readonly string[] = ['ollama', 'openai-compatible'];
 export type ResolveAdapter = (agent: Agent, taskId: string, signal?: AbortSignal) => Promise<ModelAdapter>;
 
 
@@ -89,7 +91,7 @@ export class TurnRunner {
       }
       const freshStep = !step;
       if (!step) {
-        if (agent.provider === 'openai_subscription' && adapter.adapter_id === 'ollama') {
+        if (agent.provider === 'openai_subscription' && FALLBACK_ADAPTERS.includes(adapter.adapter_id)) {
           try { adapter = await this.#resolve(agent, lease.task.id, signal); }
           catch (error) { if (!signal?.aborted && runtime.tasks.active(actor, lease)) runtime.tasks.providerFailure(actor,lease,setupFailure(error),'setup'); return; }
           if (!runtime.tasks.active(actor, lease) || signal?.aborted) return;
@@ -183,7 +185,7 @@ export class TurnRunner {
           if (failure.error.code === 'QUOTA_EXCEEDED' && adapter.adapter_id === 'openai-subscription') {
             try {
               const fallback = await this.#resolve(agent, lease.task.id, signal);
-              if (fallback.adapter_id === 'ollama') { adapter = fallback; continue; }
+              if (FALLBACK_ADAPTERS.includes(fallback.adapter_id)) { adapter = fallback; continue; }
             } catch { /* Leave a visible provider wait when the configured fallback is unavailable. */ }
           }
           runtime.tasks.providerFailure(actor,lease,failure.error);
