@@ -206,7 +206,7 @@ test('HTTP memory edits use revisions, accept tool-generated ids, and never retu
   assert.equal((await f.call(path, 'DELETE', { revision: 1 })).status, 409);
   assert.equal((await f.call(path, 'DELETE', { revision: 2 })).status, 200);
   assert.deepEqual(await (await f.call(`/api/agents/${f.leader.id}/memories`)).json(), []);
-  assert.doesNotMatch(await (await f.call(`/api/agents/${f.leader.id}/memory-audit`)).text(), /古い人工記憶|訂正した記憶/);
+  assert.equal((await f.call(`/api/agents/${f.leader.id}/memory-audit`)).status, 404);
 });
 
 test('conversation creation retries return the same room, message and job; a bad recipient leaves no room', async t => {

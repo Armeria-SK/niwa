@@ -41,8 +41,11 @@ test('MCP discovers only configured tools and pins caller context and write rece
  const f=await fixture(t),mcp=await McpConnector.connect([f.config]);
  assert.deepEqual(mcp.tools(false).map(t=>t.name),['mcp_local_write','mcp_local_read']);assert.equal(turnTools(true).some(t=>t.name.startsWith('mcp_')),false);
  const admin=f.runtime.administrator(),leader=f.runtime.bootstrap(admin),actor=f.runtime.agentSession(leader.id),room=f.runtime.createRoom(admin,'人工の会話');
- f.runtime.tasks.create(admin,leader.id,room.id,'人工検証');const lease=f.runtime.tasks.claim(admin)!;
+ f.runtime.tasks.create(admin,leader.id,room.id,'人工検証');let lease=f.runtime.tasks.claim(admin)!;
  const call={tool_call_id:'artificial',name:'mcp_local_write',arguments:{text:'fixture'}};
+ assert.deepEqual(await executeAsyncTurnTool(f.runtime,actor,lease,call,'0:0',undefined,{mcp}),{waiting_for_approval:true});assert.equal(f.calls.length,0);
+ const pending=f.runtime.approvals(admin)[0]!;assert.deepEqual(JSON.parse(String(pending.detail)),{tool:'mcp_local_write',arguments:{text:'fixture'}});
+ f.runtime.decideApproval(admin,lease.task.id,true,String(pending.version));lease=f.runtime.tasks.claim(admin)!;
  const result=await executeAsyncTurnTool(f.runtime,actor,lease,call,'0:0',undefined,{mcp});
  await executeAsyncTurnTool(f.runtime,actor,lease,call,'0:0',undefined,{mcp});
  assert.equal(f.calls.length,1);assert.equal(f.effects.size,1);
@@ -60,10 +63,14 @@ test('MCP ordinary servers are shared-only and cannot replay unrecorded writes',
 test('MCP history retains write and read results with downloads after observation eviction; new reads refresh',async t=>{
  const f=await fixture(t),mcp=await McpConnector.connect([f.config]);
  const admin=f.runtime.administrator(),leader=f.runtime.bootstrap(admin),actor=f.runtime.agentSession(leader.id),room=f.runtime.createRoom(admin,'人工の会話');
- f.runtime.tasks.create(admin,leader.id,room.id,'結果を再確認');const lease=f.runtime.tasks.claim(admin)!,revision=f.runtime.context(actor,room.id).revision;
+ f.runtime.tasks.create(admin,leader.id,room.id,'結果を再確認');let lease=f.runtime.tasks.claim(admin)!;const revision=f.runtime.context(actor,room.id).revision;
  for(const name of ['mcp_local_write','mcp_local_read']){
   const call={type:'tool_call' as const,tool_call_id:name,name,arguments:{text:'fixture'}};
   const step=f.runtime.tasks.saveStep(actor,lease,revision,[call,{type:'completed',finish_reason:'tool_calls'}]);
+  if(name==='mcp_local_write'){
+   assert.deepEqual(await executeAsyncTurnTool(f.runtime,actor,lease,call,`${step}:0`,undefined,{mcp}),{waiting_for_approval:true});
+   const pending=f.runtime.approvals(admin)[0]!;f.runtime.decideApproval(admin,lease.task.id,true,String(pending.version));lease=f.runtime.tasks.claim(admin)!;
+  }
   const before=f.calls.length;
   const output=await executeAsyncTurnTool(f.runtime,actor,lease,call,`${step}:0`,undefined,{mcp});
   assert.deepEqual(await executeAsyncTurnTool(f.runtime,actor,lease,call,`${step}:0`,undefined,{mcp}),output);

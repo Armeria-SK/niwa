@@ -6,6 +6,7 @@ import { BackupStatus } from '../BackupStatus.jsx';
 import { SubscriptionConnection } from '../SubscriptionConnection.jsx';
 import { FallbackConnection } from '../FallbackConnection.jsx';
 import { ModelDefaults } from '../ModelDefaults.jsx';
+import { ModelRoutes } from '../ModelRoutes.jsx';
 import { XConnection } from '../XConnection.jsx';
 import { McpConnections } from '../McpConnections.jsx';
 import { CheckIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
@@ -37,6 +38,7 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
         <div className="form-section-label">Ollamaへの自動切替</div><label className="field"><span>Ollamaの接続先URL</span><input type="url" value={draft.ollamaUrl} onChange={e => change('ollamaUrl', e.target.value)} placeholder="http://…:11434" /></label>
         <label className="field narrow-field"><span>同時に処理する依頼の数</span><div className="input-with-unit"><input type="number" min="1" max="8" value={draft.maxParallel} onChange={e => change('maxParallel', e.target.value)} required /><span>件</span></div><small>Ollamaの設定（OLLAMA_NUM_PARALLEL）に合わせてください。</small></label>
         <FallbackConnection key={settings.ollamaUrl} savedUrl={settings.ollamaUrl} />
+        <ModelRoutes />
         <XConnection />
       </section> : null}
       {tab === 'activity' ? <section className="settings-section"><h2>Botたちの活動</h2><p>人数と同時に活動できる数は、別々に設定できます。</p>
