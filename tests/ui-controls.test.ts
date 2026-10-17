@@ -19,6 +19,14 @@ test('model setup notice appears only when no saved connection can answer the Bo
  assert.match(modelSetupNotice(['openai_subscription'],kanade).title,/カナデのモデル（Claude（Anthropic API））/);
  assert.equal(modelSetupNotice(['anthropic','local_llm'],kanade),null);assert.equal(modelSetupNotice(['anthropic'],undefined),null);
 });
+test('model choices are grouped by connection, with the experimental ChatGPT route last and the order inside each group kept',async()=>{
+ const {groupByProvider}=await ui('providers.js');
+ const items=[{provider:'openai_subscription',model:'gpt-6-astra'},{provider:'openai_compatible',model:'b'},{provider:'anthropic',model:'claude-opus-5-5'},{provider:'openai_compatible',model:'a'},{provider:'someday',model:'x'}];
+ const groups=groupByProvider(items);
+ assert.deepEqual(groups.map((group:{label:string})=>group.label),['Claude（Anthropic API）','OpenAI互換API','Codex','someday']);
+ assert.deepEqual(groups[1].items.map((item:{model:string})=>item.model),['b','a']);
+ assert.deepEqual(groupByProvider([]),[]);
+});
 test('memory source names the speaker and room, marks private conversations and survives a deleted room',async()=>{
  const {memorySource}=await ui('memory-source.js');
  const shared=memorySource({created_at:'2026-09-09T08:53:00.000Z',source:{room_title:'はじめての共同制作',private:false,excerpt:'日時は第2土曜です',author_id:'administrator',author_name:null,said_at:'2026-09-09T08:52:00.000Z'}});

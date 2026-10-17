@@ -338,6 +338,26 @@
   .model-choice > .inline-actions { margin-top: 4px; }
   .connection-state { display: flex; align-items: center; gap: 7px; color: var(--faint); font-size: var(--fs-1); }
   .connection-state .status-dot { background: var(--border-strong); }
+  .model-settings { display: flex; flex-direction: column; gap: 44px; }
+  .connection-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+  .connection-card { border: 1px solid var(--border); border-radius: var(--r-l); background: var(--paper); transition: border-color .15s ease; }
+  .connection-card:hover, .connection-card[open] { border-color: var(--border-strong); }
+  .connection-card[open] { grid-column: 1 / -1; }
+  .connection-card > summary { list-style: none; cursor: pointer; display: grid; gap: 6px; padding: 16px 18px; border-radius: var(--r-l); }
+  .connection-card > summary::-webkit-details-marker { display: none; }
+  .connection-card-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--fs-3); }
+  .connection-card-title strong { font-weight: 500; }
+  .connection-card-summary { font-size: var(--fs-1); color: var(--muted); line-height: 1.7; }
+  .connection-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 4px; }
+  .connection-card-toggle::after { content: '設定を開く'; font-size: var(--fs-1); color: var(--accent-text); }
+  .connection-card[open] .connection-card-toggle::after { content: '閉じる'; }
+  .connection-card-body { display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 20px; border-top: 1px solid var(--border); }
+  .connection-subgroup { display: flex; flex-direction: column; gap: 12px; }
+  .attention-chip.muted { background: var(--canvas); color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+  .model-settings .model-choice { border: 1px solid var(--border); border-radius: var(--r-l); background: var(--paper); padding: 16px 18px; margin-bottom: 0; }
+  .settings-more > summary { width: fit-content; cursor: pointer; padding: 4px 0; font-size: var(--fs-2); color: var(--muted); }
+  .settings-more > summary:hover { color: var(--accent-text); }
+  .settings-more[open] > summary { margin-bottom: 12px; }
   .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 10px 0; position: relative; cursor: pointer; }
   .switch-row > span:first-child { flex: 1; display: flex; flex-direction: column; gap: 9px; }
   .switch-row strong { font-weight: 500; font-size: var(--fs-2); line-height: 1.6; }
@@ -713,6 +733,8 @@
     .settings-section > h2 { font-size: var(--fs-4); }
     .settings-section > p:first-of-type { font-size: var(--fs-1); }
     .settings-section textarea { font-size: var(--fs-2); }
+    .connection-grid { grid-template-columns: 1fr; }
+    .model-settings { gap: 36px; }
     .settings-save { gap: 5px; flex-wrap: wrap; }
     .settings-save .saved-inline { width: 100%; }
     .pause-setting { flex-direction: column; align-items: flex-start; padding: 15px; }

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api } from './api.js';
 import { notifyAnthropicChanged } from './anthropicModels.js';
+import { ConnectionCard } from './ConnectionCard.jsx';
+import { notifyModelsChanged } from './modelLists.js';
 
 /** APIキーはサーバーへ送るだけで、画面には保存済みかどうかだけを表示する。キーは公式のAPI（api.anthropic.com）にだけ送る。 */
 export function AnthropicConnection() {
@@ -17,7 +19,7 @@ export function AnthropicConnection() {
     setBusy(true); setError(''); setMessage('');
     try { const next = await work(); if (next) apply(next); setMessage(done); }
     catch (failure) { setError(failure.message); api('/anthropic').then(apply).catch(() => undefined); }
-    finally { setBusy(false); notifyAnthropicChanged(); }
+    finally { setBusy(false); notifyAnthropicChanged(); notifyModelsChanged(); }
   }
   const trimmed = apiKey.trim();
   const changed = Number(parallel) !== status?.parallel || trimmed !== '';
@@ -32,9 +34,7 @@ export function AnthropicConnection() {
     catch (failure) { setError(failure.message); }
     finally { setBusy(false); notifyAnthropicChanged(); }
   }
-  return <div role="group" aria-label="Claude（Anthropic API）">
-    <div className="form-section-label">Claude（Anthropic API）</div>
-    <div className="connection-row"><strong>接続の状態</strong><span className="connection-state"><span className="status-dot" />{!status ? '確認中' : `APIキー: ${status.keyConfigured ? '設定済み' : '未設定'}`}</span></div>
+  return <ConnectionCard title="Claude（Anthropic API）" summary="Claude ConsoleのAPIキーで、Claudeにつなぎます。" state={!status ? '確認中' : status.keyConfigured ? '設定済み' : '未設定'} tone={status?.keyConfigured ? 'ok' : 'muted'}>
     <p className="field-hint">Claude ConsoleのAPIキーで、AnthropicのAPI（api.anthropic.com）へ接続します。<br />ClaudeのMax・Teamプランでは、claude.aiの「設定」→「請求」からConsoleの組織を連携すると、毎月のAPIクレジットが付きます。<br />その組織で作ったAPIキーを入力してください。<br />クレジットを超えた利用は、Consoleの組織に請求されます。<br />Claude Codeを手元で対話的に使う分は、このクレジットの対象外です。</p>
     <label className="field"><span>APIキー</span><input type="password" value={apiKey} disabled={busy || status?.available === false} onChange={event => { setApiKey(event.target.value); setMessage(''); }} placeholder={status?.keyConfigured ? '設定済み（変更する場合だけ入力）' : 'sk-ant-…'} autoComplete="new-password" spellCheck={false} /><small>保存したキーは画面に表示しません。<br />AnthropicのAPI以外には送りません。</small></label>
     {unusualKey ? <p className="field-hint" role="status">ClaudeのAPIキーは通常「sk-ant-」で始まります。<br />入力内容を確認してください（このまま保存もできます）。</p> : null}
@@ -47,5 +47,5 @@ export function AnthropicConnection() {
     <p className="field-hint">接続の確認ではモデル一覧だけを取得し、応答の生成（課金対象）は行いません。<br />安全上の理由で応答を断られた場合は、対応するモデルではAnthropicが勧める別のモデルで自動的にやり直します（そのモデルの料金がかかります）。</p>
     {error ? <p className="field-error" role="alert">{error}</p> : null}
     <p className="saved-inline" role="status">{busy ? '接続先を確認しています…' : message}</p>
-  </div>;
+  </ConnectionCard>;
 }

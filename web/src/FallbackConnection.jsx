@@ -36,8 +36,8 @@ export function FallbackConnection() {
   }
   const saved = choiceOf(settings);
   const same = selected?.provider === saved?.provider && selected?.model === saved?.model;
-  return <div role="group" aria-label="利用上限時の自動切替">
-    <div className="form-section-label">利用上限時の自動切替</div>
+  return <div className="connection-subgroup" role="group" aria-label="利用上限時の自動切替">
+    <div className="form-section-label">利用上限に達したとき</div>
     <p className="field-hint">ChatGPTのサブスクの利用上限に達したときだけ、ここで選んだモデルに切り替えます。<br />回復を確かめたら、応答の区切りで元のモデルに戻ります。</p>
     <ModelPicker label="上限時に使うモデル" value={selected} keep={saved ? [saved] : []} providers={PROVIDERS} reasoning={false} emptyLabel="未設定（上限時は待つ）" claude={claude} disabled={busy || !settings} onChange={next => { setSelected(next); setMessage(''); }} />
     <div className="inline-actions">
@@ -45,7 +45,7 @@ export function FallbackConnection() {
       <button type="button" className="button subtle" disabled={busy || !settings?.fallbackModel} onClick={() => save(null)}>自動切替を解除</button>
       <span className="saved-inline" role="status">{busy ? '接続先を確認しています…' : message}</span>
     </div>
-    <p className="field-hint">上でつないだ接続先のモデルだけが使えます。<br />ツール呼び出しに対応したモデルを選んでください（Local LLMは保存するときに確かめます）。<br />利用上限や接続の確認で待っている仕事は、1分ごとに確かめ直します。<br />「記録」の画面から手で再開することもできます。</p>
+    <p className="field-hint">つないだ接続先のモデルだけが使えます。<br />ツール呼び出しに対応したモデルを選んでください（Local LLMは保存するときに確かめます）。<br />利用上限や接続の確認で待っている仕事は、1分ごとに確かめ直します。<br />「記録」の画面から手で再開することもできます。</p>
     {error ? <p className="field-error" role="alert">{error}</p> : null}
   </div>;
 }

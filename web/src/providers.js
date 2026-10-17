@@ -1,5 +1,13 @@
 export const PROVIDER_LABELS = { openai_subscription: 'Codex', local_llm: 'Local LLM', openai_compatible: 'OpenAI互換API', anthropic: 'Claude（Anthropic API）' };
 export const providerLabel = provider => PROVIDER_LABELS[provider] || provider;
+/** 選ぶ欄で並べる接続先の順。ChatGPT（Codex）は試験対応なので最後に置く。 */
+export const PROVIDER_ORDER = ['anthropic', 'openai_compatible', 'local_llm', 'openai_subscription'];
+/** モデルを接続先ごとにまとめる。並びは PROVIDER_ORDER に従い、知らない接続先は最後に回す。中の順番は変えない。 */
+export function groupByProvider(items) {
+  const rank = provider => { const index = PROVIDER_ORDER.indexOf(provider); return index < 0 ? PROVIDER_ORDER.length : index; };
+  const providers = [...new Set(items.map(item => item.provider))].sort((a, b) => rank(a) - rank(b));
+  return providers.map(provider => ({ provider, label: providerLabel(provider), items: items.filter(item => item.provider === provider) }));
+}
 /** 推論の強さを指定できるのはCodexとClaude。他はモデル既定の動作を使う。 */
 export const nativeReasoning = provider => provider === 'local_llm' || provider === 'openai_compatible';
 export const modelListPath = provider => ({ local_llm: '/models', openai_compatible: '/openai-compatible/models', anthropic: '/anthropic/models' })[provider] || '/subscription/models';

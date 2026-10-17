@@ -4,7 +4,6 @@ import { THEMES } from '../data.js';
 import { AutonomyStatus } from '../AutonomyStatus.jsx';
 import { BackupStatus } from '../BackupStatus.jsx';
 import { SubscriptionConnection } from '../SubscriptionConnection.jsx';
-import { FallbackConnection } from '../FallbackConnection.jsx';
 import { CompatibleConnection } from '../CompatibleConnection.jsx';
 import { AnthropicConnection } from '../AnthropicConnection.jsx';
 import { LocalLlmConnection } from '../LocalLlmConnection.jsx';
@@ -16,20 +15,18 @@ import { CheckIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 
 const FIELD_TABS = { theme: 'テーマ', rules: '共通ルール', autonomous: '活動と人数', maxMembers: '活動と人数', unlimited: '活動と人数', concurrent: '活動と人数', backupEnabled: 'バックアップ', backupTime: 'バックアップ', backupDays: 'バックアップ' };
 
-/** 接続とモデルは、枠ごとにその場で保存する（ページ下の「設定を保存」は使わない）。 */
+/** 上に「いつものモデル」、下に接続先のカード。接続とモデルは、枠ごとにその場で保存する（ページ下の「設定を保存」は使わない）。 */
 function ModelSettings() {
-  return <div className="settings-form"><section className="settings-section"><h2>モデルと接続先</h2><p>いつものモデルと、利用上限に達したときの切替先を設定します。<br />この欄は、枠ごとに中のボタンで保存します。</p>
-    <SubscriptionConnection />
-    <p className="field-hint">ChatGPTでの接続は、外部アプリ向けに公式公開された経路ではありません。<br />予告なく使えなくなる場合に備えて、下のOpenAI互換APIやClaude（Anthropic API）も設定できます。</p>
-    <CompatibleConnection />
-    <AnthropicConnection />
-    <LocalLlmConnection />
-    <div className="form-section-label">いつものモデル</div>
-    <ModelDefaults />
-    <p className="field-hint">Botごとの変更は、Botのプロフィールで行えます。</p>
-    <FallbackConnection />
-    <ModelRoutes />
-  </section></div>;
+  return <div className="settings-form model-settings">
+    <section className="settings-section"><h2>いつものモデル</h2><p>Botたちが返事に使うモデルです。<br />つないだ接続先のモデルから選べます。<br />枠ごとに、中のボタンで保存します。</p>
+      <ModelDefaults />
+      <p className="field-hint">Botごとの変更は、Botのプロフィールで行えます。</p>
+    </section>
+    <section className="settings-section"><h2>接続先</h2><p>使う接続先を開いて設定します。<br />いくつでも同時につなげます。</p>
+      <div className="connection-grid"><AnthropicConnection /><CompatibleConnection /><LocalLlmConnection /><SubscriptionConnection /></div>
+    </section>
+    <details className="settings-more"><summary>直近のモデル接続</summary><ModelRoutes /></details>
+  </div>;
 }
 
 /** 開いている欄はURL（#settings/欄）で決まる。MCPの認証から戻るページと、モデル接続の案内がここへつなぐ。 */
