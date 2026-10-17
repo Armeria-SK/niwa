@@ -31,7 +31,7 @@ export function CompatibleConnection() {
   }
   return <div role="group" aria-label="OpenAI互換API">
     <div className="form-section-label">OpenAI互換API（公式API・推奨）</div>
-    <div className="connection-row"><strong>OpenAI互換API</strong><span className="connection-state"><span className="status-dot" />{!status ? '確認中' : status.url ? `APIキー: ${status.keyConfigured ? '設定済み' : '未設定'}` : '未設定'}</span></div>
+    <div className="connection-row"><strong>接続の状態</strong><span className="connection-state"><span className="status-dot" />{!status ? '確認中' : status.url ? `APIキー: ${status.keyConfigured ? '設定済み' : '未設定'}` : '未設定'}</span></div>
     <p className="field-hint">APIキーで公式に提供されているChat Completions APIへ接続します。OpenAI（https://api.openai.com/v1）、OpenRouter（https://openrouter.ai/api/v1）、同じPCのLM Studio（http://127.0.0.1:1234/v1）などを使えます。API利用料はChatGPTのサブスクとは別に、接続先から請求されます。</p>
     <label className="field"><span>接続先URL</span><input type="url" value={url} disabled={busy} onChange={event => { setUrl(event.target.value); setMessage(''); }} placeholder="https://api.openai.com/v1" autoComplete="off" /><small>httpsが必要です。httpは同じPC（localhost・127.0.0.1）の場合だけ使えます。</small></label>
     <label className="field"><span>APIキー</span><input type="password" value={apiKey} disabled={busy || status?.available === false} onChange={event => { setApiKey(event.target.value); setMessage(''); }} placeholder={status?.keyConfigured ? '設定済み（変更する場合だけ入力）' : '未設定'} autoComplete="new-password" spellCheck={false} /><small>保存したキーは画面に表示しません。保存時のURLと同じ接続先にだけ送ります。</small></label>

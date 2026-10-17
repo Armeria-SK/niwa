@@ -370,13 +370,11 @@
 
 @layer responsive {
   @media (min-width: 1700px) {
-    .app-shell { grid-template-columns: 350px minmax(0, 1fr) 310px; }
     .message-scroll { padding-inline: max(40px, calc((100% - 870px) / 2)); }
     .composer-wrap { padding-inline: max(35px, calc((100% - 890px) / 2)); }
     .work-area { padding-right: max(48px, 8vw); }
   }
   @media (max-width: 1240px) {
-    .app-shell { grid-template-columns: 280px minmax(0, 1fr) 250px; }
     .sidebar { padding-inline: 17px; }
     .presence-rail { padding-inline: 21px; }
     .presence-member { gap: 9px; }
@@ -404,7 +402,6 @@
     .member-detail { padding-left: 22px; }
   }
   @media (max-width: 1050px) {
-    .app-shell { grid-template-columns: 290px minmax(0, 1fr); }
     .presence-rail { display: none; }
     .conversation-mobile-tools { display: flex; justify-content: flex-end; padding: 12px 24px 0; }
     .conversation-mobile-tools > .text-button { display: none; }

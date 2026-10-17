@@ -39,7 +39,7 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
         <AnthropicConnection />
         <ModelDefaults />
         <p className="field-hint">Botごとの変更は、メンバーのプロフィールで行えます。</p>
-        <div className="form-section-label">利用上限時の自動切替</div><label className="field"><span>Local LLMの接続先URL</span><input type="url" value={draft.localLlmUrl} onChange={e => change('localLlmUrl', e.target.value)} placeholder="http://…:11434" /><small>このPCなどで動かすOllamaの接続先を指定します。</small></label>
+        <div className="form-section-label">利用上限時の自動切替</div><label className="field"><span>Local LLMの接続先URL</span><input type="url" value={draft.localLlmUrl} onChange={e => change('localLlmUrl', e.target.value)} placeholder="http://…:11434" /><small>このPCなどで動かすOllamaの接続先を指定します。この欄と次の欄は、ページ下の「設定を保存」で保存されます。</small></label>
         <label className="field narrow-field"><span>同時に処理する依頼の数</span><div className="input-with-unit"><input type="number" min="1" max="8" value={draft.maxParallel} onChange={e => change('maxParallel', e.target.value)} required /><span>件</span></div><small>Local LLM（Ollama）の設定（OLLAMA_NUM_PARALLEL）に合わせてください。</small></label>
         <FallbackConnection key={settings.localLlmUrl} savedUrl={settings.localLlmUrl} />
         <ModelRoutes />

@@ -766,7 +766,7 @@ export class Runtime {
     const expired=this.#db.prepare("SELECT count(*) AS n FROM tasks WHERE room_id=? AND state='failed' AND result='Task deadline exceeded' AND updated_at>=?").get(roomId,since)!.n;
     return {since,artifact_count:Number(artifactCount),artifacts,operations,
       approvals:Number(pending.approvals||0),blockers:Number(pending.blockers||0),overdue:Number(pending.overdue||0)+Number(expired),
-      revenue:'unverified',customer_contacts:'unverified',operation_note:'送信の実行記録です。記録済みでも業務の成功を意味しません。導入以前の未分類の操作は含みません。'};
+      operation_note:'送信の実行記録です。記録済みでも業務の成功を意味しません。導入以前の未分類の操作は含みません。'};
   }
   reviewReady(actor: Actor, lease: TaskLease, artifactId:string, sha256:string) {
     check(this.tasks.active(actor,lease),'conflict','Task is no longer active');

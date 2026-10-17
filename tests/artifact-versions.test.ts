@@ -43,7 +43,7 @@ test('digest counts saved objects and classified intents, not completion claims,
  await r.tasks.externalOnce(actor,lease,'local',{name:'program_execute'},async()=>({code:0}));
  await r.tasks.externalOnce(actor,lease,'send',{name:'browser_form_submit'},async()=>({status:500}));
  await r.tasks.externalOnce(actor,lease,'unknown',{name:'browser_request_submit'},async()=>{throw Error('synthetic disconnect');});
- const digest=r.coordinationDigest(actor,room.id);assert.equal(digest.artifact_count,1);assert.equal(digest.revenue,'unverified');
+ const digest=r.coordinationDigest(actor,room.id);assert.equal(digest.artifact_count,1);assert.ok(!JSON.stringify(digest).includes('売上'));
  assert.equal(digest.operations.length,2);assert.equal(digest.operations.find(x=>x.tool_name==='browser_form_submit')!.recorded,1);
  assert.equal(digest.operations.find(x=>x.tool_name==='browser_request_submit')!.unknown,1);
  const hidden=r.createRoom(admin,'非共有',[leader.id]);r.createArtifact(actor,hidden.id,'hidden.txt','資料','hidden','hidden');
