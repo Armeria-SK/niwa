@@ -50,3 +50,9 @@ test('your-turn list puts approvals first, hides answered questions and never li
  assert.equal(items[1].detail,'');assert.deepEqual(items[3].ids,['d1']);
  assert.deepEqual(attentionItems({}),[]);
 });
+test('procedure use reads as a count with the last day, and says when a procedure is turned off',async()=>{
+ const {procedureUse}=await ui('procedure-display.js');
+ assert.equal(procedureUse({enabled:true,uses:0,last_used_at:null}),'まだ使っていません');
+ assert.match(procedureUse({enabled:true,uses:3,last_used_at:Date.UTC(2026,9,17,3)}),/^3回使った・最後は10\/1[67]$/);
+ assert.equal(procedureUse({enabled:false,uses:0,last_used_at:null}),'止めています（まだ使っていません）');
+});

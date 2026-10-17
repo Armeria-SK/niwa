@@ -8,6 +8,7 @@ import { SHAPES } from '../data.js';
 import { MemoryHistory } from '../MemoryHistory.jsx';
 import { useMemoryPage } from '../useMemoryPage.js';
 import { memorySource } from '../memory-source.js';
+import { ProcedureBook } from '../ProcedureBook.jsx';
 import { Avatar, AppearanceFields, MotionPicker, EmptyState, IconButton, Modal, Segmented, StatusLabel } from '../components.jsx';
 import { ChatIcon, ChevronRightIcon, EditIcon, LockIcon, MemoryIcon, SearchIcon, TrashIcon, CloseIcon, CheckIcon, PlusIcon } from '../icons.jsx';
 
@@ -25,9 +26,10 @@ export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, o
     <div className="page-heading"><div><span className="eyebrow">それぞれの個性を、大切に。</span><h1>メンバー</h1><p>話し方、記憶、見た目。ひとりずつ、少しずつ。</p></div><div className="member-heading-actions"><span className="quiet-count">{members.length}人の仲間</span><button className="button primary" onClick={() => setAdding(true)}><PlusIcon size={17} />メンバー追加</button></div></div>
     <div className="members-layout"><MemberScroll>{members.map(item => <button key={item.id} className={`member-list-row ${item.id === member.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)} aria-pressed={item.id === member.id}><Avatar member={item} size={64} /><span><strong>{item.name}{item.authority === 'leader' ? <span className="role-label">リーダー</span> : null}</strong><small>{item.role}</small><StatusLabel member={item} paused={paused} showDescription={false} /></span><ChevronRightIcon size={17} /></button>)}</MemberScroll>
       <section className="member-detail" aria-label={`${member.name}の詳細`}><div className="member-detail-top"><Avatar member={member} size={76} /><div><h2>{member.name}</h2><span className="muted">{member.role}</span></div>{member.authority !== 'leader' ? member.status === 'sleeping' ? <button className="button secondary" onClick={() => onDormant(member.id, false)}>呼び戻す</button> : <button className="button subtle" onClick={() => setResting(member)}>休ませる</button> : null}<button className="button secondary" onClick={() => onDM(member.id)}><ChatIcon size={18} />個別に話す</button></div>
-        <Segmented label="メンバーの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }]} value={memoryFor===member.id?'memory':tab} onChange={selectTab} />
+        <Segmented label="メンバーの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }, { value: 'procedures', label: '手順帳' }]} value={memoryFor===member.id?'memory':tab} onChange={selectTab} />
         <div className="member-detail-scroll" key={`${member.id}-${tab}`}>
         {tab === 'profile' ? <Profile key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
+        {tab === 'procedures' ? <ProcedureBook key={member.id} member={member} /> : null}
         {memoryFor===member.id ? <MemoryList key={member.id} member={member} onClose={closeMemory} onSave={onSaveMemory} onDelete={onDeleteMemory} onOpenThread={id => { closeMemory(); onOpenThread(id); }} /> : null}
         {tab === 'profile' && member.authority !== 'leader' ? <button className="button subtle" onClick={() => setDeleting(member)}>このBotを削除</button> : null}
         </div>

@@ -97,3 +97,20 @@ test('procedures persist across restart but changed sources cannot be used and m
     assert.throws(() => runtime.procedureTool(actor, lease, 'read-again', 'procedure_read', { id, revision: null }), /unavailable/);
   } finally { db.close(); runtime.close(); }
 });
+
+test('administrators read the procedure book with use counts and can turn a procedure off and on; bots cannot', t => {
+  const f = fixture(t);
+  assert.deepEqual(f.runtime.procedureBook(f.admin, f.leader.id), []);
+  const { id } = f.run('procedure_save', { id: null, expected_revision: 0, procedure: f.procedure }, 'create');
+  f.run('procedure_apply', { id, revision: 1, plan_revision: 0, applicability: '同じ資料の更新' }, 'apply');
+  const [entry] = f.runtime.procedureBook(f.admin, f.leader.id);
+  assert.deepEqual({ ...entry, saved_at: 0, last_used_at: 0 }, { id, revision: 1, enabled: true, title: '資料確認', conditions: '同じ資料の更新を調べるとき', steps: ['原文を読む', '前回と比較する'],
+    saved_at: 0, uses: 1, last_used_at: 0, room_title: '共有', private: false });
+  f.runtime.setProcedureEnabled(f.admin, f.leader.id, String(id), false);
+  assert.equal(f.runtime.procedureBook(f.admin, f.leader.id)[0]!.enabled, false);
+  assert.equal((f.run('procedure_search', { query: '資料確認' }).results as JsonObject[]).length, 0);
+  f.runtime.setProcedureEnabled(f.admin, f.leader.id, String(id), true);
+  assert.equal((f.run('procedure_search', { query: '資料確認' }).results as JsonObject[]).length, 1);
+  assert.throws(() => f.runtime.setProcedureEnabled(f.admin, f.leader.id, 'f'.repeat(64), false), /not found/);
+  assert.throws(() => f.runtime.procedureBook(f.actor, f.leader.id));
+});

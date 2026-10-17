@@ -220,6 +220,18 @@
   .memory-source q { flex-basis: 100%; color: var(--text); quotes: '「' '」'; overflow-wrap: anywhere; }
   .memory-private { display: inline-flex; align-items: center; gap: 4px; color: #9b6a2f; }
   .memory-source .text-button { font-size: 12px; }
+  .procedure-book { display: grid; gap: 10px; padding-bottom: 16px; }
+  .procedure-book .procedure-warning { color: #9b6a2f; }
+  .procedure-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  .procedure-item { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: grid; gap: 6px; background: var(--paper); }
+  .procedure-item.disabled :is(strong, ol, .procedure-conditions) { opacity: .6; }
+  .procedure-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }
+  .procedure-top strong { font-size: 15px; font-weight: 500; }
+  .procedure-top span, .procedure-conditions, .procedure-bottom span { font-size: 12px; color: var(--muted); }
+  .procedure-item ol { margin: 0; padding-left: 1.4em; font-size: 13px; line-height: 1.8; }
+  .procedure-bottom { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 12px; }
+  .procedure-bottom span { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+  .procedure-bottom .button { min-height: 32px; padding: 5px 10px; font-size: 12px; }
   .memory-actions { display: flex; gap: 4px; }
   .memory-actions .icon-button { width: 28px; height: 28px; }
   .revision-link { font-size: 10px; }

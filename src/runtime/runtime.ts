@@ -1156,6 +1156,29 @@ export class Runtime {
           ...(said ? { excerpt: String(said.body).slice(0, 160), author_id: String(said.author_id), author_name: said.name === null ? null : String(said.name), said_at: String(said.created_at) } : {}) } : null };
     }) };
   }
+  /** Administrator view of a Bot's procedure book: the current version of each procedure, its conversation, and how often it was applied. */
+  procedureBook(actor: Actor, agentId: string) {
+    this.#admin(actor);
+    const db = this.#memory(actor, agentId);
+    const room = this.#db.prepare("SELECT title,visibility FROM rooms WHERE id=? AND id NOT IN (SELECT id FROM deleted_content WHERE kind='room')");
+    return db.prepare(`SELECT p.id,p.room_id,p.revision,p.enabled,v.body,v.created_at,(SELECT count(*) FROM procedure_uses u WHERE u.procedure_id=p.id) AS uses,
+      (SELECT max(created_at) FROM procedure_uses u WHERE u.procedure_id=p.id) AS last_used_at
+      FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision ORDER BY v.created_at DESC LIMIT 200`).all().map(row => {
+      let body: { title?: unknown; conditions?: unknown; steps?: unknown } = {};
+      try { body = JSON.parse(String(row.body)) as typeof body; } catch { /* A damaged record still lists so it can be disabled. */ }
+      const source = room.get(String(row.room_id));
+      return { id: String(row.id), revision: Number(row.revision), enabled: row.enabled === 1, title: String(body.title ?? ''), conditions: String(body.conditions ?? ''),
+        steps: Array.isArray(body.steps) ? body.steps.map(String) : [], saved_at: Number(row.created_at), uses: Number(row.uses),
+        last_used_at: row.last_used_at === null ? null : Number(row.last_used_at), room_title: source ? String(source.title) : null, private: source?.visibility === 'private' };
+    });
+  }
+  /** Turning a procedure back on does not vouch for it: the Bot still rechecks its sources before each use and disables it if they changed. */
+  setProcedureEnabled(actor: Actor, agentId: string, id: string, enabled: boolean): void {
+    this.#admin(actor);
+    check(typeof enabled === 'boolean', 'invalid', 'Expected boolean');
+    const result = this.#memory(actor, agentId).prepare('UPDATE procedures SET enabled=? WHERE id=?').run(enabled ? 1 : 0, id);
+    check(Number(result.changes) === 1, 'not_found', 'Procedure not found');
+  }
   correctMemory(actor: Actor, agentId: string, id: string, revision: number, body: string): void {
     const principal = this.#admin(actor);
     text(body);
