@@ -49,7 +49,7 @@ import { providerLimitSchema } from '../storage/provider-limit-schema.ts';
 import { modelRouteSchema } from '../storage/model-route-schema.ts';
 import { providerRetrySchema } from '../storage/provider-retry-schema.ts';
 import { commonRulesSchema } from '../storage/common-rules-schema.ts';
-import { commonRulesDefaultSchema } from '../storage/common-rules-default-schema.ts';
+import { commonRulesDefaultSchema, commonRulesGeneralDefaultSchema } from '../storage/common-rules-default-schema.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -105,7 +105,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
