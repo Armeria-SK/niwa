@@ -18,6 +18,8 @@ export const modelProfileSchema = Type.Object({
   supports_session_resume: Type.Boolean(),
   supports_parallel_sessions: Type.Boolean(),
   supports_usage_reporting: Type.Boolean(),
+  /** Absent when the model list does not say; the adapter then follows its own default. */
+  supports_image_input: Type.Optional(Type.Boolean()),
   base_url: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
 }, { additionalProperties: false });
 export type ModelProfile = Static<typeof modelProfileSchema>;
@@ -37,6 +39,7 @@ export function createEffectiveModelCapabilities(
     'supports_session_resume', 'supports_parallel_sessions', 'supports_usage_reporting',
   ] as const) effective[key] = adapter[key] && profile[key];
   effective.supports_niwa_tool_loop = adapter.supports_niwa_tool_loop && effective.supports_tool_calls;
+  effective.supports_image_input = adapter.supports_image_input === true && profile.supports_image_input !== false;
   if (!isCapabilityConsistent(effective)) throw new Error('Effective capabilities are inconsistent.');
   return Object.freeze(effective);
 }

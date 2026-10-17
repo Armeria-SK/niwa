@@ -37,3 +37,5 @@ export { PushPin as PinIcon } from '@phosphor-icons/react/dist/csr/PushPin';
 export { Archive as ArchiveIcon } from '@phosphor-icons/react/dist/csr/Archive';
 export { Sun as TodayIcon } from '@phosphor-icons/react/dist/csr/Sun';
 export { Notebook as RecordsIcon } from '@phosphor-icons/react/dist/csr/Notebook';
+export { Scales as CompareIcon } from '@phosphor-icons/react/dist/csr/Scales';
+export { ListChecks as CheckListIcon } from '@phosphor-icons/react/dist/csr/ListChecks';

@@ -70,7 +70,8 @@ export function sanitizeModelRequestTextFields(request: ModelRequest): Sanitized
     return sanitized.text;
   };
   const messages = request.messages.map((message): ModelMessage => {
-    if (message.role === 'user') return { role: 'user', content: text(message.content) };
+    // Image bytes are not text and pass through as they are.
+    if (message.role === 'user') return { role: 'user', content: text(message.content), ...(message.images ? { images: message.images } : {}) };
     if (message.role === 'tool') {
       return {
         role: 'tool',

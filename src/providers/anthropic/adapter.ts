@@ -4,7 +4,7 @@ import type { ModelInfo } from '@anthropic-ai/sdk/resources/models';
 import { createHash, randomUUID } from 'node:crypto';
 import { Value } from '@sinclair/typebox/value';
 import type { JsonObject, ModelAdapterCapabilities, ModelEvent, ModelMessage, ModelRequest, ReasoningEffort } from '../../contracts/index.ts';
-import { isPlainJsonValue, modelRequestSchema } from '../../contracts/index.ts';
+import { hasImages, isPlainJsonValue, modelRequestSchema, withoutImageData } from '../../contracts/index.ts';
 import { createProgressModelEventStream, emitModelDelta, type ModelAdapter, type ModelEventStream, type ModelRunOptions } from '../shared/adapter.ts';
 import { containsExactCredentialMaterial, containsSensitiveJsonKey, sanitizeModelRequestTextFields } from '../shared/input-safety.ts';
 import type { EndpointSlot } from '../shared/limiter.ts';
@@ -87,6 +87,8 @@ export interface AnthropicModel {
   readonly id: string; readonly display_name: string; readonly created_at: string;
   /** Adaptive thinking (and with it thinking-block replay) is used only where the model advertises it. */
   readonly adaptive: boolean; readonly efforts: readonly Effort[]; readonly max_tokens: number;
+  /** Whether the model accepts images; listed without capability data, current Claude models do. */
+  readonly images?: boolean;
   /** Context window in tokens when the Models API reports it. */
   readonly context_window?: number;
 }
@@ -98,9 +100,10 @@ export function anthropicModelProfile(info: ListedModel): AnthropicModel {
   // Models listed without capability data are treated as current models.
   const adaptive = caps ? supported((caps.thinking?.types as Record<string, unknown> | undefined)?.adaptive) : true;
   const efforts = caps ? (supported(caps.effort) ? EFFORTS.filter(effort => supported(caps.effort?.[effort])) : []) : [...EFFORTS];
+  const images = caps && 'image_input' in caps ? supported(caps.image_input) : true;
   const limit = Number.isSafeInteger(info.max_tokens) && Number(info.max_tokens) > 0 ? Number(info.max_tokens) : MAX_OUTPUT_TOKENS;
   return Object.freeze({ id: info.id, display_name: safeText(info.display_name, 256) ? info.display_name : info.id, created_at: typeof info.created_at === 'string' ? info.created_at : '',
-    adaptive, efforts: Object.freeze(efforts), max_tokens: Math.min(MAX_OUTPUT_TOKENS, limit),
+    adaptive, efforts: Object.freeze(efforts), max_tokens: Math.min(MAX_OUTPUT_TOKENS, limit), images,
     ...(Number.isSafeInteger(info.max_input_tokens) && Number(info.max_input_tokens) > 0 ? { context_window: Number(info.max_input_tokens) } : {}) });
 }
 /** Profile for a typed model id the list did not include (only when listing failed). */
@@ -143,11 +146,7 @@ const turnKey = (text: string, calls: readonly { tool_call_id: string; name: str
  */
 export class AnthropicAdapter implements ModelAdapter {
   readonly adapter_id = 'anthropic';
-  readonly capabilities: ModelAdapterCapabilities = Object.freeze({
-    execution_mode: 'model_api', auth_mode: 'api_key', billing_mode: 'api_usage', owns_agent_loop: false,
-    supports_niwa_tool_loop: true, supports_tool_calls: true, supports_structured_output: false,
-    supports_streaming: true, supports_session_resume: false, supports_parallel_sessions: true, supports_usage_reporting: true,
-  });
+  readonly capabilities: ModelAdapterCapabilities;
   readonly supported_efforts: readonly ReasoningEffort[];
   readonly context_window?: number;
   readonly #model: AnthropicModel;
@@ -160,6 +159,12 @@ export class AnthropicAdapter implements ModelAdapter {
   constructor(connection: AnthropicConnection, model: AnthropicModel) {
     if (!safeText(model.id, 256)) throw new Error('Invalid Anthropic model');
     this.#model = model; this.#key = connection.apiKey; this.#fetch = connection.fetch ?? fetch;
+    this.capabilities = Object.freeze({
+      execution_mode: 'model_api', auth_mode: 'api_key', billing_mode: 'api_usage', owns_agent_loop: false,
+      supports_niwa_tool_loop: true, supports_tool_calls: true, supports_structured_output: false,
+      supports_streaming: true, supports_session_resume: false, supports_parallel_sessions: true, supports_usage_reporting: true,
+      supports_image_input: model.images !== false,
+    });
     this.#slot = connection.slot; this.#queueMs = connection.queueMs ?? 600_000; this.#summary = connection.summary === true;
     this.supported_efforts = Object.freeze(model.efforts.length ? ['minimal', ...model.efforts] as ReasoningEffort[] : []);
     if (model.context_window !== undefined) this.context_window = model.context_window;
@@ -208,6 +213,7 @@ export class AnthropicAdapter implements ModelAdapter {
       } else {
         // A result whose call is no longer in the history is kept as plain data.
         const text = message.role === 'tool' ? JSON.stringify({ tool_result: message.name, content: message.content }) : message.content;
+        if (message.role === 'user') for (const image of message.images ?? []) blocks.push({ type: 'image', source: { type: 'base64', media_type: image.media_type, data: image.data } });
         blocks.push({ type: 'text', text: text || '（空）' });
       }
       if (pending.size && message.role !== 'tool') pending = this.#answerMissing(blocks, pending);
@@ -226,11 +232,11 @@ export class AnthropicAdapter implements ModelAdapter {
   async #run(request: ModelRequest, options: ModelRunOptions, cancel: AbortSignal, emit: (event: ModelEvent) => void): Promise<readonly ModelEvent[]> {
     const secrets = [this.#key];
     const fail = (error: Failure): ModelEvent[] => [{ type: 'failed', error: { ...error, message: redactSecrets(error.message, secrets) } }];
-    if (!Value.Check(modelRequestSchema, request) || !isPlainJsonValue(request, { max_depth: 32, max_nodes: 10_000, max_bytes: 4 * 1024 * 1024 })
+    if (!Value.Check(modelRequestSchema, request) || !isPlainJsonValue(withoutImageData(request), { max_depth: 32, max_nodes: 10_000, max_bytes: 4 * 1024 * 1024 })
       || !Number.isSafeInteger(options.timeout_ms) || options.timeout_ms < 1 || options.timeout_ms > 2_147_483_647) {
       return fail({ code: 'INVALID_REQUEST', retryable: false, message: MESSAGES.request, provider_request_sent: false });
     }
-    if (request.response_contract.type !== 'text') return fail({ code: 'CAPABILITY_MISMATCH', retryable: false, message: MESSAGES.capability, provider_request_sent: false });
+    if (request.response_contract.type !== 'text' || (hasImages(request) && !this.capabilities.supports_image_input)) return fail({ code: 'CAPABILITY_MISMATCH', retryable: false, message: MESSAGES.capability, provider_request_sent: false });
     const safe = sanitizeModelRequestTextFields(request).request;
     const model = this.#model.id, effort = this.#effort(request.reasoning_effort), fallback = FALLBACK_MODELS.has(model);
     const betas = [...(this.#model.adaptive ? [BINDING_BETA] : []), ...(fallback ? [FALLBACK_BETA] : [])];

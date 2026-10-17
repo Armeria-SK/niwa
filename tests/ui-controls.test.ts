@@ -88,3 +88,73 @@ test('today counts what is waiting on you, who is working and what was made in t
  assert.equal(digest.summary,'あなたの番が1件あります。いま1体のBotが仕事を進めています。直近24時間で、決まったことが1件、できたものが1件あります。');
  assert.equal(todayDigest({now,paused:true,activities}).summary,'あなたの判断を待っているものはありません。Botの活動は一時停止しています。');
 });
+test('second opinions show the estimate before asking, explain failures by kind and keep model checks apart by provider',async()=>{
+ const {estimateLabel,usedLabel,failureText,modelCheckView,checkProviders}=await ui('second-opinion.js');
+ assert.equal(estimateLabel({estimated_input_tokens:12345,messages:3,memories:2,removed_messages:0}),'入力の見積もり：約12,345トークン（会話3件・記憶2件）');
+ assert.equal(estimateLabel({estimated_input_tokens:900,messages:1,memories:0,removed_messages:4}),'入力の見積もり：約900トークン（会話1件・記憶0件）。古い発言4件は入りきらないので外します');
+ assert.equal(estimateLabel({estimated_input_tokens:2000,truncated:true}),'入力の見積もり：約2,000トークン。長いので先頭の部分だけを渡します');
+ assert.equal(estimateLabel(null),'');
+ assert.equal(usedLabel({input_tokens:1200,output_tokens:80,estimated_input_tokens:1500}),'入力1,200・出力80トークン');
+ assert.equal(usedLabel({input_tokens:null,output_tokens:null,estimated_input_tokens:1500}),'入力1,500（見積もり）・出力不明トークン');
+ assert.equal(failureText({code:'RATE_LIMITED',message:'provider text'}),'接続先が混み合っています。少し待ってから試してください。（RATE_LIMITED）');
+ assert.equal(failureText({code:'SOMETHING_NEW'}),'モデルの呼び出しを完了できませんでした。（SOMETHING_NEW）');
+ const view=modelCheckView({review_model:'openai_compatible/org/model-x/native',note:'時刻を足す',created_at:1,sha256:'a',checks:JSON.stringify([{criterion:'c1',verdict:'fail',note:'時刻がない'},{criterion:'overall',verdict:'pass',note:'よい'}])},[{id:'c1',condition:'時刻と場所がある'}]);
+ assert.equal(view.model,'OpenAI互換API org/model-x');assert.deepEqual(view.checks.map((c:{condition:string;label:string})=>[c.condition,c.label]),[['時刻と場所がある','直したほうがよい'],['全体として、正確で、筋が通り、役に立つか','条件を満たす']]);
+ assert.equal(modelCheckView({review_model:'anthropic/claude-x/high',checks:'broken'}).model,'Claude（Anthropic API） claude-x・推論 high');
+ assert.deepEqual(modelCheckView({review_model:'anthropic/claude-x/high',checks:'broken'}).checks,[]);
+ assert.deepEqual(checkProviders(['anthropic','local_llm','openai_compatible'],['openai_subscription','anthropic']),['anthropic']);
+});
+test('the watch tab has its own URL and reads tools, outcomes, times and limits in plain words',async()=>{
+ const {parseRoute,routeHash}=await ui('route.js');
+ assert.deepEqual(parseRoute('#records/watch'),{page:'records',tab:'watch'});assert.equal(routeHash({page:'records',tab:'watch'}),'#records/watch');
+ const {toolLabel,outcomeLabel,agoLabel,limitLabel,nightLine}=await ui('watch.js');
+ assert.equal(toolLabel('browser_form_submit'),'フォームの送信');assert.equal(toolLabel('page_read'),'ページの取得');
+ assert.equal(toolLabel('mcp_github_create_issue'),'MCPの操作（github：create_issue）');assert.equal(toolLabel('odd_tool'),'そのほかの操作（odd_tool）');
+ assert.equal(outcomeLabel({outcome:'recorded',failed:false}),'記録あり');assert.equal(outcomeLabel({outcome:'recorded',failed:true}),'記録あり（失敗の記録）');assert.equal(outcomeLabel({outcome:'unknown'}),'結果不明');
+ const now=Date.UTC(2026,9,17,12);
+ assert.deepEqual([agoLabel(now-30_000,now),agoLabel(now-5*60_000,now),agoLabel(now-3*3600_000,now),agoLabel(now-2*86400_000,now),agoLabel(now+1000,now),agoLabel(0,now)],['たった今','5分前','3時間前','2日前','','']);
+ assert.equal(limitLabel(5,24),'5 / 24回');assert.equal(limitLabel(1200),'1,200回');
+ assert.equal(nightLine({decision:'approved',used:3,limit:30,in_night:true}),'今夜の上限：モデル呼び出し 3 / 30回');
+ assert.equal(nightLine({decision:'approved',used:0,limit:30,in_night:false}),'今夜の上限：モデル呼び出し 0 / 30回（夜はまだ始まっていません）');
+ assert.equal(nightLine({decision:'skipped'}),'今夜は休ませると決めています。');
+ assert.match(nightLine({decision:null,preview:true}),/まだ決めていません/);assert.match(nightLine({decision:null,preview:false}),/下見はオフ/);
+});
+test('trust suggestions name the Bot, the kind and the run of approvals, and come after urgent items',async()=>{
+ const {kindLabel,suggestionText,trustAttention}=await ui('trust.js');
+ assert.equal(kindLabel('mcp:mcp_notes_append_note'),'MCPの書き込み（notes：append_note）');
+ assert.deepEqual(['form','page_request','request','action','odd'].map(kindLabel),['Webフォームの送信','ページからの送信','支払い・購入・公開などの承認','そのほかの操作','そのほかの操作']);
+ const item={agent_id:'a1',name:'リーダー',kind:'mcp:mcp_notes_append_note',streak:5,last_at:10};
+ assert.equal(suggestionText(item),'リーダーの「MCPの書き込み（notes：append_note）」を、5回続けてそのまま承認しています。この種類は聞かずに進めてよいですか？');
+ assert.deepEqual(trustAttention([item]).map((i:{kind:string;id:string;member:string})=>[i.kind,i.id,i.member]),[['trust','a1:mcp:mcp_notes_append_note','a1']]);
+ assert.deepEqual(trustAttention(undefined),[]);
+});
+test('attachments are sorted into text, images and PDFs by their bytes, and an image a Bot could not see says so',async()=>{
+ const {attachmentKind,unseenNotice,formatSize}=await ui('attachments.js');
+ const png=new Uint8Array(24);png.set([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]);png.set([...'IHDR'].map(c=>c.charCodeAt(0)),12);
+ assert.equal(attachmentKind(png),'image');assert.equal(attachmentKind(new Uint8Array([0xff,0xd8,0xff,0xe0])),'image');
+ assert.equal(attachmentKind(new TextEncoder().encode('%PDF-1.7\n')),'pdf');assert.equal(attachmentKind(new TextEncoder().encode('<svg/>')),'text');
+ assert.equal(attachmentKind(new Uint8Array([0x00,0x01,0x02])),null);assert.equal(attachmentKind(new Uint8Array([0x89,0x50,0x4e,0x47])),null);
+ assert.equal(unseenNotice(['リーダー','カナデ']),'リーダー・カナデのモデルは画像を見られないため、この画像を認識できませんでした。');assert.equal(unseenNotice([]),'');
+ assert.deepEqual([formatSize(512),formatSize(2048),formatSize(3*1024*1024)],['512 B','2.0 KB','3.0 MB']);
+});
+test('a task replay has its own URL and reads each kind of record in plain words',async()=>{
+ const {parseRoute,routeHash}=await ui('route.js');
+ assert.deepEqual(parseRoute('#records/task/t-1/replay'),{page:'records',task:'t-1',replay:true});assert.deepEqual(parseRoute('#records/task/t-1/other'),{page:'records',task:'t-1'});
+ assert.equal(routeHash({page:'records',task:'t-1',replay:true}),'#records/task/t-1/replay');assert.equal(routeHash({page:'records',task:'t-1'}),'#records/task/t-1');
+ const {replayItemView}=await ui('replay.js');
+ assert.deepEqual(replayItemView({type:'event',code:'running'}),{label:'状態',detail:'実行を開始',tone:'info'});
+ assert.equal(replayItemView({type:'model',phase:'work',status:'completed',input_tokens:1200,output_tokens:60,estimated_input_tokens:1300}).detail,'返答・作業：完了（入力1,200・出力60）');
+ assert.equal(replayItemView({type:'model',phase:'memory_review',status:'unknown',input_tokens:null,output_tokens:null,estimated_input_tokens:900}).detail,'記憶の整理：結果不明（入力の見積もり900）');
+ assert.deepEqual(replayItemView({type:'tool',name:'web_read',args:'{"url":"u"}',result:'本文',failed:false}),{label:'道具 web_read',detail:'{"url":"u"} → 本文',tone:'info'});
+ assert.equal(replayItemView({type:'tool',name:'web_read',args:'',result:'',failed:true}).detail,'→ 失敗');
+ assert.deepEqual(replayItemView({type:'outside',name:'browser_form_submit',outcome:'unknown'}),{label:'外部への操作 browser_form_submit',detail:'結果不明',tone:'warn'});
+ assert.equal(replayItemView({type:'message',link:'response',author:'リーダー',text:'答え'}).label,'返答（リーダー）');
+ assert.equal(replayItemView({type:'approval',decision:'auto'}).detail,'任せた範囲で自動');
+});
+test('the seed export has its own URL and says what goes in and what cannot',async()=>{
+ const {parseRoute,routeHash}=await ui('route.js');
+ assert.deepEqual(parseRoute('#bots/b-1/seed'),{page:'bots',id:'b-1',tab:'seed'});assert.equal(routeHash({page:'bots',id:'b-1',tab:'seed'}),'#bots/b-1/seed');
+ const {seedSummary,privateNote}=await ui('seed.js');
+ assert.equal(seedSummary(0,0),'人格・見た目');assert.equal(seedSummary(2,1),'人格・見た目・手順2件・記憶1件');
+ assert.equal(privateNote(1,3),'個別の会話から生まれた手順1件と記憶3件は、書き出せません。');assert.equal(privateNote(0,2),'個別の会話から生まれた記憶2件は、書き出せません。');assert.equal(privateNote(0,0),'');
+});

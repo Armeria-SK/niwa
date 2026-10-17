@@ -1,8 +1,10 @@
 // Derived from Carried c695f855419ffc69d1e62b04f1de8de36c7c162d, core/providers/src/openai-subscription-adapter.ts.
 // Apache-2.0. Modified for Niwa; upstream revision and source path are recorded above.
 import {
+  hasImages,
   isPlainJsonValue,
   modelRequestSchema,
+  withoutImageData,
   type JsonObject,
   type ModelAdapterCapabilities,
   type ModelEvent,
@@ -65,6 +67,7 @@ export const openAISubscriptionAdapterCapabilities: ModelAdapterCapabilities = {
   supports_session_resume: false,
   supports_parallel_sessions: false,
   supports_usage_reporting: true,
+  supports_image_input: true,
 };
 
 export interface OpenAISubscriptionAdapterConfig {
@@ -269,7 +272,7 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
   #validateRequest(request: ModelRequest, options: ModelRunOptions): void {
     if (
       !Value.Check(modelRequestSchema, request) ||
-      !isPlainJsonValue(request, { max_depth: 32, max_nodes: 10_000, max_bytes: MAX_REQUEST_BYTES }) ||
+      !isPlainJsonValue(withoutImageData(request), { max_depth: 32, max_nodes: 10_000, max_bytes: MAX_REQUEST_BYTES }) ||
       !Number.isSafeInteger(options.timeout_ms) ||
       options.timeout_ms < 1
     ) {
@@ -286,6 +289,9 @@ export class OpenAISubscriptionAdapter implements ModelAdapter {
           : `The selected GPT model does not support effort ${request.reasoning_effort}.`,
         false,
       );
+    }
+    if (hasImages(request) && !this.capabilities.supports_image_input) {
+      throw failure('CAPABILITY_MISMATCH', 'The selected GPT model does not take images.', false);
     }
     if (!this.capabilities.supports_tool_calls && request.tools.length > 0) {
       throw failure('CAPABILITY_MISMATCH', 'The selected GPT model does not support tools.', false);
@@ -482,7 +488,7 @@ function toInputMessages(message: ModelMessage): readonly JsonObject[] {
     return [{
       type: 'message',
       role: 'user',
-      content: [{ type: 'input_text', text: message.content }],
+      content: [...(message.images ?? []).map(image => ({ type: 'input_image', image_url: `data:${image.media_type};base64,${image.data}` })), { type: 'input_text', text: message.content }],
     }];
   }
   if (message.role === 'tool') {

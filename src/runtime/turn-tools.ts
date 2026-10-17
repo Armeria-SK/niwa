@@ -246,7 +246,7 @@ async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease
     if(tool.approval){
       const action={tool:call.name,arguments:call.arguments};
       if(JSON.stringify(action,null,2).length>2000)return {error:'approval_too_large',message:'承認画面に表示できる長さ(2000字)を超えています。引数を短くするか分けてください。'};
-      if(!runtime.authorizeAction(actor,lease,operationId,`外部ツールの書き込み：${call.name}`,action))return {waiting_for_approval:true};
+      if(!runtime.authorizeAction(actor,lease,operationId,`外部ツールの書き込み：${call.name}`,action,`mcp:${call.name}`))return {waiting_for_approval:true};
     }
     const result=tool.readOnly?await runtime.tasks.readOnce(actor,lease,operationId,input,async()=>withDownloads(await external.mcp!.call(call.name,call.arguments,{scope,deadline},cancellation)))
       :await runtime.tasks.externalOnce(actor,lease,operationId,{name:call.name,arguments:call.arguments,scope,signature:tool.signature},(id,firstAttempt)=>external.mcp!.call(call.name,call.arguments,{scope,deadline,execution_id:id,allow_start:firstAttempt},cancellation));
@@ -345,7 +345,7 @@ async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease
     try { form=normalizeForm(call.arguments.form); } catch { return {error:'Invalid request content'}; }
     const input={request_id,form};
     if (JSON.stringify(input,null,2).length>2000) return {error:'Script request exceeds approval display limit'};
-    if (!runtime.authorizeAction(actor,lease,operationId,'ページのJSON通信',input)) return {waiting_for_approval:true};
+    if (!runtime.authorizeAction(actor,lease,operationId,'ページのJSON通信',input,'page_request')) return {waiting_for_approval:true};
     const identity={agent_id:lease.task.agent_id,room_id:lease.task.room_id,task_id:lease.task.id};
     const result=await runtime.tasks.externalOnce(actor,lease,operationId,{name:call.name,arguments:input},async(_executionId,firstAttempt)=>{
       if (firstAttempt) {
@@ -379,7 +379,7 @@ async function executeAsyncTool(runtime: Runtime, actor: Actor, lease: TaskLease
         form=normalizeForm({...form,files:form.files.map(file=>({...file,workarea_id:area}))});
       }
     }
-    if (!runtime.authorizeAction(actor, lease, operationId, 'Webフォームの送信', form)) return { waiting_for_approval: true };
+    if (!runtime.authorizeAction(actor, lease, operationId, 'Webフォームの送信', form, 'form')) return { waiting_for_approval: true };
     return runtime.tasks.externalOnce(actor, lease, operationId, { name: call.name, arguments: form }, async (executionId, firstAttempt) => ({ ...await external.forms!.execute({
       operation_id: executionId, agent_id: lease.task.agent_id, room_id: lease.task.room_id, task_id: lease.task.id, allow_start: firstAttempt, form,
     }, signal, area ? async(path,cancellation,requestedArea)=>{

@@ -1,30 +1,28 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Runtime, Actor } from '../runtime/runtime.ts';
 import type { LiveEvent } from '../runtime/live.ts';
-import type { WebAuth } from './auth.ts';
 
-export const STREAMS_PER_SESSION = 4;
-const MAX_STREAMS = 32, MAX_BUFFERED = 1024 * 1024;
-type Stream = { session: string; req: IncomingMessage; res: ServerResponse };
+/** Open streams at once, across every browser tab that has Niwa open. */
+export const MAX_STREAMS = 32;
+const MAX_BUFFERED = 1024 * 1024;
+type Stream = { req: IncomingMessage; res: ServerResponse };
 
-/** Authenticated server-sent hints. Payloads carry only change counters and drafts from rooms the administrator can read. */
+/** Server-sent hints for the administrator's page. Payloads carry only change counters and drafts from rooms the administrator can read. */
 export class LiveStreams {
-  readonly #runtime: Runtime; readonly #admin: Actor; readonly #auth: WebAuth;
+  readonly #runtime: Runtime; readonly #admin: Actor;
   readonly #heartbeatMs: number; readonly #pollMs: number;
   #streams = new Set<Stream>();
   #heartbeat: ReturnType<typeof setInterval> | undefined; #poll: ReturnType<typeof setInterval> | undefined;
   #unsubscribe: (() => void) | undefined; #version = 0;
-  constructor(runtime: Runtime, admin: Actor, auth: WebAuth, options: { heartbeatMs?: number; pollMs?: number } = {}) {
-    this.#runtime = runtime; this.#admin = admin; this.#auth = auth;
+  constructor(runtime: Runtime, admin: Actor, options: { heartbeatMs?: number; pollMs?: number } = {}) {
+    this.#runtime = runtime; this.#admin = admin;
     this.#heartbeatMs = options.heartbeatMs ?? 15_000; this.#pollMs = options.pollMs ?? 300;
   }
   get size(): number { return this.#streams.size; }
-  /** Caller has already checked origin and authentication. */
+  /** Caller has already checked where the request came from. */
   open(req: IncomingMessage, res: ServerResponse): void {
-    const session = this.#auth.session(req);
-    if (!session) { this.#reject(res, 401, 'authentication_required'); return; }
-    if ([...this.#streams].filter(item => item.session === session).length >= STREAMS_PER_SESSION || this.#streams.size >= MAX_STREAMS) { this.#reject(res, 429, 'too_many_streams'); return; }
-    const stream: Stream = { session, req, res };
+    if (this.#streams.size >= MAX_STREAMS) { this.#reject(res, 429, 'too_many_streams'); return; }
+    const stream: Stream = { req, res };
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' });
     req.socket.setTimeout(0); req.socket.setKeepAlive(true, this.#heartbeatMs);
     this.#streams.add(stream); this.#start();
@@ -62,11 +60,7 @@ export class LiveStreams {
     for (const stream of [...this.#streams]) this.#send(stream, 'changed', { version });
   }
   #beat(): void {
-    for (const stream of [...this.#streams]) {
-      // Logout or expiry ends the stream; the client then falls back to polling and sees the 401.
-      if (this.#auth.session(stream.req) !== stream.session) { this.#remove(stream); continue; }
-      this.#write(stream, ': ping\n\n');
-    }
+    for (const stream of [...this.#streams]) this.#write(stream, ': ping\n\n');
   }
   #visibleRooms(): Set<string> { try { return new Set(this.#runtime.rooms(this.#admin).map(room => room.id)); } catch { return new Set(); } }
   #visibleDrafts() { const rooms = this.#visibleRooms(); return this.#runtime.live.drafts().filter(draft => rooms.has(draft.room_id)); }

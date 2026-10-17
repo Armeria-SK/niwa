@@ -21,6 +21,8 @@ export interface ProviderModelCatalogEntry {
   readonly supported_in_api?: boolean;
   readonly context_window?: number;
   readonly max_context_window?: number;
+  /** Whether the model takes images; absent when the catalog does not say. */
+  readonly supports_image_input?: boolean;
 }
 
 export interface ProviderModelCatalogSnapshot {
@@ -171,6 +173,9 @@ export function createCatalogEntry(input: {
   readonly supported_in_api?: unknown;
   readonly context_window?: unknown;
   readonly max_context_window?: unknown;
+  /** The provider's list of input kinds, or a normalized flag when re-hydrating a cache entry. */
+  readonly input_modalities?: unknown;
+  readonly supports_image_input?: unknown;
 }): ProviderModelCatalogEntry {
   const providerId = safeIdentifier(input.provider_id, 128, 'provider id');
   const modelId = strictCatalogText(input.model_id, MAX_MODEL_ID, 'model id');
@@ -188,6 +193,7 @@ export function createCatalogEntry(input: {
   const displayPriority = input.display_priority === undefined ? 0 : safeDisplayPriority(input.display_priority);
   const contextWindow = input.context_window === undefined ? undefined : safeContextWindow(input.context_window);
   const maxContextWindow = input.max_context_window === undefined ? undefined : safeContextWindow(input.max_context_window);
+  const images = typeof input.supports_image_input === 'boolean' ? input.supports_image_input : Array.isArray(input.input_modalities) ? input.input_modalities.includes('image') : undefined;
   const entry: ProviderModelCatalogEntry = {
     provider_id: providerId,
     model_id: modelId,
@@ -201,6 +207,7 @@ export function createCatalogEntry(input: {
     ...(typeof input.supported_in_api === 'boolean' ? { supported_in_api: input.supported_in_api } : {}),
     ...(contextWindow === undefined ? {} : { context_window: contextWindow }),
     ...(maxContextWindow === undefined ? {} : { max_context_window: maxContextWindow }),
+    ...(images === undefined ? {} : { supports_image_input: images }),
   };
   return Object.freeze(entry);
 }

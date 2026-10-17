@@ -104,7 +104,8 @@ export class ArtifactQuality{
   return {checks:JSON.stringify(checks),revision:quality.revision};
  }
  verified(actor:Actor,id:string){const quality=this.inspect(actor,id);if(!quality)return;this.ready(actor,id);
-  const reviews=this.db.prepare('SELECT verdict,evidence_revision FROM artifact_reviews WHERE artifact_id=?').all(id);
+  // Another company's model check is an opinion, not a review: it never verifies or blocks a version.
+  const reviews=this.db.prepare("SELECT verdict,evidence_revision FROM artifact_reviews WHERE artifact_id=? AND substr(reviewer_id,1,6)<>'model:'").all(id);
   check(reviews.some(r=>r.verdict==='approved'&&r.evidence_revision===quality.revision)&&!reviews.some(r=>r.verdict==='changes_requested'),'conflict','Current evidence and content review required');
  }
 }

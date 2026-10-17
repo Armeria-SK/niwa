@@ -19,6 +19,7 @@ import { serveStatic } from './static.ts';
 import { profileSchema, creationProfileSchema } from '../domain/profile.ts';
 import type { Backups } from '../backup/backups.ts';
 import type { WorkspaceRead, WorkspaceDownload } from '../tools/files/client.ts';
+import { SecondOpinions } from '../runtime/second-opinions.ts';
 
 const string = Type.String({ minLength: 1, maxLength: 20_000 });
 const id = Type.String({ pattern: '^[0-9a-f-]{36}$' });
@@ -76,8 +77,11 @@ async function readBody(req: IncomingMessage, limit = 65_536): Promise<unknown> 
 export function createApiServer(runtime: Runtime, auth: WebAuth, models = new ModelGateway(runtime), webRoot?: string, backups?: Backups,
   workspace?: { read: WorkspaceRead; download: WorkspaceDownload }, workareas?:WorkareaTransport, mcp?:McpConnector, mcpSettings?:McpSettings) {
   const admin = runtime.administrator();
-  const live = new LiveStreams(runtime, admin, auth);
-  type Route = { method: string; path: RegExp; schema?: TSchema; limit?: number; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL) => unknown };
+  const live = new LiveStreams(runtime, admin);
+  const opinions = new SecondOpinions(runtime, (selection, signal) => models.adapterFor(selection, signal));
+  const selection = { provider, model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 64 }) };
+  /** The signal aborts when the browser goes away before the answer, so a model call nobody waits for stops. */
+  type Route = { method: string; path: RegExp; schema?: TSchema; limit?: number; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL, signal: AbortSignal) => unknown };
   const scoped=(area:string,input:Parameters<Runtime['workareas']['execute']>[2])=>{
     if(!workareas)throw new DomainError('conflict','Workareas are not configured');
     return runtime.workareas.execute(admin,area,input,workareas);
@@ -166,7 +170,16 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/review$/, schema: object({expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'}),verdict:Type.Union([Type.Literal('approved'),Type.Literal('changes_requested')]),note:Type.String({minLength:1,maxLength:1000}),checks:Type.Optional(qualityReviewSchema)}),run:(m,b)=>runtime.artifactVersions.review(admin,m[1]!,b.expected_sha256 as string,b.verdict as 'approved'|'changes_requested',b.note as string,b.checks as QualityReview|undefined) },
     { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/freeze$/, schema: object({expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'})}),run:(m,b)=>runtime.artifactVersions.freeze(admin,m[1]!,b.expected_sha256 as string) },
     { method: 'DELETE', path: /^\/api\/artifacts\/([0-9a-f-]{36})$/, schema: object({}), run: m => { runtime.deleteContent(admin, 'artifact', m[1]!); return { ok: true }; } },
-    { method: 'DELETE', path: /^\/api\/rooms\/([0-9a-f-]{36})$/, schema: object({}), run: async m => { runtime.deleteContent(admin, 'room', m[1]!); if(workareas)await runtime.workareas.purgeRetired(workareas);return { ok: true }; } },
+    // Another company's model check: what it would send first, then one call per press. The judgment is saved as an opinion, not evidence.
+    { method: 'GET', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/model-check$/, run: m => opinions.checkEstimate(admin, m[1]!) },
+    { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/model-check$/, schema: object({ expected_sha256: Type.String({ pattern: '^[a-f0-9]{64}$' }), ...selection }),
+      run: (m, b, _u, signal) => opinions.check(admin, m[1]!, b.expected_sha256 as string, { provider: b.provider as Agent['provider'], model: b.model as string, reasoning: b.reasoning as string }, signal) },
+    // Another model's answer to a Bot's message: the estimate, one call per press, and keeping a shown answer in the conversation.
+    { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages\/([0-9a-f-]{36})\/second-opinion$/, run: m => opinions.estimate(admin, m[1]!, m[2]!) },
+    { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages\/([0-9a-f-]{36})\/second-opinion$/, schema: object(selection),
+      run: (m, b, _u, signal) => opinions.ask(admin, m[1]!, m[2]!, { provider: b.provider as Agent['provider'], model: b.model as string, reasoning: b.reasoning as string }, signal) },
+    { method: 'POST', path: /^\/api\/second-opinions\/([0-9a-f-]{36})\/keep$/, schema: object({}), run: m => opinions.keep(admin, m[1]!) },
+    { method: 'DELETE', path: /^\/api\/rooms\/([0-9a-f-]{36})$/, schema: object({}), run: async m => { runtime.deleteContent(admin, 'room', m[1]!); opinions.forgetRoom(m[1]!); if(workareas)await runtime.workareas.purgeRetired(workareas);return { ok: true }; } },
     { method: 'POST', path: /^\/api\/approvals\/([0-9a-f-]{36})$/, schema: object({ approved: Type.Boolean(), version: id }), run: (m, b) => { runtime.decideApproval(admin, m[1]!, b.approved as boolean, b.version as string); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/updates$/, run: () => runtime.updates(admin) },
     { method: 'POST', path: /^\/api\/updates\/read$/, schema: object({ ids: Type.Array(Type.Integer({ minimum: 1 }), { maxItems: 1000, uniqueItems: true }) }),
@@ -219,8 +232,8 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/coordination$/, run: m => ({tasks:runtime.coordination(admin,m[1]!).map(task=>({...task,progress:runtime.tasks.progress(admin,String(task.id))})),digest:runtime.coordinationDigest(admin,m[1]!)}) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages\/page$/, run: (m, _b, url) => runtime.messagePage(admin, m[1]!, Number(url.searchParams.get('before') ?? Number.MAX_SAFE_INTEGER)) },
     { method: 'GET', path: /^\/api\/rooms\/search$/, run: (_m, _b, url) => runtime.searchRoomMessages(admin, url.searchParams.get('q') ?? '') },
-    // Up to five base64 text files of 256 KiB each; the runtime decodes and validates every file again.
-    { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, limit: 2_097_152, schema: object({ id, body: Type.String({ maxLength: 20_000 }), attachments: Type.Optional(Type.Array(object({ name: Type.String({ minLength: 1, maxLength: 1000 }), content: Type.String({ maxLength: Math.ceil(ATTACHMENT_LIMITS.bytes / 3) * 4 }) }), { maxItems: ATTACHMENT_LIMITS.count })), reply_to: Type.Optional(id), request_context:Type.Optional(object({kind:Type.Union(['status','new','amend','cancel'].map(value=>Type.Literal(value))),task_id:Type.Optional(id),expected_revision:Type.Optional(Type.Integer({minimum:0}))})), agent_id: Type.Optional(id), agent_ids: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
+    // Up to five base64 files (text 256 KiB, image 3 MiB, PDF 4 MiB, 8 MiB together); the runtime decodes and validates every file again.
+    { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, limit: 12 * 1024 * 1024, schema: object({ id, body: Type.String({ maxLength: 20_000 }), attachments: Type.Optional(Type.Array(object({ name: Type.String({ minLength: 1, maxLength: 1000 }), content: Type.String({ maxLength: Math.ceil(ATTACHMENT_LIMITS.pdfBytes / 3) * 4 }) }), { maxItems: ATTACHMENT_LIMITS.count })), reply_to: Type.Optional(id), request_context:Type.Optional(object({kind:Type.Union(['status','new','amend','cancel'].map(value=>Type.Literal(value))),task_id:Type.Optional(id),expected_revision:Type.Optional(Type.Integer({minimum:0}))})), agent_id: Type.Optional(id), agent_ids: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
       run: (m, b) => {
         if (b.agent_id && b.agent_ids) throw new DomainError('invalid', 'Specify one recipient field');
         return runtime.submit(admin, b.id as string, m[1]!, b.body as string, (b.agent_ids ?? b.agent_id) as string | string[] | undefined, b.reply_to as string | undefined,b.request_context as SubmissionContext | undefined,b.attachments); } },
@@ -232,6 +245,10 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       run: (m, b) => { runtime.setDormant(admin, m[1]!, b.dormant as boolean); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories$/, run: (m, _b, url) => runtime.memories(admin, m[1]!, url.searchParams.get('q') ?? '') },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/procedures$/, run: m => runtime.procedureBook(admin, m[1]!) },
+    // A Bot's seed: what may go in, then the exact file text, which the screen shows in full before saving it.
+    { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/seed$/, run: m => runtime.seeds.options(admin, m[1]!) },
+    { method: 'POST', path: /^\/api\/agents\/([0-9a-f-]{36})\/seed$/, schema: object({ procedures: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { maxItems: 200, uniqueItems: true }), memories: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { maxItems: 500, uniqueItems: true }) }),
+      run: (m, b) => runtime.seeds.build(admin, m[1]!, { procedures: b.procedures as string[], memories: b.memories as string[] }) },
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/procedures\/([0-9a-f]{64})$/, schema: object({ enabled: Type.Boolean() }), run: (m, b) => { runtime.setProcedureEnabled(admin, m[1]!, m[2]!, b.enabled as boolean); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories\/page$/, run: (m, _b, url) => runtime.memoryPageWithSources(admin, m[1]!, url.searchParams.get('q') ?? '', Number(url.searchParams.get('before') ?? Number.MAX_SAFE_INTEGER)) },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories\/([0-9a-f-]{36}|[0-9a-f]{64})\/impact$/, run: m => runtime.memoryImpact(admin, m[1]!, m[2]!) },
@@ -249,7 +266,17 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/tasks\/([0-9a-f-]{36})\/instruct$/, schema: object({ body: string }),
       run: (m, b) => { runtime.tasks.instruct(admin, m[1]!, b.body as string); return { ok: true }; } },
     {method:'GET',path:/^\/api\/tasks\/([0-9a-f-]{36})\/prompt-runs$/,run:m=>runtime.tasks.promptRuns(admin,m[1]!)},
+    // Replay is for the administrator only; a branch is a new task and never changes the original.
+    { method: 'GET', path: /^\/api\/tasks\/([0-9a-f-]{36})\/replay$/, run: m => runtime.replays.timeline(admin, m[1]!) },
+    { method: 'POST', path: /^\/api\/tasks\/([0-9a-f-]{36})\/branch$/, schema: object({ at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }), prompt: Type.String({ minLength: 1, maxLength: 8000 }) }),
+      run: (m, b) => { const task = runtime.replays.branch(admin, m[1]!, b.at as number, b.prompt as string); return { task_id: task.id }; } },
     { method: 'GET', path: /^\/api\/night$/, run: () => runtime.nights.state(admin, Date.now()) },
+    // Trust follows the administrator's record of approvals: Niwa suggests, and only these presses raise or lower it.
+    { method: 'GET', path: /^\/api\/trust$/, run: () => runtime.trust.state(admin) },
+    { method: 'POST', path: /^\/api\/trust\/(grant|revoke|dismiss)$/, schema: object({ agent_id: id, kind: Type.String({ minLength: 1, maxLength: 200 }) }),
+      run: (m, b) => runtime.trust[m[1] as 'grant' | 'revoke' | 'dismiss'](admin, b.agent_id as string, b.kind as string) },
+    // The watch screen reads only; its one action, pausing everything, is the existing PATCH /api/settings.
+    { method: 'GET', path: /^\/api\/watch$/, run: () => runtime.watch.state(admin, Date.now()) },
     { method: 'POST', path: /^\/api\/night\/decision$/, schema: object({ night: Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }), approved: Type.Boolean(), call_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })) }),
       run: (_m, b) => runtime.nights.decide(admin, Date.now(), b.night as string, b.approved as boolean, b.call_limit as number | undefined) },
     { method: 'POST', path: /^\/api\/night\/preview$/, schema: object({ enabled: Type.Boolean() }), run: (_m, b) => runtime.nights.setPreview(admin, b.enabled as boolean) },
@@ -286,7 +313,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       if (url.origin !== auth.origin) { send(res, 403, { error: 'origin_rejected' }); return; }
       if (!url.pathname.startsWith('/api/') && webRoot && serveStatic(webRoot, req, res)) return;
       if (!url.pathname.startsWith('/api/')) { send(res, 404, { error: 'not_found' }); return; }
-      // The browser returns from the provider without the Strict admin cookie. The single-use state created by an authenticated start is the proof instead.
+      // The browser returns here from the provider's site. The single-use state created when the login started is the proof.
       if (req.method === 'GET' && url.pathname === '/api/mcp/oauth/callback' && mcpSettings) {
         res.setHeader('Referrer-Policy', 'no-referrer');
         const once = (name: string) => { const all = url.searchParams.getAll(name); return all.length > 1 ? null : all[0]; };
@@ -297,15 +324,8 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
         else sendNotice(res, 400, params.error ? 'ログインが取り消されたか、拒否されました。Niwaの設定から、もう一度ログインしてください。' : 'ログインを完了できませんでした。Niwaの設定から、もう一度ログインしてください。');
         return;
       }
-      if (req.method === 'POST' && url.pathname === '/api/login') {
-        const body = await readBody(req);
-        if (!Value.Check(object({ key: Type.String({ maxLength: 128 }) }), body)) throw new DomainError('invalid', 'Invalid login');
-        const result = auth.login((body as { key: string }).key, req, res);
-        if (typeof result === 'object') { res.setHeader('Retry-After', String(result.retryAfter)); send(res, 429, { error: 'rate_limited' }); return; }
-        send(res, result === 'ok' ? 200 : 401, { authenticated: result === 'ok', ...(result === 'ok' ? {} : { error: 'invalid_key' }) }); return;
-      }
-      if (req.method === 'GET' && url.pathname === '/api/session') { send(res, 200, { authenticated: auth.authenticated(req) }); return; }
-      if (!auth.authenticated(req)) { send(res, 401, { error: 'authentication_required' }); return; }
+      // There is no login (the owner reaches Niwa over their own network). Every other API request must be sent by Niwa's own page or by a program, never by another site.
+      if (!auth.sentByThisSite(req)) { send(res, 403, { error: 'origin_rejected' }); return; }
       const resource=/^\/api\/mcp\/([a-z][a-z0-9_]{0,19})\/resource$/.exec(url.pathname);
       const resourceMcp=mcpSettings?.connector??mcp;
       if(req.method==='GET'&&resource&&resourceMcp){
@@ -316,19 +336,22 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       }
       const attached=/^\/api\/attachments\/([0-9a-f-]{36})$/.exec(url.pathname);
       if(req.method==='GET'&&attached){
-        // Stored text is served as an inert download, never rendered as HTML or script on this origin.
-        const file=runtime.attachment(admin,attached[1]!),data=Buffer.from(file.body,'utf8');
-        res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8','Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(file.name).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase())}`,'Content-Length':data.length,
+        // Stored files are served as inert downloads, never rendered as HTML or script on this origin. Only a raster image may be shown inline (view=1),
+        // and text=1 returns a PDF's extracted text. SVG is never accepted as an image, so nothing served here can run.
+        const file=runtime.attachment(admin,attached[1]!),binary=file.data!==null&&file.media_type!=='text/plain'&&url.searchParams.get('text')!=='1';
+        const data=binary?Buffer.from(file.data!):Buffer.from(file.body,'utf8'),inline=binary&&file.media_type.startsWith('image/')&&url.searchParams.get('view')==='1';
+        res.writeHead(200,{'Content-Type':binary?file.media_type:'text/plain; charset=utf-8','Content-Disposition':`${inline?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase())}`,'Content-Length':data.length,
           'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"});res.end(data);return;
       }
-      if (req.method === 'POST' && url.pathname === '/api/logout') { auth.logout(req, res); send(res, 200, { ok: true }); return; }
       if (req.method === 'GET' && url.pathname === '/api/events/stream') { live.open(req, res); return; }
       for (const route of routes) {
         const match = url.pathname.match(route.path);
         if (req.method !== route.method || !match) continue;
         const body = route.schema ? await readBody(req, route.limit) : {};
         if (route.schema && !Value.Check(route.schema, body)) throw new DomainError('invalid', 'Invalid request');
-        send(res, 200, await route.run(match, body as Record<string, unknown>, url)); return;
+        const gone = new AbortController();
+        res.once('close', () => { if (!res.writableFinished) gone.abort(); });
+        send(res, 200, await route.run(match, body as Record<string, unknown>, url, gone.signal)); return;
       }
       send(res, 404, { error: 'not_found' });
     } catch (error) {

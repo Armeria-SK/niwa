@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Value } from '@sinclair/typebox/value';
 import type { JsonObject, ModelAdapterCapabilities, ModelEvent, ModelRequest } from '../../contracts/index.ts';
-import { isPlainJsonValue, modelRequestSchema } from '../../contracts/index.ts';
+import { hasImages, isPlainJsonValue, modelRequestSchema } from '../../contracts/index.ts';
 import type { ModelAdapter, ModelRunOptions } from '../shared/adapter.ts';
 import { containsExactCredentialMaterial, containsSensitiveJsonKey, sanitizeModelRequestTextFields } from '../shared/input-safety.ts';
 import type { EndpointSlot } from '../shared/limiter.ts';
@@ -173,6 +173,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     let sent = false;
     let events: ModelEvent[];
     try {
+      // Niwa cannot tell whether an OpenAI-compatible model sees images, so it never sends them.
+      if (hasImages(request)) { yield fail({ code: 'CAPABILITY_MISMATCH', retryable: false, message: MESSAGES.capability, provider_request_sent: false }); return; }
       if (!Value.Check(modelRequestSchema, request) || !isPlainJsonValue(request, { max_depth: 32, max_nodes: 10_000, max_bytes: 4 * 1024 * 1024 })) {
         yield fail({ code: 'INVALID_REQUEST', retryable: false, message: MESSAGES.request, provider_request_sent: false }); return;
       }

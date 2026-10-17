@@ -130,22 +130,17 @@ async function mcpServer(t:After,as:As){
 async function niwa(t:After,retry={initial:20,max:40}){
  const root=mkdtempSync(join(tmpdir(),'niwa-mcp-oauth-'));chmodSync(root,0o700);
  initializeInstallation(root,{version:1,origin:'https://niwa.test',port:3000});
- const manager=await McpSettings.open(root,undefined,retry),runtime=new Runtime(join(root,'state')),origin='https://niwa.test',key='k'.repeat(43);runtime.bootstrap(runtime.administrator());
- const api=createApiServer(runtime,new WebAuth(origin,key),undefined,undefined,undefined,undefined,undefined,undefined,manager);api.listen(0,'127.0.0.1');await once(api,'listening');
+ const manager=await McpSettings.open(root,undefined,retry),runtime=new Runtime(join(root,'state')),origin='https://niwa.test';runtime.bootstrap(runtime.administrator());
+ const api=createApiServer(runtime,new WebAuth(origin),undefined,undefined,undefined,undefined,undefined,undefined,manager);api.listen(0,'127.0.0.1');await once(api,'listening');
  t.after(async()=>{manager.close();api.closeAllConnections();await new Promise<void>(resolve=>api.close(()=>resolve()));runtime.close();rmSync(root,{recursive:true,force:true});});
- const port=(api.address() as {port:number}).port;let cookie='';
- const call=(path:string,method='GET',payload?:unknown,options:{cookie?:boolean;origin?:string}={})=>new Promise<{status:number;text:string;json:any;headers:IncomingMessage['headers']}>((resolve,reject)=>{
-  const headers:Record<string,string>={host:'niwa.test','Content-Type':'application/json',...(method==='GET'?{}:{origin:options.origin??origin})};
-  if(options.cookie!==false&&cookie)headers.cookie=cookie;
+ const port=(api.address() as {port:number}).port;
+ const call=(path:string,method='GET',payload?:unknown,options:{cookie?:boolean;origin?:string;site?:string}={})=>new Promise<{status:number;text:string;json:any;headers:IncomingMessage['headers']}>((resolve,reject)=>{
+  const headers:Record<string,string>={host:'niwa.test','Content-Type':'application/json',...(method==='GET'?{}:{origin:options.origin??origin}),...(options.site?{'sec-fetch-site':options.site}:{})};
   const req=request({host:'127.0.0.1',port,path,method,headers},res=>{
    const chunks:Buffer[]=[];res.on('data',chunk=>chunks.push(Buffer.from(chunk)));
    res.on('end',()=>{const text=Buffer.concat(chunks).toString();let json:unknown;try{json=JSON.parse(text);}catch{}resolve({status:res.statusCode!,text,json,headers:res.headers});});
   });req.on('error',reject);req.end(payload===undefined?undefined:JSON.stringify(payload));
  });
- cookie=(await new Promise<string>((resolve,reject)=>{
-  const req=request({host:'127.0.0.1',port,path:'/api/login',method:'POST',headers:{host:'niwa.test',origin,'Content-Type':'application/json'}},res=>{res.resume();res.on('end',()=>resolve(res.headers['set-cookie']![0]!.split(';')[0]!));});
-  req.on('error',reject);req.end(JSON.stringify({key}));
- }));
  const secret=(name:string)=>join(root,'secrets',name),read=(name:string)=>readFileSync(secret(name),'utf8');
  return {root,manager,call,secret,read,callback:'https://niwa.test/api/mcp/oauth/callback'};
 }
@@ -275,7 +270,7 @@ test('temporary refresh failures are retried and never mistaken for a lost login
  await mcpRpc({url:mcp.url,oauth:oauth.source('remote',mcp.url)},'tools/list');assert.equal(as.refreshes().length,1);
 });
 
-test('callback states are single use, expire and are validated; the callback needs no cookie but other MCP routes do',async t=>{
+test('callback states are single use, expire and are validated; only the callback is reachable from the provider\'s site',async t=>{
  const as=await authorizationServer(t),mcp=await mcpServer(t,as),f=await niwa(t),file=credFile(mcp.url);
  const failedPage=(r:{status:number;text:string})=>{assert.equal(r.status,400);assert.match(r.text,/ログインを完了できませんでした。Niwaの設定から、もう一度ログインしてください。/);};
  const fake=randomBytes(32).toString('base64url');
@@ -307,10 +302,11 @@ test('callback states are single use, expire and are validated; the callback nee
  t.mock.method(Date,'now',()=>now()+10*60_000+1000);
  failedPage(await f.call(`/api/mcp/oauth/callback?state=${late.state}&code=${late.code}`,'GET',undefined,{cookie:false}));t.mock.restoreAll();
  assert.ok(!existsSync(f.secret(file)));
- // Only the callback is reachable without the admin cookie.
+ // The browser comes back from the provider's site; only the callback accepts that. Every other MCP route refuses a request another site sent.
+ failedPage(await f.call('/api/mcp/oauth/callback?state=short&code=abc','GET',undefined,{site:'cross-site'}));
  for(const [path,method,payload] of [['/api/mcp','GET',undefined],['/api/mcp/probe','POST',{url:mcp.url}],['/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url}],['/api/mcp/oauth/logout','POST',{id:'remote'}]] as const)
-  assert.equal((await f.call(path,method,payload,{cookie:false})).status,401,path);
- assert.equal((await f.call('/api/mcp/oauth/callback','POST',{},{cookie:false})).status,401);
+  assert.equal((await f.call(path,method,payload,{site:'cross-site'})).status,403,path);
+ assert.equal((await f.call('/api/mcp/oauth/callback','POST',{},{site:'cross-site'})).status,403);
  // Cross-site POSTs are refused by the origin check as for every other write.
  assert.equal((await f.call('/api/mcp/oauth/start','POST',{id:'remote',url:mcp.url},{origin:'http://foreign.test'})).status,403);
 });

@@ -193,12 +193,12 @@ def install():
             time.sleep(1)
     else:
         raise RuntimeError('Application did not become ready; inspect journalctl -u niwa.service')
-    with http.open('http://127.0.0.1:3210/api/session', timeout=2) as response:
-        require(json.load(response) == {'authenticated': False}, 'Unexpected unauthenticated session response')
+    with http.open('http://127.0.0.1:3210/api/model-ready', timeout=2) as response:
+        require(isinstance(json.load(response).get('providers'), list), 'Unexpected application response')
     run('systemctl', 'is-active', 'niwa.service', 'niwa-workspace.service')
     as_user('niwa-exec', 'systemctl', '--user', 'is-active', 'niwa-executor.service')
     print('PASS: Niwa services installed, enabled and responding at http://127.0.0.1:3210/', flush=True)
-    print('Login key: run cat /home/niwa/niwa/secrets/admin-key in your own niwa terminal. No key was printed here.')
+    print('There is no login: anyone who can open the configured origin uses Niwa as its administrator. Keep the origin reachable only by you (for example through your Tailscale network).')
 
 
 if __name__ == '__main__':

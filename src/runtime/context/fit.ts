@@ -1,14 +1,17 @@
-import type { ModelMessage, ModelRequest } from '../../contracts/model.ts';
+import { withoutImageData, type ModelMessage, type ModelRequest } from '../../contracts/model.ts';
 import { retainCompleteExchanges } from './retention.ts';
 
 export type FittedContext = { request: ModelRequest; removed_messages: number; input_bytes: number; estimated_input_tokens: number };
 export class ContextLimit extends Error {}
 // A transport-size guard when capacity is unknown, not an inferred token capacity.
 const UNKNOWN_CAPACITY_BYTES = 128 * 1024;
+/** A rough allowance per attached image; providers count images by their pixels, not by the base64 text that carries them. */
+export const IMAGE_TOKENS = 1600;
 // UTF-8/3 plus framing allowance is an estimate, not tokenizer output or observed provider usage.
 const measure = (request: ModelRequest) => {
-  const bytes = Buffer.byteLength(JSON.stringify({ system: request.system_instructions, messages: request.messages, tools: request.tools }), 'utf8');
-  return { input_bytes: bytes, estimated_input_tokens: Math.ceil(bytes / 3) + 1024 };
+  const shaped = withoutImageData(request), images = request.messages.reduce((sum, message) => sum + (message.role === 'user' ? message.images?.length ?? 0 : 0), 0);
+  const bytes = Buffer.byteLength(JSON.stringify({ system: shaped.system_instructions, messages: shaped.messages, tools: shaped.tools }), 'utf8');
+  return { input_bytes: bytes, estimated_input_tokens: Math.ceil(bytes / 3) + 1024 + images * IMAGE_TOKENS };
 };
 
 /** Trim archived room messages and complete old tool exchanges; keep instructions and work state. */

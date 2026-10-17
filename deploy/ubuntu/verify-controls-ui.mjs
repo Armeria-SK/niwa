@@ -9,11 +9,11 @@ const parent=r.tasks.create(admin,a.id,room.id,'比較資料の根拠を揃え�
 const separate=r.tasks.create(admin,a.id,room.id,'別目的の画面試作'),sl=r.tasks.claim(admin);r.registerBusinessTask(aa,sl,'別目的の画面試作','小さな試作');r.tasks.pause(admin,separate.id);
 for(let i=0;i<8;i++){const task=r.tasks.create(admin,b.id,room.id,'資料の担当部分 '+i);db.prepare('UPDATE tasks SET parent_id=? WHERE id=?').run(parent.id,task.id);}
 for(const kind of ['research_memo','実行手順書','実行計画','内部評価表','進捗・意思決定メモ','markdown','document','odd_one','odd_two'])r.createArtifact(aa,room.id,kind==='document'?'別の文書':'資料 '+kind,kind,'分類の確認','# 確認内容');
-const key=randomBytes(32).toString('base64url');const server=createApiServer(r,new WebAuth(origin,key),undefined,resolve(ui),undefined,undefined,undefined,(input,signal)=>store.execute(input,signal));server.listen(3375,'127.0.0.1');await once(server,'listening');const browser=await chromium.launch({headless:true,executablePath:process.env.NIWA_TEST_CHROMIUM});
+const server=createApiServer(r,new WebAuth(origin),undefined,resolve(ui),undefined,undefined,undefined,(input,signal)=>store.execute(input,signal));server.listen(3375,'127.0.0.1');await once(server,'listening');const browser=await chromium.launch({headless:true,executablePath:process.env.NIWA_TEST_CHROMIUM});
 try {
  for(const [name,viewport] of [['desktop',{width:1440,height:960}],['mobile',{width:390,height:844}]]){
   const context=await browser.newContext({viewport}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});let writes=0;page.on('request',req=>{if(['POST','PATCH','DELETE','PUT'].includes(req.method()))writes++;});
-  await context.request.post(origin+'/api/login',{headers:{origin},data:{key}});await page.goto(origin+'/#conversation');await page.locator('button.thread-item').filter({hasText:room.title}).click();
+  await page.goto(origin+'/#conversation');await page.locator('button.thread-item').filter({hasText:room.title}).click();
   if(mode==='before'){
    const handling=page.locator('.composer-context');await handling.waitFor();await page.screenshot({path:`/tmp/niwa-controls-before-${name}-handling-closed.png`});await handling.locator('summary').click();await page.getByRole('combobox',{name:'送信の扱い',exact:true}).selectOption('status');await page.screenshot({path:`/tmp/niwa-controls-before-${name}-handling-open.png`});
   }else assert.equal(await page.getByText('送信の扱い',{exact:true}).count(),0);

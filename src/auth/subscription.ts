@@ -57,6 +57,8 @@ export class Subscription {
     check(model && model.supported_efforts.some(value => value === effort), 'invalid', 'Model or reasoning effort is unavailable');
     return { runtime: 'gpt', provider_id: 'openai_subscription', provider_model_id: modelId, supported_efforts: [...model.supported_efforts],
       ...(model.context_window === undefined ? {} : { context_window: model.context_window }),
+      // Codex treats a model without an input list as taking text and images; an explicit list decides.
+      ...(model.supports_image_input === undefined ? {} : { supports_image_input: model.supports_image_input }),
       max_output_tokens: 4096, supports_tool_calls: true, supports_structured_output: false, supports_streaming: true,
       supports_session_resume: false, supports_parallel_sessions: false, supports_usage_reporting: true };
   }
