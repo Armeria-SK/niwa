@@ -21,6 +21,7 @@ export class Scheduler {
   #modelReady: (() => Promise<ReadonlySet<string>>) | undefined;
   #ready: ReadonlySet<string> | undefined;
   #readying: Promise<void> | undefined;
+  #nextReadyCheck = 0;
 
   /** With `modelReady`, autonomous wakes start only for Bots whose provider it lists; until the first answer, none start. */
   constructor(runtime: Runtime, runner: Pick<TurnRunner, 'run'>, now: () => number = Date.now, modelReady?: () => Promise<ReadonlySet<string>>) {
@@ -54,8 +55,12 @@ export class Scheduler {
     this.#guard('schedules', () => this.#runtime.schedules.dispatch(this.#admin));
     if (Date.now() >= this.#nextWakeCheck) {
       this.#nextWakeCheck = Date.now() + 1000;
-      if (this.#modelReady && !this.#readying) this.#readying = this.#modelReady().then(ready => { this.#ready = ready; })
-        .catch(error => this.#guard('modelReady', () => { throw error; })).finally(() => { this.#readying = undefined; });
+      // Saved connections change only through settings; reading the key files every five seconds is enough.
+      if (this.#modelReady && !this.#readying && Date.now() >= this.#nextReadyCheck) {
+        this.#nextReadyCheck = Date.now() + 5000;
+        this.#readying = this.#modelReady().then(ready => { this.#ready = ready; })
+          .catch(error => this.#guard('modelReady', () => { throw error; })).finally(() => { this.#readying = undefined; });
+      }
       this.#guard('autonomousWakes', () => this.#runtime.autonomousWakes.dispatch(this.#admin, undefined, this.#modelReady ? this.#ready ?? new Set() : undefined));
       // Page checks are network-bound; one pass at a time, and a rejected pass is logged like a throwing phase.
       if (!this.#watching) this.#guard('watch', () => {
