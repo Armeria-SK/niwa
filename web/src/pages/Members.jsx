@@ -7,10 +7,11 @@ import { useAnthropicModels } from '../anthropicModels.js';
 import { SHAPES } from '../data.js';
 import { MemoryHistory } from '../MemoryHistory.jsx';
 import { useMemoryPage } from '../useMemoryPage.js';
+import { memorySource } from '../memory-source.js';
 import { Avatar, AppearanceFields, MotionPicker, EmptyState, IconButton, Modal, Segmented, StatusLabel } from '../components.jsx';
 import { ChatIcon, ChevronRightIcon, EditIcon, LockIcon, MemoryIcon, SearchIcon, TrashIcon, CloseIcon, CheckIcon, PlusIcon } from '../icons.jsx';
 
-export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, onDeleteMemory, onDM, paused, onAdd, maxMembers, onDelete }) {
+export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, onDeleteMemory, onDM, paused, onAdd, maxMembers, onDelete, onOpenThread }) {
   const [tab, setTab] = useState('profile');
   const [memoryFor,setMemoryFor]=useState(null);const memoryTrigger=useRef(null);
   function selectTab(value){if(value==='memory'){memoryTrigger.current=document.activeElement;setMemoryFor(member.id);}else setTab(value);}
@@ -26,7 +27,7 @@ export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, o
         <Segmented label="メンバーの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }]} value={memoryFor===member.id?'memory':tab} onChange={selectTab} />
         <div className="member-detail-scroll" key={`${member.id}-${tab}`}>
         {tab === 'profile' ? <Profile key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
-        {memoryFor===member.id ? <MemoryList key={member.id} member={member} onClose={closeMemory} onSave={onSaveMemory} onDelete={onDeleteMemory} /> : null}
+        {memoryFor===member.id ? <MemoryList key={member.id} member={member} onClose={closeMemory} onSave={onSaveMemory} onDelete={onDeleteMemory} onOpenThread={id => { closeMemory(); onOpenThread(id); }} /> : null}
         {tab === 'profile' && member.authority !== 'leader' ? <button className="button subtle" onClick={() => setDeleting(member)}>このBotを削除</button> : null}
         </div>
       </section>
@@ -77,12 +78,19 @@ function Profile({ member, onSave }) {
   </form>;
 }
 
-function MemoryList({ member, onSave, onDelete, onClose }) {
+function MemorySourceLine({ memory, onOpenThread }) {
+  const source = memory.source;
+  return <div className="memory-source">{source.excerpt ? <q>{source.excerpt}</q> : null}<span>{[source.author, source.room, source.said].filter(Boolean).join(' · ')}</span>
+    {source.private ? <span className="memory-private"><LockIcon size={13} />個別の会話から生まれた記憶です。その会話の中でだけ使います</span> : null}
+    {source.openable ? <button type="button" className="text-button" onClick={() => onOpenThread(memory.source_room_id)}>元の会話へ</button> : null}</div>;
+}
+
+function MemoryList({ member, onSave, onDelete, onClose, onOpenThread }) {
   const list=useRef(null),position=useRef(0);
   function remember(){position.current=list.current?.closest('dialog')?.scrollTop||0;}
   const [query, setQuery] = useState('');
   const page = useMemoryPage(member, query);
-  const memories = page.items.map(item => ({ ...item, member: member.id, text: item.body, kind: '記憶', date: '' }));
+  const memories = page.items.map(item => ({ ...item, member: member.id, text: item.body, kind: '記憶', source: memorySource(item) }));
   const [editing, setEditing] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [history, setHistory] = useState(null);
@@ -96,7 +104,7 @@ function MemoryList({ member, onSave, onDelete, onClose }) {
     <div className="search-field"><SearchIcon size={18} /><input type="search" aria-label={`${member.name}の記憶を検索`} placeholder="記憶を検索" maxLength={200} value={query} onChange={e => setQuery(e.target.value)} />{query ? <IconButton label="記憶の検索をクリア" onClick={() => setQuery('')}><CloseIcon size={16} /></IconButton> : null}</div>
     <div className="memory-count" role="status">{page.loading ? '読み込み中…' : `${page.total}件の記憶（${visible.length}件を表示）`}</div>
     {page.error ? <p role="alert">{page.error}<button className="text-button" onClick={page.reload}>再読み込み</button></p> : null}
-    {visible.length ? <div className="memory-list">{visible.map(item => <article key={item.id} className="memory-item"><div className="memory-item-meta"><span>{item.kind}</span><time>{item.date}</time></div><p>{item.text}</p><div className="memory-item-bottom">{item.revision > 1 ? <button className="text-button revision-link" onClick={() => {remember();setHistory(item.id);}}>あなたによる訂正 · {item.revision - 1}回</button> : <span />}
+    {visible.length ? <div className="memory-list">{visible.map(item => <article key={item.id} className="memory-item"><div className="memory-item-meta"><span>{item.kind}</span><time dateTime={item.created_at}>{item.source.created}</time></div><p>{item.text}</p><MemorySourceLine memory={item} onOpenThread={onOpenThread} /><div className="memory-item-bottom">{item.revision > 1 ? <button className="text-button revision-link" onClick={() => {remember();setHistory(item.id);}}>あなたによる訂正 · {item.revision - 1}回</button> : <span />}
       <div className="memory-actions"><IconButton disabled={page.loading} label={`記憶を訂正：${item.text.slice(0, 16)}`} onClick={() => {remember();setEditing(item);}}><EditIcon size={18} /></IconButton><IconButton disabled={page.loading} label={`記憶を削除：${item.text.slice(0, 16)}`} onClick={() => {remember();setDeleting(item);}}><TrashIcon size={18} /></IconButton></div></div></article>)}</div> : page.loading || page.error ? null : <EmptyState icon={MemoryIcon} title={query ? '一致する記憶がありません' : 'まだ記憶がありません'}>{query ? '別の言葉で探してみてください。' : '会話や経験を通じて、少しずつ増えていきます。'}</EmptyState>}
     {page.next !== null ? <button className="button secondary" disabled={page.loading} onClick={page.loadMore}>さらに50件読み込む</button> : null}
   </div></Modal>:null}

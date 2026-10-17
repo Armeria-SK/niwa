@@ -162,6 +162,16 @@ test('memory correction history exposes only scoped metadata and retains the lat
   assert.throws(() => f.runtime.memoryCorrections(f.admin, f.child.id, memory.id), /Memory not found/);
 });
 
+test('administrators see when and from which words each memory came, and bots cannot read that view', t => {
+  const f = fixture(t); const room = f.runtime.createRoom(f.admin, '人工個別', [f.child.id]);
+  const source = f.runtime.post(f.admin, room.id, '日時は第2土曜の14時で決まりです');
+  const memory = f.runtime.remember(f.childActor, source.id, '読書会は第2土曜');
+  const [item] = f.runtime.memoryPageWithSources(f.admin, f.child.id).items;
+  assert.equal(item!.id, memory.id); assert.ok(Date.parse(item!.created_at) > 0); assert.ok(Date.parse(item!.source!.said_at!) > 0);
+  assert.deepEqual({ ...item!.source, said_at: null }, { room_title: '人工個別', private: true, excerpt: '日時は第2土曜の14時で決まりです', author_id: 'administrator', author_name: null, said_at: null });
+  denied(() => f.runtime.memoryPageWithSources(f.childActor, f.child.id));
+});
+
 test('memory pages cover all records with stable cursors, literal search and private access', t => {
   const f = fixture(t); const room = f.runtime.createRoom(f.admin, '人工個別', [f.child.id]);
   const source = f.runtime.post(f.admin, room.id, '人工出所'); const ids: string[] = [];

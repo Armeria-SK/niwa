@@ -216,6 +216,10 @@
   .memory-item-meta span { color: #667f50; }
   .memory-item p { font-size: 13px; line-height: 1.95; margin: 12px 0 8px; color: #506146; white-space: pre-wrap; overflow-wrap: anywhere; }
   .memory-item-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .memory-source { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 10px; padding-left: 12px; border-left: 2px solid var(--border); font-size: 12px; line-height: 1.7; color: var(--muted); }
+  .memory-source q { flex-basis: 100%; color: var(--text); quotes: '「' '」'; overflow-wrap: anywhere; }
+  .memory-private { display: inline-flex; align-items: center; gap: 4px; color: #9b6a2f; }
+  .memory-source .text-button { font-size: 12px; }
   .memory-actions { display: flex; gap: 4px; }
   .memory-actions .icon-button { width: 28px; height: 28px; }
   .revision-link { font-size: 10px; }

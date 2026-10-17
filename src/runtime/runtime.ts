@@ -1142,6 +1142,20 @@ export class Runtime {
       total: Number(db.prepare("SELECT count(*) AS total FROM memories WHERE body LIKE ? ESCAPE '\\'").get(pattern)!.total),
       next: rows.length > 50 ? rows[49]!.cursor : null };
   }
+  /** Administrator view of memoryPage: when each memory was made and the conversation and words it came from. Bots never receive this. */
+  memoryPageWithSources(actor: Actor, agentId: string, query = '', before = Number.MAX_SAFE_INTEGER) {
+    this.#admin(actor);
+    const page = this.memoryPage(actor, agentId, query, before), db = this.#memory(actor, agentId);
+    const created = db.prepare("SELECT created_at FROM memory_audit WHERE memory_id=? AND action='created' ORDER BY sequence LIMIT 1");
+    const room = this.#db.prepare("SELECT title,visibility FROM rooms WHERE id=? AND id NOT IN (SELECT id FROM deleted_content WHERE kind='room')");
+    const message = this.#db.prepare('SELECT m.body,m.author_id,m.created_at,a.name FROM messages m LEFT JOIN agents a ON a.id=m.author_id WHERE m.id=? AND m.room_id=?');
+    return { ...page, items: page.items.map(item => {
+      const source = room.get(item.source_room_id), said = source ? message.get(item.source_message_id, item.source_room_id) : undefined;
+      return { ...item, created_at: String(created.get(item.id)?.created_at ?? ''),
+        source: source ? { room_title: String(source.title), private: source.visibility === 'private',
+          ...(said ? { excerpt: String(said.body).slice(0, 160), author_id: String(said.author_id), author_name: said.name === null ? null : String(said.name), said_at: String(said.created_at) } : {}) } : null };
+    }) };
+  }
   correctMemory(actor: Actor, agentId: string, id: string, revision: number, body: string): void {
     const principal = this.#admin(actor);
     text(body);

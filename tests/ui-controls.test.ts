@@ -17,3 +17,12 @@ test('model setup notice appears only when no saved connection can answer the le
  assert.match(modelSetupNotice(['anthropic'],'openai_subscription').title,/リーダーのモデル（Codex）/);
  assert.equal(modelSetupNotice(['anthropic','local_llm'],'anthropic'),null);
 });
+test('memory source names the speaker and room, marks private conversations and survives a deleted room',async()=>{
+ const {memorySource}=await ui('memory-source.js');
+ const shared=memorySource({created_at:'2026-09-09T08:53:00.000Z',source:{room_title:'はじめての共同制作',private:false,excerpt:'日時は第2土曜です',author_id:'administrator',author_name:null,said_at:'2026-09-09T08:52:00.000Z'}});
+ assert.equal(shared.author,'あなた');assert.equal(shared.room,'はじめての共同制作');assert.equal(shared.private,false);assert.ok(shared.created&&shared.said);assert.equal(shared.openable,true);
+ const bot=memorySource({created_at:'x',source:{room_title:'個別',private:true,excerpt:'了解',author_id:'b',author_name:null,said_at:'x'}});
+ assert.equal(bot.author,'削除したBot');assert.equal(bot.private,true);assert.equal(bot.created,'');
+ const gone=memorySource({created_at:'2026-09-09T08:53:00.000Z',source:null});
+ assert.equal(gone.room,'元の会話は削除されています');assert.equal(gone.excerpt,'');assert.equal(gone.openable,false);
+});
