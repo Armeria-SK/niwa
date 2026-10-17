@@ -245,6 +245,10 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       run: (m, b) => { runtime.setDormant(admin, m[1]!, b.dormant as boolean); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories$/, run: (m, _b, url) => runtime.memories(admin, m[1]!, url.searchParams.get('q') ?? '') },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/procedures$/, run: m => runtime.procedureBook(admin, m[1]!) },
+    // A Bot's seed: what may go in, then the exact file text, which the screen shows in full before saving it.
+    { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/seed$/, run: m => runtime.seeds.options(admin, m[1]!) },
+    { method: 'POST', path: /^\/api\/agents\/([0-9a-f-]{36})\/seed$/, schema: object({ procedures: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { maxItems: 200, uniqueItems: true }), memories: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { maxItems: 500, uniqueItems: true }) }),
+      run: (m, b) => runtime.seeds.build(admin, m[1]!, { procedures: b.procedures as string[], memories: b.memories as string[] }) },
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/procedures\/([0-9a-f]{64})$/, schema: object({ enabled: Type.Boolean() }), run: (m, b) => { runtime.setProcedureEnabled(admin, m[1]!, m[2]!, b.enabled as boolean); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories\/page$/, run: (m, _b, url) => runtime.memoryPageWithSources(admin, m[1]!, url.searchParams.get('q') ?? '', Number(url.searchParams.get('before') ?? Number.MAX_SAFE_INTEGER)) },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories\/([0-9a-f-]{36}|[0-9a-f]{64})\/impact$/, run: m => runtime.memoryImpact(admin, m[1]!, m[2]!) },

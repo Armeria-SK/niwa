@@ -9,6 +9,7 @@ import { memorySource } from '../memory-source.js';
 import { ProcedureBook } from '../ProcedureBook.jsx';
 import { EveryoneMemory } from '../EveryoneMemory.jsx';
 import { MemoryDeleteModal, MemoryEditModal, MemorySourceLine } from '../MemoryDialogs.jsx';
+import { SeedExport } from '../SeedExport.jsx';
 import { Avatar, AppearanceFields, MotionPicker, EmptyState, IconButton, Modal, Segmented, StatusLabel } from '../components.jsx';
 import { ChatIcon, ChevronRightIcon, EditIcon, LockIcon, MemoryIcon, SearchIcon, TrashIcon, CloseIcon, CheckIcon, PlusIcon, UsersIcon } from '../icons.jsx';
 
@@ -25,10 +26,11 @@ export function Members({ members, memberMap, selected, tab = 'profile', onSelec
     <div className="page-heading"><div><span className="eyebrow">それぞれの個性を、大切に。</span><h1>Bot</h1><p>話し方、記憶、見た目。<br />ひとりずつ、少しずつ。</p></div><div className="member-heading-actions"><span className="quiet-count">{members.length}体のBot</span><button className="button primary" onClick={() => setAdding(true)}><PlusIcon size={17} />Botを迎える</button></div></div>
     <div className="members-layout"><MemberScroll><button className={`member-list-row everyone-row ${everyone ? 'selected' : ''}`} onClick={() => onSelect('everyone')} aria-pressed={everyone}><span className="everyone-icon"><UsersIcon size={26} /></span><span><strong>みんなの記憶</strong><small>探す・見比べる</small></span><ChevronRightIcon size={17} /></button>{members.map(item => <button key={item.id} className={`member-list-row ${!everyone && item.id === member.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)} aria-pressed={!everyone && item.id === member.id}><Avatar member={item} size={64} /><span><strong>{item.name}{item.authority === 'leader' ? <span className="role-label">リーダー</span> : null}</strong><small>{item.role}</small><StatusLabel member={item} paused={paused} showDescription={false} /></span><ChevronRightIcon size={17} /></button>)}</MemberScroll>
       {everyone ? <section className="member-detail" aria-label="みんなの記憶"><EveryoneMemory tab={tab === 'conflicts' ? 'conflicts' : 'search'} onTab={onTab} members={memberMap} onSaveMemory={onSaveMemory} onDeleteMemory={onDeleteMemory} onOpenThread={onOpenThread} onOpenBot={onOpenBot} /></section> : <section className="member-detail" aria-label={`${member.name}の詳細`}><div className="member-detail-top"><Avatar member={member} size={76} /><div><h2>{member.name}</h2><span className="muted">{member.role}</span></div>{member.authority !== 'leader' ? member.status === 'sleeping' ? <button className="button secondary" onClick={() => onDormant(member.id, false)}>呼び戻す</button> : <button className="button subtle" onClick={() => setResting(member)}>休ませる</button> : null}<button className="button secondary" onClick={() => onDM(member.id)}><ChatIcon size={18} />個別に話す</button></div>
-        <Segmented label="Botの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }, { value: 'procedures', label: '手順帳' }]} value={tab} onChange={onTab} />
+        <Segmented label="Botの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }, { value: 'procedures', label: '手順帳' }, { value: 'seed', label: '苗の書き出し' }]} value={tab} onChange={onTab} />
         <div className="member-detail-scroll" key={`${member.id}-${tab}`}>
         {tab === 'profile' ? <Profile key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
         {tab === 'procedures' ? <ProcedureBook key={member.id} member={member} /> : null}
+        {tab === 'seed' ? <SeedExport key={member.id} member={member} /> : null}
         {tab === 'memory' ? <MemoryList key={member.id} member={member} onSave={onSaveMemory} onDelete={onDeleteMemory} onOpenThread={onOpenThread} /> : null}
         {tab === 'profile' && member.authority !== 'leader' ? <button className="button subtle" onClick={() => setDeleting(member)}>このBotを削除</button> : null}
         </div>

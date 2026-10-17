@@ -151,3 +151,10 @@ test('a task replay has its own URL and reads each kind of record in plain words
  assert.equal(replayItemView({type:'message',link:'response',author:'リーダー',text:'答え'}).label,'返答（リーダー）');
  assert.equal(replayItemView({type:'approval',decision:'auto'}).detail,'任せた範囲で自動');
 });
+test('the seed export has its own URL and says what goes in and what cannot',async()=>{
+ const {parseRoute,routeHash}=await ui('route.js');
+ assert.deepEqual(parseRoute('#bots/b-1/seed'),{page:'bots',id:'b-1',tab:'seed'});assert.equal(routeHash({page:'bots',id:'b-1',tab:'seed'}),'#bots/b-1/seed');
+ const {seedSummary,privateNote}=await ui('seed.js');
+ assert.equal(seedSummary(0,0),'人格・見た目');assert.equal(seedSummary(2,1),'人格・見た目・手順2件・記憶1件');
+ assert.equal(privateNote(1,3),'個別の会話から生まれた手順1件と記憶3件は、書き出せません。');assert.equal(privateNote(0,2),'個別の会話から生まれた記憶2件は、書き出せません。');assert.equal(privateNote(0,0),'');
+});

@@ -61,6 +61,7 @@ import { trustSchema } from '../storage/trust-schema.ts';
 import { Trust, type ApprovalKind } from './trust.ts';
 import { mediaAttachmentSchema } from '../storage/media-attachment-schema.ts';
 import { Replays } from './replay.ts';
+import { Seeds } from './seeds.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -111,6 +112,7 @@ export class Runtime {
   readonly watch: Watch;
   readonly trust: Trust;
   readonly replays: Replays;
+  readonly seeds: Seeds;
   readonly artifactVersions: ArtifactVersions;
   readonly schedules: Schedules;
   readonly providerLimits: ProviderLimits;
@@ -150,6 +152,7 @@ export class Runtime {
     this.watch = new Watch(this.#db, this, actor => this.#admin(actor));
     this.trust = new Trust(this.#db, actor => this.#admin(actor));
     this.replays = new Replays(this.#db, this, actor => this.#admin(actor));
+    this.seeds = new Seeds(this, actor => this.#admin(actor));
     this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id,this.initiatives,now=>this.nights.gate(now));
     this.quality = new ArtifactQuality(this.#db,this,actor=>this.#principal(actor));
     this.artifactVersions = new ArtifactVersions(this.#db,this,actor=>this.#principal(actor));
