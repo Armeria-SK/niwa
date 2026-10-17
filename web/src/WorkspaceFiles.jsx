@@ -61,16 +61,16 @@ export function WorkspaceFiles({ onClose }) {
     <p className="muted">{selected?.name||'全員共有'}{path ? ` / ${path}` : ''}{file ? ` / ${file.name}` : ''}</p>
     {busy ? <p role="status">ファイルを確認しています…</p> : null}
     {error ? <p className="field-error" role="alert">{error}</p> : null}
-    {listing?.available === false ? <p>共有ファイルサービスは未接続です。本体の接続設定を確認してください。</p> : file ? <>
+    {listing?.available === false ? <p>共有ファイルサービスは未接続です。<br />本体の接続設定を確認してください。</p> : file ? <>
       <p className="field-hint">{file.bytes.length.toLocaleString()}バイト</p>
       {editing ? <label className="field"><span>本文を編集</span><textarea rows={14} maxLength={20000} value={draft} onChange={e=>setDraft(e.target.value)}/></label> : file.image ? <img src={file.image} alt={file.name} style={{ display: 'block', maxWidth: '100%', maxHeight: '60vh', margin: '0 auto', objectFit: 'contain' }} onError={() => setFile(current => current === file ? { ...current, image: null, content: null } : current)} />
-        : file.content === null ? <p>この形式・サイズのプレビューには対応していません。ダウンロードして確認できます。</p> : <pre className="artifact-document">{file.content}</pre>}
+        : file.content === null ? <p>この形式・サイズのプレビューには対応していません。<br />ダウンロードして確認できます。</p> : <pre className="artifact-document">{file.content}</pre>}
     </> : listing?.available ? <><label className="field"><span>このフォルダーを検索</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>
       <div className="artifact-grid">{entries.map(entry => <button className="artifact-card workspace-entry" key={entry.name} disabled={busy} onClick={() => entry.kind === 'directory' ? setPath([path, entry.name].filter(Boolean).join('/')) : open(entry.name)}><span className="artifact-card-meta"><FileIcon size={24} /><span>{entry.kind === 'directory' ? 'フォルダー' : 'ファイル'}</span></span><span className="artifact-title">{entry.name}</span></button>)}</div>
       {!entries.length ? <p>表示するファイルがありません。</p> : null}
       {listing.truncated ? <p className="field-hint">件数が多いため一覧を一部に制限しています。</p> : null}
     </> : null}
     <p className="field-hint">{area?'選択した作業場所のファイルです。':'全Botの共有作業ファイルです。'}画像（PNG・JPEG・GIF・WebP）の表示とダウンロードは8MBまで、本文プレビューはUTF-8の64KBまでです。</p>
-  <p className="field-hint">作業ファイル本体は通常バックアップの対象外です。必要なファイルは別途保管してください。個人領域は休眠・再招集で保持し、Bot削除時に削除します。案件と共有済み版は残します。</p>
+  <p className="field-hint">作業ファイル本体は通常バックアップの対象外です。<br />必要なファイルは別途保管してください。<br />個人領域は休眠・再招集で保持し、Bot削除時に削除します。<br />案件と共有済み版は残します。</p>
   </div><div className="form-actions">{area&&file?.content!==null&&file ? editing?<button className="button primary" disabled={busy} onClick={save}>保存</button>:<button className="button secondary" disabled={busy||file.content.length>20000} onClick={()=>{setDraft(file.content);setEditing(true);}}>編集</button>:null}<button className="button subtle" onClick={onClose}>閉じる</button>{file ? <button className="button primary" disabled={busy} onClick={download}><DownloadIcon size={17} />ダウンロード</button> : null}</div></Modal>;
 }

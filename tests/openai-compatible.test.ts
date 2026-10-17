@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, statSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
+import { editSchema } from '../src/storage/database.ts';
 import { OpenAICompatibleAdapter, listCompatibleModels } from '../src/providers/openai-compatible/adapter.ts';
 import { normalizeCompatibleUrl } from '../src/providers/openai-compatible/url.ts';
 import { collectModelEvents } from '../src/providers/shared/adapter.ts';
@@ -74,9 +75,12 @@ test('upgrading a schema49 database widens the provider constraint in place and 
     const db = new DatabaseSync(join(root, 'control.db'));
     const sql = String(db.prepare("SELECT sql FROM sqlite_schema WHERE name='agents'").get()!.sql);
     const version = Number(db.prepare('PRAGMA schema_version').get()!.schema_version);
-    db.exec('BEGIN; PRAGMA writable_schema=ON;');
-    db.prepare("UPDATE sqlite_schema SET sql=? WHERE name='agents'").run(sql.replace(",'openai_compatible','anthropic'", '').replace("'local_llm'", "'ollama'"));
-    db.exec(`PRAGMA schema_version=${version + 1}; PRAGMA writable_schema=OFF; COMMIT;`);
+    db.exec('BEGIN;');
+    editSchema(db, () => {
+      db.prepare("UPDATE sqlite_schema SET sql=? WHERE name='agents'").run(sql.replace(",'openai_compatible','anthropic'", '').replace("'local_llm'", "'ollama'"));
+      db.exec(`PRAGMA schema_version=${version + 1}`);
+    });
+    db.exec('COMMIT;');
     db.exec('ALTER TABLE model_settings RENAME COLUMN local_llm_url TO ollama_url; ALTER TABLE model_settings DROP COLUMN compatible_url; ALTER TABLE model_settings DROP COLUMN compatible_parallel; ALTER TABLE model_settings DROP COLUMN fallback_provider; ALTER TABLE model_settings DROP COLUMN anthropic_parallel; DROP TRIGGER clear_schedule_sources; DROP TABLE schedule_sources; PRAGMA user_version=49;');
     const before = JSON.stringify(db.prepare('SELECT * FROM agents ORDER BY id').all());
     const autonomy = db.prepare('SELECT count(*) AS count FROM agent_autonomy').get()!.count;
@@ -84,7 +88,7 @@ test('upgrading a schema49 database widens the provider constraint in place and 
     runtime = new Runtime(root); admin = runtime.administrator();
     const after = new DatabaseSync(join(root, 'control.db'));
     try {
-      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 54);
+      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 55);
       assert.equal(JSON.stringify(after.prepare('SELECT * FROM agents ORDER BY id').all()), before);
       assert.equal(after.prepare('SELECT count(*) AS count FROM agent_autonomy').get()!.count, autonomy);
       assert.match(String(after.prepare("SELECT sql FROM sqlite_schema WHERE name='agents'").get()!.sql), /'openai_compatible'/);
@@ -322,4 +326,19 @@ test('the per-endpoint limit serializes OpenAI-compatible requests', async () =>
     await Promise.all([1, 2, 3].map(() => collectModelEvents(adapter.run(local, { timeout_ms: 2000 }))));
     assert.equal(peak, 3);
   } finally { runtime.close(); await fake.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('ready providers list only saved connections, so autonomous wakes never wait on a missing login', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-ready-providers-')); const runtime = new Runtime(root);
+  const credentials = new MemoryCredentialStore();
+  const subscription = new Subscription(credentials, () => {}, { fetch: async () => { throw new Error('No network in this test'); } });
+  const gateway = new ModelGateway(runtime, fetch, subscription, new MemoryApiKeyStore());
+  try {
+    const admin = runtime.administrator();
+    assert.deepEqual([...await gateway.readyProviders()], []);
+    await gateway.configureCompatible({ url: 'http://127.0.0.1:1234/v1' });
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434');
+    await credentials.write(credential);
+    assert.deepEqual([...await gateway.readyProviders()].sort(), ['local_llm', 'openai_compatible', 'openai_subscription']);
+  } finally { await subscription.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });

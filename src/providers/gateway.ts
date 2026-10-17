@@ -124,6 +124,16 @@ export class ModelGateway {
     return new OpenAICompatibleAdapter({ baseUrl: target.url, apiKey: target.key, fetch: this.#fetch,
       slot: signal => this.#compatibleLimiter.acquire(lane, () => runtime.modelSettings(runtime.administrator()).compatibleParallel, signal) }, model);
   }
+  /** Providers with a saved connection. Whether the endpoint answers is still decided when a turn runs. */
+  async readyProviders(): Promise<Set<Agent['provider']>> {
+    const settings = this.#runtime.modelSettings(this.#runtime.administrator());
+    const ready = new Set<Agent['provider']>();
+    if (this.subscription && await this.subscription.status().then(status => status.connected, () => false)) ready.add('openai_subscription');
+    if (settings.compatibleUrl) ready.add('openai_compatible');
+    if (await this.#anthropicTarget().catch(() => undefined)) ready.add('anthropic');
+    if (settings.localLlmUrl) ready.add('local_llm');
+    return ready;
+  }
   async compatibleStatus() {
     const settings = this.#runtime.modelSettings(this.#runtime.administrator());
     const record = this.compatibleKey ? await this.compatibleKey.read() : undefined;

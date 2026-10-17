@@ -101,14 +101,14 @@ export function executeProcedure(context: ProcedureContext, name: string, args: 
       check(existing === null || existing.room_id === task.room_id, 'forbidden', 'Update a procedure in its original conversation');
       const previous = Number(existing?.revision ?? 0);
       check(previous === args.expected_revision && previous < Number.MAX_SAFE_INTEGER - 1, 'conflict', 'Procedure revision changed');
-      if (args.id === null) db.prepare('INSERT INTO procedures VALUES (?,?,0,1)').run(id, task.room_id);
+      if (args.id === null) db.prepare('INSERT INTO procedures(id,room_id,revision,enabled) VALUES (?,?,0,1)').run(id, task.room_id);
       db.prepare('INSERT INTO procedure_versions VALUES (?,?,?,?)').run(id, previous + 1, JSON.stringify(body), Date.now());
-      db.prepare('UPDATE procedures SET revision=? WHERE id=?').run(previous + 1, id);
+      db.prepare('UPDATE procedures SET revision=?,disabled_reason=NULL WHERE id=?').run(previous + 1, id);
       output = { id, revision: previous + 1 };
     } else if (name === 'procedure_set_enabled') {
       const id = String(args.id); head(id);
       if (args.enabled) read(id);
-      db.prepare('UPDATE procedures SET enabled=? WHERE id=?').run(args.enabled ? 1 : 0, id);
+      db.prepare('UPDATE procedures SET enabled=?,disabled_reason=NULL WHERE id=?').run(args.enabled ? 1 : 0, id);
       output = { id, enabled: args.enabled };
     } else {
       const item = read(String(args.id), Number(args.revision));

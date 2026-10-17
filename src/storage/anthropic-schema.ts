@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { editSchema } from './database.ts';
 import { LOCAL_LLM_AGENTS_CHECK, LOCAL_LLM_FALLBACK_CHECK } from './local-llm-schema.ts';
 
 const AGENTS = ["CHECK(provider IN ('openai_subscription','ollama','openai_compatible'))", "CHECK(provider IN ('openai_subscription','ollama','openai_compatible','anthropic'))"] as const;
@@ -21,11 +22,10 @@ export function anthropicSchema(db: DatabaseSync): void {
   }).filter(edit => edit !== undefined);
   if (edits.length) {
     const version = Number(db.prepare('PRAGMA schema_version').get()!.schema_version);
-    db.exec('PRAGMA writable_schema=ON');
-    try {
+    editSchema(db, () => {
       for (const edit of edits) db.prepare("UPDATE sqlite_schema SET sql=? WHERE type='table' AND name=?").run(edit.sql, edit.table);
       db.exec(`PRAGMA schema_version=${version + 1}`);
-    } finally { db.exec('PRAGMA writable_schema=OFF'); }
+    });
     const check = db.prepare('PRAGMA integrity_check').all();
     if (check.length !== 1 || check[0]!.integrity_check !== 'ok') throw new Error('Schema integrity check failed');
   }

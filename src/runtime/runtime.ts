@@ -50,6 +50,7 @@ import { modelRouteSchema } from '../storage/model-route-schema.ts';
 import { providerRetrySchema } from '../storage/provider-retry-schema.ts';
 import { commonRulesSchema } from '../storage/common-rules-schema.ts';
 import { commonRulesDefaultSchema, commonRulesGeneralDefaultSchema } from '../storage/common-rules-default-schema.ts';
+import { THEME_IDS, themeSchema } from '../storage/theme-schema.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -86,6 +87,10 @@ export type Actor = { readonly [identity]: true };
 type Principal = { kind: 'admin'; id: 'administrator' } | { kind: 'agent'; id: string };
 
 /** Trusted application service. Do not expose this object to generated code or models. */
+/** Procedures whose current version cites the memory bound to the single parameter. */
+const CITING_PROCEDURES = `SELECT p.id FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision, json_each(v.body,'$.sources') s
+  WHERE json_extract(s.value,'$.kind')='memory' AND json_extract(s.value,'$.source_id')=?`;
+
 export class Runtime {
   readonly quality: ArtifactQuality;
   readonly initiatives: Initiatives;
@@ -105,7 +110,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -481,15 +486,15 @@ export class Runtime {
   settings(actor: Actor): Settings {
     this.#principal(actor);
     const row = this.#db.prepare('SELECT * FROM settings WHERE id = 1').get() as {
-      paused: number; generated_limit: number; concurrency_limit: number | null; backup_days: number; autonomous: number; backup_time: string; backup_enabled: number;
+      paused: number; generated_limit: number; concurrency_limit: number | null; backup_days: number; autonomous: number; backup_time: string; backup_enabled: number; theme: string | null;
     };
     return { paused: row.paused === 1, generatedLimit: row.generated_limit,
-      concurrencyLimit: row.concurrency_limit, backupDays: row.backup_days, autonomous: row.autonomous === 1, backupTime: row.backup_time, backupEnabled: row.backup_enabled === 1 };
+      concurrencyLimit: row.concurrency_limit, backupDays: row.backup_days, autonomous: row.autonomous === 1, backupTime: row.backup_time, backupEnabled: row.backup_enabled === 1, theme: row.theme };
   }
   updateSettings(actor: Actor, patch: Partial<Settings>): Settings {
     this.#admin(actor);
     check(patch && typeof patch === 'object' && !Array.isArray(patch), 'invalid', 'Expected settings');
-    const allowed = ['paused', 'generatedLimit', 'concurrencyLimit', 'backupDays', 'autonomous', 'backupTime', 'backupEnabled'];
+    const allowed = ['paused', 'generatedLimit', 'concurrencyLimit', 'backupDays', 'autonomous', 'backupTime', 'backupEnabled', 'theme'];
     check(Object.keys(patch).every(key => allowed.includes(key)), 'invalid', 'Unknown setting');
     return transaction(this.#db, () => {
       const next = { ...this.settings(actor), ...patch };
@@ -501,8 +506,9 @@ export class Runtime {
       check(typeof next.backupEnabled === 'boolean', 'invalid', 'Expected backup boolean');
       check(Number.isSafeInteger(next.backupDays) && next.backupDays > 0, 'invalid', 'Invalid backup days');
       check(typeof next.backupTime === 'string' && /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(next.backupTime), 'invalid', 'Invalid backup time');
-      this.#db.prepare('UPDATE settings SET paused=?, generated_limit=?, concurrency_limit=?, backup_days=?,autonomous=?,backup_time=?,backup_enabled=? WHERE id=1')
-        .run(Number(next.paused), next.generatedLimit, next.concurrencyLimit, next.backupDays, Number(next.autonomous), next.backupTime, Number(next.backupEnabled));
+      check(next.theme === null || (THEME_IDS as readonly string[]).includes(next.theme), 'invalid', 'Unknown theme');
+      this.#db.prepare('UPDATE settings SET paused=?, generated_limit=?, concurrency_limit=?, backup_days=?,autonomous=?,backup_time=?,backup_enabled=?,theme=? WHERE id=1')
+        .run(Number(next.paused), next.generatedLimit, next.concurrencyLimit, next.backupDays, Number(next.autonomous), next.backupTime, Number(next.backupEnabled), next.theme);
       if (!next.autonomous) this.tasks.suspendAutonomous(actor);
       if (next.paused) this.#interruptTasks();
       return next;
@@ -655,7 +661,7 @@ export class Runtime {
             memory.prepare('DELETE FROM memories WHERE id=?').run(row.id as string);
             this.#audit(memory, row.id as string, 'deleted', 'administrator', Number(row.revision) + 1);
           }
-          memory.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]';");
+          memory.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]'; DELETE FROM procedures;");
         });
       }
       transaction(this.#db, () => {
@@ -766,7 +772,7 @@ export class Runtime {
     const expired=this.#db.prepare("SELECT count(*) AS n FROM tasks WHERE room_id=? AND state='failed' AND result='Task deadline exceeded' AND updated_at>=?").get(roomId,since)!.n;
     return {since,artifact_count:Number(artifactCount),artifacts,operations,
       approvals:Number(pending.approvals||0),blockers:Number(pending.blockers||0),overdue:Number(pending.overdue||0)+Number(expired),
-      revenue:'unverified',customer_contacts:'unverified',operation_note:'送信の実行記録です。記録済みでも業務の成功を意味しません。導入以前の未分類の操作は含みません。'};
+      operation_note:'送信の実行記録です。記録済みでも業務の成功を意味しません。導入以前の未分類の操作は含みません。'};
   }
   reviewReady(actor: Actor, lease: TaskLease, artifactId:string, sha256:string) {
     check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
@@ -1052,11 +1058,13 @@ export class Runtime {
     }
     return db;
   }
-  #audit(db: DatabaseSync, id: string, action: string, actorId: string, revision: number): void {
-    db.prepare('INSERT INTO memory_audit(memory_id, action, actor_id, revision, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(id, action, actorId, revision, new Date().toISOString());
+  #audit(db: DatabaseSync, id: string, action: string, actorId: string, revision: number, previousBody: string | null = null): void {
+    db.prepare('INSERT INTO memory_audit(memory_id, action, actor_id, revision, created_at, previous_body) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, action, actorId, revision, new Date().toISOString(), previousBody);
     // New memories are picked up on the next turn. Corrections/deletions invalidate old generated output.
     if (action !== 'created') db.exec('UPDATE memory_state SET revision = revision + 1 WHERE id = 1');
+    // A deleted memory may be quoted anywhere in derived procedures, and its kept wording must go with it.
+    if (action === 'deleted') { db.exec('DELETE FROM procedures'); db.prepare('UPDATE memory_audit SET previous_body=NULL WHERE memory_id=?').run(id); }
   }
   remember(actor: Actor, sourceMessageId: string, body: string, operationId?: string): Memory {
     const principal = this.#bot(actor);
@@ -1142,16 +1150,72 @@ export class Runtime {
       total: Number(db.prepare("SELECT count(*) AS total FROM memories WHERE body LIKE ? ESCAPE '\\'").get(pattern)!.total),
       next: rows.length > 50 ? rows[49]!.cursor : null };
   }
-  correctMemory(actor: Actor, agentId: string, id: string, revision: number, body: string): void {
+  /** Title and visibility of a conversation that has not been deleted, for administrator views that point back to it. */
+  #liveRoom(id: string): { title: string; visibility: string } | undefined {
+    const row = this.#db.prepare("SELECT title,visibility FROM rooms WHERE id=? AND id NOT IN (SELECT id FROM deleted_content WHERE kind='room')").get(id);
+    return row ? { title: String(row.title), visibility: String(row.visibility) } : undefined;
+  }
+  /** Administrator view of memoryPage: when each memory was made and the conversation and words it came from. Bots never receive this. */
+  memoryPageWithSources(actor: Actor, agentId: string, query = '', before = Number.MAX_SAFE_INTEGER) {
+    this.#admin(actor);
+    const page = this.memoryPage(actor, agentId, query, before), db = this.#memory(actor, agentId);
+    const created = db.prepare("SELECT created_at FROM memory_audit WHERE memory_id=? AND action='created' ORDER BY sequence LIMIT 1");
+    const message = this.#db.prepare('SELECT m.body,m.author_id,m.created_at,a.name FROM messages m LEFT JOIN agents a ON a.id=m.author_id WHERE m.id=? AND m.room_id=?');
+    return { ...page, items: page.items.map(item => {
+      const source = this.#liveRoom(item.source_room_id), said = source ? message.get(item.source_message_id, item.source_room_id) : undefined;
+      return { ...item, created_at: String(created.get(item.id)?.created_at ?? ''),
+        source: source ? { room_title: String(source.title), private: source.visibility === 'private',
+          ...(said ? { excerpt: String(said.body).slice(0, 160), author_id: String(said.author_id), author_name: said.name === null ? null : String(said.name), said_at: String(said.created_at) } : {}) } : null };
+    }) };
+  }
+  /** Administrator view of a Bot's procedure book: the current version of each procedure, its conversation, and how often it was applied. */
+  procedureBook(actor: Actor, agentId: string) {
+    this.#admin(actor);
+    const db = this.#memory(actor, agentId);
+    return db.prepare(`SELECT p.id,p.room_id,p.revision,p.enabled,p.disabled_reason,v.body,v.created_at,(SELECT count(*) FROM procedure_uses u WHERE u.procedure_id=p.id) AS uses,
+      (SELECT max(created_at) FROM procedure_uses u WHERE u.procedure_id=p.id) AS last_used_at
+      FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision ORDER BY v.created_at DESC LIMIT 200`).all().map(row => {
+      let body: { title?: unknown; conditions?: unknown; steps?: unknown } = {};
+      try { body = JSON.parse(String(row.body)) as typeof body; } catch { /* A damaged record still lists so it can be disabled. */ }
+      const source = this.#liveRoom(String(row.room_id));
+      return { id: String(row.id), revision: Number(row.revision), enabled: row.enabled === 1, title: String(body.title ?? ''), conditions: String(body.conditions ?? ''),
+        steps: Array.isArray(body.steps) ? body.steps.map(String) : [], saved_at: Number(row.created_at), uses: Number(row.uses),
+        last_used_at: row.last_used_at === null ? null : Number(row.last_used_at), disabled_reason: row.disabled_reason === null ? null : String(row.disabled_reason), room_title: source ? String(source.title) : null, private: source?.visibility === 'private' };
+    });
+  }
+  /** Turning a procedure back on does not vouch for it: the Bot still rechecks its sources before each use and disables it if they changed. */
+  setProcedureEnabled(actor: Actor, agentId: string, id: string, enabled: boolean): void {
+    this.#admin(actor);
+    check(typeof enabled === 'boolean', 'invalid', 'Expected boolean');
+    const db = this.#memory(actor, agentId), row = db.prepare('SELECT disabled_reason FROM procedures WHERE id=?').get(id);
+    check(row, 'not_found', 'Procedure not found');
+    check(!enabled || row.disabled_reason !== 'memory_corrected', 'conflict', 'A memory this procedure cites was corrected; the Bot must save it again');
+    db.prepare('UPDATE procedures SET enabled=?,disabled_reason=NULL WHERE id=?').run(enabled ? 1 : 0, id);
+  }
+  /** The previous wording is kept only when asked, so a correction that removes something private leaves no copy. */
+  correctMemory(actor: Actor, agentId: string, id: string, revision: number, body: string, keepPrevious = false): void {
     const principal = this.#admin(actor);
     text(body);
+    check(typeof keepPrevious === 'boolean', 'invalid', 'Expected boolean');
     const db = this.#memory(actor, agentId);
     transaction(db, () => {
+      const previous = db.prepare('SELECT body FROM memories WHERE id=? AND revision=?').get(text(id, 100), this.#revision(revision));
       const result = db.prepare('UPDATE memories SET body = ?, revision = revision + 1 WHERE id = ? AND revision = ?')
-        .run(body, text(id, 100), this.#revision(revision));
+        .run(body, id, revision);
       check(result.changes === 1, 'conflict', 'Memory revision changed or memory was deleted');
-      this.#audit(db, id, 'admin_corrected', principal.id, revision + 1);
+      this.#audit(db, id, 'admin_corrected', principal.id, revision + 1, keepPrevious ? String(previous!.body) : null);
+      db.prepare(`UPDATE procedures SET enabled=0,disabled_reason='memory_corrected' WHERE id IN (${CITING_PROCEDURES})`).run(id);
     });
+  }
+  /** What a correction of this memory changes, shown before saving: procedures citing it stop, and this Bot's open work starts its step again. */
+  memoryImpact(actor: Actor, agentId: string, id: string) {
+    this.#admin(actor);
+    const db = this.#memory(actor, agentId);
+    check(db.prepare('SELECT 1 FROM memories WHERE id=?').get(text(id, 100)), 'not_found', 'Memory not found');
+    const citing = db.prepare(`SELECT p.id,v.body FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision WHERE p.id IN (${CITING_PROCEDURES})`).all(id)
+      .map(row => { let title = ''; try { title = String((JSON.parse(String(row.body)) as { title?: unknown }).title ?? ''); } catch { /* Untitled. */ } return { id: String(row.id), title }; });
+    return { procedures: citing, procedure_count: Number(db.prepare('SELECT count(*) AS n FROM procedures').get()!.n),
+      open_tasks: Number(this.#db.prepare("SELECT count(*) AS n FROM tasks WHERE agent_id=? AND state NOT IN ('completed','failed','cancelled')").get(agentId)!.n) };
   }
   deleteMemory(actor: Actor, agentId: string, id: string, revision: number): void {
     const principal = this.#admin(actor);
@@ -1174,7 +1238,7 @@ export class Runtime {
     this.#admin(actor);
     const db = this.#memory(actor, agentId);
     check(db.prepare('SELECT 1 FROM memories WHERE id=?').get(text(id, 100)), 'not_found', 'Memory not found');
-    return db.prepare("SELECT sequence,actor_id,revision,created_at FROM memory_audit WHERE memory_id=? AND action='admin_corrected' ORDER BY sequence DESC LIMIT 100").all(id).reverse();
+    return db.prepare("SELECT sequence,actor_id,revision,created_at,previous_body FROM memory_audit WHERE memory_id=? AND action='admin_corrected' ORDER BY sequence DESC LIMIT 100").all(id).reverse();
   }
   deletionRecords(actor: Actor): { agent_id: string; memory_id: string; revision: number }[] {
     this.#admin(actor);
@@ -1197,7 +1261,8 @@ export class Runtime {
       const db = this.#memory(actor, record.agent_id);
       transaction(db, () => {
         db.prepare('DELETE FROM memories WHERE id=?').run(record.memory_id);
-        db.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]';");
+        db.prepare('UPDATE memory_audit SET previous_body=NULL WHERE memory_id=?').run(record.memory_id);
+        db.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]'; DELETE FROM procedures;");
       });
     }
   }

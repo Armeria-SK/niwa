@@ -43,7 +43,7 @@ test('digest counts saved objects and classified intents, not completion claims,
  await r.tasks.externalOnce(actor,lease,'local',{name:'program_execute'},async()=>({code:0}));
  await r.tasks.externalOnce(actor,lease,'send',{name:'browser_form_submit'},async()=>({status:500}));
  await r.tasks.externalOnce(actor,lease,'unknown',{name:'browser_request_submit'},async()=>{throw Error('synthetic disconnect');});
- const digest=r.coordinationDigest(actor,room.id);assert.equal(digest.artifact_count,1);assert.equal(digest.revenue,'unverified');
+ const digest=r.coordinationDigest(actor,room.id);assert.equal(digest.artifact_count,1);assert.ok(!JSON.stringify(digest).includes('売上'));
  assert.equal(digest.operations.length,2);assert.equal(digest.operations.find(x=>x.tool_name==='browser_form_submit')!.recorded,1);
  assert.equal(digest.operations.find(x=>x.tool_name==='browser_request_submit')!.unknown,1);
  const hidden=r.createRoom(admin,'非共有',[leader.id]);r.createArtifact(actor,hidden.id,'hidden.txt','資料','hidden','hidden');
@@ -76,7 +76,7 @@ test('schema31 upgrade retains existing work, content and settings without backf
  const snapshot=(database:InstanceType<typeof DatabaseSync>)=>tables.map(table=>createHash('sha256').update(JSON.stringify(database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map(row=>{const {source_message_id,internal_autonomous,backup_enabled,...original}=row;return original;}))).digest('hex'));
  const before=snapshot(db);db.close();const reopened=new Runtime(root),after=new DatabaseSync(join(root,'control.db'));
  try{
-  assert.equal(after.prepare('PRAGMA user_version').get()!.user_version,54);assert.equal(reopened.settings(reopened.administrator()).backupEnabled,true);assert.deepEqual(snapshot(after),before);
+  assert.equal(after.prepare('PRAGMA user_version').get()!.user_version,55);assert.equal(reopened.settings(reopened.administrator()).backupEnabled,true);assert.deepEqual(snapshot(after),before);
   assert.equal(reopened.coordination(reopened.administrator(),room.id)[0]!.blocker,'');
   assert.equal(reopened.tasks.get(reopened.administrator(),lease.task.id).state,'waiting_user');
  }finally{after.close();reopened.close();}

@@ -483,3 +483,18 @@ test('delegation posts once in its own room, survives reopen and rolls back if t
   try {assert.deepEqual(reopened.messages(reopened.administrator(),room.id),messages);}
   finally {reopened.close();}
 });
+
+test('usage since a time sums reported tokens, estimates unreported input and is for the administrator only', () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-usage-')); const runtime = new Runtime(root);
+  try {
+    const admin = runtime.administrator(), leader = runtime.bootstrap(admin), actor = runtime.agentSession(leader.id), room = runtime.createRoom(admin, '共有');
+    runtime.tasks.create(admin, leader.id, room.id, '人工の仕事'); const lease = runtime.tasks.claim(admin)!;
+    const before = Date.now() - 1;
+    const prompt = (estimate: number) => runtime.tasks.recordPrompt(actor, lease, { version: 'legacy-v4', phase: 'work', rules_revision: 1, memory_revision: 1, input_bytes: 1, estimated_input_tokens: estimate, removed_messages: 0 });
+    runtime.tasks.finishPrompt(actor, lease, prompt(900), [{ type: 'usage', input_tokens: 1000, output_tokens: 80, total_tokens: 1080 }, { type: 'completed', finish_reason: 'stop' }]);
+    runtime.tasks.finishPrompt(actor, lease, prompt(700), [{ type: 'completed', finish_reason: 'stop' }]);
+    assert.deepEqual(runtime.tasks.usageSince(admin, before), { since: before, calls: 2, input: 1700, output: 80, estimated: 1 });
+    assert.equal(runtime.tasks.usageSince(admin, Date.now() + 60_000).calls, 0);
+    assert.throws(() => runtime.tasks.usageSince(actor, 0), /Administrator/);
+  } finally { runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});

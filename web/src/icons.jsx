@@ -35,3 +35,5 @@ export { WarningCircle as WarningIcon } from '@phosphor-icons/react/dist/csr/War
 
 export { PushPin as PinIcon } from '@phosphor-icons/react/dist/csr/PushPin';
 export { Archive as ArchiveIcon } from '@phosphor-icons/react/dist/csr/Archive';
+export { Sun as TodayIcon } from '@phosphor-icons/react/dist/csr/Sun';
+export { Notebook as RecordsIcon } from '@phosphor-icons/react/dist/csr/Notebook';

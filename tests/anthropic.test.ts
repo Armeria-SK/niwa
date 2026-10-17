@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync, statSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
+import { editSchema } from '../src/storage/database.ts';
 import { AnthropicAdapter, ANTHROPIC_ORIGIN, anthropicModelProfile, listAnthropicModels, unlistedAnthropicModel } from '../src/providers/anthropic/adapter.ts';
 import { collectModelEvents } from '../src/providers/shared/adapter.ts';
 import type { ModelEvent, ModelOutputDelta, ModelRequest } from '../src/contracts/model.ts';
@@ -400,10 +401,13 @@ test('upgrading a schema51 database widens the provider and fallback constraints
     const db = new DatabaseSync(join(root, 'control.db'));
     const sql = (name: string) => String(db.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(name)!.sql);
     const version = Number(db.prepare('PRAGMA schema_version').get()!.schema_version);
-    db.exec('BEGIN; PRAGMA writable_schema=ON;');
-    db.prepare("UPDATE sqlite_schema SET sql=? WHERE name='agents'").run(sql('agents').replace(",'anthropic'", '').replace("'local_llm'", "'ollama'"));
-    db.prepare("UPDATE sqlite_schema SET sql=? WHERE name='model_settings'").run(sql('model_settings').replaceAll("'local_llm'", "'ollama'").replace(",'anthropic'", ''));
-    db.exec(`PRAGMA schema_version=${version + 1}; PRAGMA writable_schema=OFF; COMMIT;`);
+    db.exec('BEGIN;');
+    editSchema(db, () => {
+      db.prepare("UPDATE sqlite_schema SET sql=? WHERE name='agents'").run(sql('agents').replace(",'anthropic'", '').replace("'local_llm'", "'ollama'"));
+      db.prepare("UPDATE sqlite_schema SET sql=? WHERE name='model_settings'").run(sql('model_settings').replaceAll("'local_llm'", "'ollama'").replace(",'anthropic'", ''));
+      db.exec(`PRAGMA schema_version=${version + 1}`);
+    });
+    db.exec('COMMIT;');
     db.exec('ALTER TABLE model_settings RENAME COLUMN local_llm_url TO ollama_url; ALTER TABLE model_settings DROP COLUMN anthropic_parallel; PRAGMA user_version=51;');
     assert.doesNotMatch(sql('agents') + sql('model_settings'), /anthropic/);
     const before = JSON.stringify(db.prepare('SELECT * FROM agents ORDER BY id').all());
@@ -412,7 +416,7 @@ test('upgrading a schema51 database widens the provider and fallback constraints
     runtime = new Runtime(root); admin = runtime.administrator();
     const after = new DatabaseSync(join(root, 'control.db'));
     try {
-      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 54);
+      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 55);
       assert.equal(JSON.stringify(after.prepare('SELECT * FROM agents ORDER BY id').all()), before);
       assert.equal(after.prepare('SELECT count(*) AS count FROM agent_autonomy').get()!.count, autonomy);
       assert.match(String(after.prepare("SELECT sql FROM sqlite_schema WHERE name='agents'").get()!.sql), /'openai_compatible','anthropic'/);

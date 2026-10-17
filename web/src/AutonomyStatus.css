@@ -1,36 +1,36 @@
 .autonomy-status { padding: 16px 18px 4px; background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius); }
 .autonomy-status-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.autonomy-status-heading h3 { font-size: 13px; font-weight: 500; line-height: 1.7; }
-.autonomy-status-heading > span { color: var(--muted); font-size: 10px; }
-.autonomy-status-hint { font-size: 11px; line-height: 1.8; color: var(--muted); margin: 5px 0 10px; }
+.autonomy-status-heading h3 { font-size: var(--fs-2); font-weight: 500; line-height: 1.7; }
+.autonomy-status-heading > span { color: var(--muted); font-size: var(--fs-1); }
+.autonomy-status-hint { font-size: var(--fs-1); line-height: 1.8; color: var(--muted); margin: 5px 0 10px; }
 .autonomy-member-row + .autonomy-member-row { border-top: 1px solid var(--border); }
 .autonomy-member > summary { display: grid; grid-template-columns: 30px minmax(0, 1fr) minmax(0, 1.3fr) 14px; align-items: center; gap: 12px; min-height: 64px; padding: 10px 0; cursor: pointer; list-style: none; }
 .autonomy-member > summary::-webkit-details-marker { display: none; }
-.autonomy-member-name { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
-.autonomy-member-state { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; text-align: right; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.autonomy-member-state time { color: var(--muted); font-size: 11px; }
+.autonomy-member-name { font-size: var(--fs-2); font-weight: 500; overflow-wrap: anywhere; }
+.autonomy-member-state { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; text-align: right; font-size: var(--fs-1); line-height: 1.6; overflow-wrap: anywhere; }
+.autonomy-member-state time { color: var(--muted); font-size: var(--fs-1); }
 .autonomy-member-chevron { color: var(--muted); }
 .autonomy-member[open] .autonomy-member-chevron { transform: rotate(180deg); }
-.autonomy-member-detail { padding: 0 0 12px 42px; color: var(--muted); font-size: 11px; line-height: 1.9; overflow-wrap: anywhere; }
-.autonomy-status-error { color: var(--danger); font-size: 12px; line-height: 1.8; padding-bottom: 12px; }
+.autonomy-member-detail { padding: 0 0 12px 42px; color: var(--muted); font-size: var(--fs-1); line-height: 1.9; overflow-wrap: anywhere; }
+.autonomy-status-error { color: var(--danger); font-size: var(--fs-1); line-height: 1.8; padding-bottom: 12px; }
 @media (max-width: 600px) {
   .autonomy-status { padding: 12px 12px 2px; }
   .autonomy-member > summary { gap: 8px; }
   .autonomy-member-detail { padding-left: 38px; }
 }
 
-.initiative-section { border-top:1px solid var(--border); padding:12px 0; font-size:12px; line-height:1.8; }
+.initiative-section { border-top:1px solid var(--border); padding:12px 0; font-size:var(--fs-1); line-height:1.8; }
 .initiative-section summary { cursor:pointer; overflow-wrap:anywhere; }
-.initiative-section summary span { margin-left:8px; color:var(--muted); font-size:11px; }
+.initiative-section summary span { margin-left:8px; color:var(--muted); font-size:var(--fs-1); }
 .initiative-section label { display:flex; gap:8px; align-items:center; margin-top:10px; }
 .initiative-item { padding:8px 0; border-top:1px solid var(--border); }
 .initiative-detail { color:var(--muted); overflow-wrap:anywhere; padding:8px 0; }
-.initiative-detail button { color:var(--ink); border:1px solid var(--border); background:var(--paper); border-radius:6px; padding:6px 10px; margin-top:8px; cursor:pointer; }
+.initiative-detail button { color:var(--ink); border:1px solid var(--border); background:var(--paper); border-radius:var(--r-s); padding:6px 10px; margin-top:8px; cursor:pointer; }
 
 .autonomy-member-row { display: flex; align-items: flex-start; gap: 12px; }
 .autonomy-member-row > .autonomy-member { flex: 1; min-width: 0; }
 .autonomy-member-toggle { flex: 0 0 auto; padding-top: 20px; }
 .autonomy-member-toggle .switch-row { padding: 0; border: 0; min-height: 24px; }
 .autonomy-member-toggle .switch-row > span:first-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.autonomy-member-toggle small { font-size: 10px; color: var(--muted); }
+.autonomy-member-toggle small { font-size: var(--fs-1); color: var(--muted); }
 @media (max-width: 600px) { .autonomy-member-row { gap: 8px; } .autonomy-member > summary { grid-template-columns: 30px minmax(0,1fr) 14px; } .autonomy-member-state { grid-column: 2; align-items: flex-start; text-align: left; } .autonomy-member-chevron { grid-column: 3; grid-row: 1; } }

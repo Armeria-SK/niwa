@@ -1,6 +1,6 @@
 import {useEffect,useState} from 'react';
 import {api} from './api.js';
-const labels={queued:'資源待ち',running:'実行中',completed:'終了',failed:'失敗',cancelled:'停止済み',outcome_unknown:'結果の確認が必要',ready:'準備済み',retired:'利用終了',preparing:'準備中'};
+const labels={queued:'資源待ち',running:'実行中',completed:'終了',failed:'失敗',cancelled:'中止済み',outcome_unknown:'結果の確認が必要',ready:'準備済み',retired:'利用終了',preparing:'準備中'};
 export function EnvironmentSettings({area}){
  const [value,setValue]=useState(null),[runs,setRuns]=useState([]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[preview,setPreview]=useState(null),[log,setLog]=useState(null);
  const base=`/workareas/${area}`;
@@ -28,10 +28,10 @@ export function EnvironmentSettings({area}){
   </>:null}
   {runs.map(run=><div key={run.id}><p>{value?.versions?.find(v=>v.id===run.environment)?.definition.name||'隔離実行'} · {labels[run.state]||run.state}</p><div className="inline-actions">
     <button className="button subtle" onClick={async()=>{try{const r=await api(`${base}/executions/${run.id}`);setLog(r.logs||r.result||{});}catch(e){setError(e.message);}}}>ログ</button>
-    {['queued','running'].includes(run.state)?<button className="button secondary" disabled={busy} onClick={()=>action(`${base}/executions/${run.id}/stop`)}>停止</button>:null}
+    {['queued','running'].includes(run.state)?<button className="button secondary" disabled={busy} onClick={()=>action(`${base}/executions/${run.id}/stop`)}>中止</button>:null}
     {run.preview&&run.state==='running'?<><button className="button subtle" disabled={busy} onClick={()=>view(run)}>画面を確認</button><button className="button subtle" disabled={busy} onClick={()=>view(run,true)}>モバイル表示</button></>:null}
   </div></div>)}
   {log?<pre className="artifact-document">{[log.stdout,log.stderr,log.error].filter(Boolean).join('\n')||'まだ出力はありません。'}</pre>:null}
-  {preview?<><p className="field-hint">隔離ブラウザーの画面です。外部公開していません。操作後の確認は再取得してください。</p><img alt="制作中の画面プレビュー" src={`data:image/jpeg;base64,${preview.data}`} style={{maxWidth:'100%',height:'auto'}}/></>:null}
+  {preview?<><p className="field-hint">隔離ブラウザーの画面です。<br />外部公開していません。<br />操作後の確認は再取得してください。</p><img alt="制作中の画面プレビュー" src={`data:image/jpeg;base64,${preview.data}`} style={{maxWidth:'100%',height:'auto'}}/></>:null}
  </div></details>;
 }

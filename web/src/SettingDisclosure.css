@@ -1,5 +1,5 @@
-.setting-disclosure { border:1px solid var(--border); border-radius:9px; font-size:12px; margin:10px 0; background:var(--paper); }
-.setting-disclosure > summary { display:flex; align-items:center; gap:12px; padding:12px 14px; list-style:none; cursor:pointer; border-radius:8px; }
+.setting-disclosure { border:1px solid var(--border); border-radius:var(--r-m); font-size:var(--fs-1); margin:10px 0; background:var(--paper); }
+.setting-disclosure > summary { display:flex; align-items:center; gap:12px; padding:12px 14px; list-style:none; cursor:pointer; border-radius:var(--r-m); }
 .setting-disclosure > summary::-webkit-details-marker { display:none; }
 .setting-name { font-weight:500; }
 .setting-value { margin-left:auto; color:var(--muted); text-align:right; }

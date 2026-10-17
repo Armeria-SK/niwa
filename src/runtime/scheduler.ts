@@ -18,9 +18,14 @@ export class Scheduler {
   #now: () => number;
   #watching: Promise<void> | undefined;
   #watchAbort = new AbortController();
+  #modelReady: (() => Promise<ReadonlySet<string>>) | undefined;
+  #ready: ReadonlySet<string> | undefined;
+  #readying: Promise<void> | undefined;
+  #nextReadyCheck = 0;
 
-  constructor(runtime: Runtime, runner: Pick<TurnRunner, 'run'>, now: () => number = Date.now) {
-    this.#runtime = runtime; this.#admin = runtime.administrator(); this.#runner = runner; this.#now = now;
+  /** With `modelReady`, autonomous wakes start only for Bots whose provider it lists; until the first answer, none start. */
+  constructor(runtime: Runtime, runner: Pick<TurnRunner, 'run'>, now: () => number = Date.now, modelReady?: () => Promise<ReadonlySet<string>>) {
+    this.#runtime = runtime; this.#admin = runtime.administrator(); this.#runner = runner; this.#now = now; this.#modelReady = modelReady;
   }
   #abort(job: { abort: AbortController; abortedAt?: number }): void {
     job.abortedAt ??= this.#now();
@@ -50,7 +55,13 @@ export class Scheduler {
     this.#guard('schedules', () => this.#runtime.schedules.dispatch(this.#admin));
     if (Date.now() >= this.#nextWakeCheck) {
       this.#nextWakeCheck = Date.now() + 1000;
-      this.#guard('autonomousWakes', () => this.#runtime.autonomousWakes.dispatch(this.#admin));
+      // Saved connections change only through settings; reading the key files every five seconds is enough.
+      if (this.#modelReady && !this.#readying && Date.now() >= this.#nextReadyCheck) {
+        this.#nextReadyCheck = Date.now() + 5000;
+        this.#readying = this.#modelReady().then(ready => { this.#ready = ready; })
+          .catch(error => this.#guard('modelReady', () => { throw error; })).finally(() => { this.#readying = undefined; });
+      }
+      this.#guard('autonomousWakes', () => this.#runtime.autonomousWakes.dispatch(this.#admin, undefined, this.#modelReady ? this.#ready ?? new Set() : undefined));
       // Page checks are network-bound; one pass at a time, and a rejected pass is logged like a throwing phase.
       if (!this.#watching) this.#guard('watch', () => {
         this.#watching = this.#runtime.schedules.watch(this.#admin, this.#watchAbort.signal)
@@ -88,7 +99,7 @@ export class Scheduler {
   async stop(): Promise<void> {
     this.#stopped = true;
     clearInterval(this.#timer);
-    this.#watchAbort.abort(); await this.#watching;
+    this.#watchAbort.abort(); await this.#watching; await this.#readying;
     for (const job of this.#jobs.values()) {
       this.#runtime.tasks.interrupt(this.#admin, job.lease);
       this.#abort(job);

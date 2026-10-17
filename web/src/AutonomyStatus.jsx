@@ -34,7 +34,7 @@ export function AutonomyStatus({ members = [] }) {
   };
   return <section className="autonomy-status" aria-label="自発活動の起動状況">
     <div className="autonomy-status-heading"><h3>自発活動の起動状況</h3><span>保存済みの設定</span></div>
-    <p className="autonomy-status-hint">Botごとの許可を切り替えられます。変更はすぐに保存され、全体の許可がオンの場合だけ有効です。</p>
+    <p className="autonomy-status-hint">Botごとの許可を切り替えられます。<br />変更はすぐに保存され、全体の許可がオンの場合だけ有効です。</p>
     <div className="autonomy-status-list">{rows.map(row => <div className="autonomy-member-row" key={row.agent_id}><details className="autonomy-member">
       <summary><Avatar member={members.find(member => member.id === row.agent_id)} size={30} motion="none" />
         <span className="autonomy-member-name">{row.name}</span>
@@ -46,12 +46,12 @@ export function AutonomyStatus({ members = [] }) {
     {saveError?<p className="autonomy-status-error" role="alert">保存できませんでした。{saveError}</p>:null}
     {initiatives ? <details className="initiative-section"><summary>継続する取り組み <span>{initiatives.items.length}件</span></summary>
       <label className="autonomy-status-hint"><input type="checkbox" checked={initiatives.enabled} disabled={saving} onChange={e=>change('/initiatives',{enabled:e.target.checked})} /> 継続記録を自発活動に利用する</label>
-      <p className="autonomy-status-hint">目的と次の行動を引き継ぎます。既存の保留操作や承認は変更しません。停止した仕事の再開は、仕事ごとに確認します。</p>
-      {initiatives.items.map(item=><details className="initiative-item" key={item.id}><summary>{item.body.purpose}<span>{({active:'見直し待ち',resting:'休息中',paused:'停止中',completed:'終了'})[item.state]}</span></summary>
-        <div className="initiative-detail"><p>担当：{members.find(m=>m.id===item.owner_id)?.name || '削除済みメンバー'}</p><p>取り組む理由：{item.body.reason}</p><p>完成条件：{item.body.completion}</p><p>次の行動：{item.body.next_action}</p><p>試した方法：{item.body.method}</p><p>結果：{item.body.last_result || '未記録'}</p>
+      <p className="autonomy-status-hint">目的と次の行動を引き継ぎます。<br />既存の保留操作や承認は変更しません。<br />停止した仕事の再開は、仕事ごとに確認します。</p>
+      {initiatives.items.map(item=><details className="initiative-item" key={item.id}><summary>{item.body.purpose}<span>{({active:'見直し待ち',resting:'休息中',paused:'一時停止中',completed:'終了'})[item.state]}</span></summary>
+        <div className="initiative-detail"><p>担当：{members.find(m=>m.id===item.owner_id)?.name || '削除したBot'}</p><p>取り組む理由：{item.body.reason}</p><p>完成条件：{item.body.completion}</p><p>次の行動：{item.body.next_action}</p><p>試した方法：{item.body.method}</p><p>結果：{item.body.last_result || '未記録'}</p>
           {item.waits?.map(wait=><p key={wait.id}>現在の待機：{wait.reason} — {wait.wait_reason}</p>)}<p>保存した見直し条件：{item.body.wait.detail || 'なし'}</p>
           <p>判定の理由：{item.review_reason}</p><p>見直し：{new Date(item.review_at).toLocaleString('ja-JP')}</p><p>関連する仕事：{item.tasks.length}件／根拠付きの結論：{item.evidence.length}件（品質の自動評価ではありません）</p>
-          {item.state!=='completed'?<button type="button" disabled={saving} onClick={()=>change('/initiatives/'+item.id,{paused:item.state!=='paused',revision:item.revision})}>{item.state==='paused'?'見直しを再開':'取り組みを停止'}</button>:null}
+          {item.state!=='completed'?<button type="button" disabled={saving} onClick={()=>change('/initiatives/'+item.id,{paused:item.state!=='paused',revision:item.revision})}>{item.state==='paused'?'見直しを再開':'取り組みを一時停止'}</button>:null}
         </div></details>)}
       {!initiatives.items.length?<p className="autonomy-status-hint">継続する取り組みはまだありません。</p>:null}
     </details>:null}

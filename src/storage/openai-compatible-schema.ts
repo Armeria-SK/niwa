@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { editSchema } from './database.ts';
 import { ANTHROPIC_AGENTS_CHECK } from './anthropic-schema.ts';
 import { LOCAL_LLM_AGENTS_CHECK } from './local-llm-schema.ts';
 
@@ -21,11 +22,10 @@ export function openaiCompatibleSchema(db: DatabaseSync): void {
 function widen(db: DatabaseSync, sql: string): void {
   if (sql.split(PREVIOUS).length !== 2) throw new Error('Unexpected agents schema');
   const version = Number(db.prepare('PRAGMA schema_version').get()!.schema_version);
-  db.exec('PRAGMA writable_schema=ON');
-  try {
+  editSchema(db, () => {
     db.prepare("UPDATE sqlite_schema SET sql=? WHERE type='table' AND name='agents'").run(sql.replace(PREVIOUS, NEXT));
     db.exec(`PRAGMA schema_version=${version + 1}`);
-  } finally { db.exec('PRAGMA writable_schema=OFF'); }
+  });
   const check = db.prepare('PRAGMA integrity_check').all();
   if (check.length !== 1 || check[0]!.integrity_check !== 'ok') throw new Error('Schema integrity check failed');
 }

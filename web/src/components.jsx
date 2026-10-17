@@ -1,20 +1,22 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import { SHAPES, PALETTE } from './data.js';
 import { CloseIcon, UserIcon, CheckIcon, InfoIcon } from './icons.jsx';
+import { splitSentences } from './sentences.js';
 
 export function Avatar({ member, shape, color, motion, size = 48, className = '' }) {
   if (!member && !shape) return <span className={`human-avatar ${className}`} style={{ width: size, height: size }} aria-hidden="true"><UserIcon size={size * .8} weight="light" /></span>;
   const preference = motion ?? member?.motion ?? 'auto';
   const stopped = motion === undefined && (member?.status === 'sleeping' || member?.activity === '一時停止中');
   const animation = stopped ? 'none' : preference === 'auto' ? (motion !== undefined ? 'sway' : member?.runtimeMotion || 'none') : preference;
-  return <span className={`bot-avatar ${className}`} data-motion={animation} aria-hidden="true" style={{ width: size, height: size, backgroundColor: color || member?.color, maskImage: `url(/assets/avatar-${shape || member?.shape || 'pebble'}.png)` }} />;
+  return <span className={`bot-avatar ${className}`} data-motion={animation} aria-hidden="true" style={{ width: size, height: size, backgroundColor: color || member?.color, maskImage: `url(/assets/avatar-${shape || member?.shape || 'pebble'}.svg)` }} />;
 }
 
 export function IconButton({ label, children, className = '', ...props }) {
   return <button type="button" className={`icon-button ${className}`} aria-label={label} title={label} {...props}>{children}</button>;
 }
 
-export function Modal({ title, children, onClose, className = '' }) {
+/** 重ねて出す窓。drawer は画面の右から出る脇の欄（スマートフォンでは全面）で、後ろの画面を見失わずに詳しく読むためのもの。 */
+export function Modal({ title, children, onClose, className = '', drawer = false }) {
   const ref = useRef(null);
   const titleId = useId();
   useEffect(() => {
@@ -23,7 +25,7 @@ export function Modal({ title, children, onClose, className = '' }) {
     dialog.showModal();
     return () => { dialog.close(); previous?.focus?.(); };
   }, []);
-  return <dialog ref={ref} className={`modal ${className}`} aria-labelledby={titleId} onCancel={e => { e.preventDefault(); onClose(); }} onClick={e => { if (e.target === e.currentTarget) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) onClose(); } }}>
+  return <dialog ref={ref} className={`modal ${drawer ? 'drawer' : ''} ${className}`} aria-labelledby={titleId} onCancel={e => { e.preventDefault(); onClose(); }} onClick={e => { if (e.target === e.currentTarget) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) onClose(); } }}>
     <div className="modal-top"><h2 id={titleId}>{title}</h2><IconButton label="閉じる" onClick={onClose}><CloseIcon size={21} /></IconButton></div>
     {children}
   </dialog>;
@@ -36,8 +38,18 @@ export function Segmented({ label, options, value, onChange, className = '' }) {
   })}</div>;
 }
 
+/** 文ごとに改行して読みやすくする。文字列でない中身はそのまま出す。 */
+export function Sentences({ children }) {
+  if (typeof children !== 'string') return children ?? null;
+  return splitSentences(children).map((part, index) => <Fragment key={index}>{index ? <br /> : null}{part}</Fragment>);
+}
+
+export function SetupNotice({ notice, onConnect }) {
+  return <div className="inline-notice setup-notice" role="status"><InfoIcon size={20} /><div><strong>{notice.title}</strong><p><Sentences>{notice.body}</Sentences></p><button type="button" className="button primary" onClick={onConnect}>モデルをつなぐ</button></div></div>;
+}
+
 export function EmptyState({ icon: Icon = InfoIcon, title, children, action }) {
-  return <div className="empty-state"><Icon size={34} weight="light" /><h3>{title}</h3>{children ? <p>{children}</p> : null}{action}</div>;
+  return <div className="empty-state"><Icon size={34} weight="light" /><h3>{title}</h3>{children ? <p><Sentences>{children}</Sentences></p> : null}{action}</div>;
 }
 
 export function AppearanceFields({ draft, onChange }) {
@@ -51,7 +63,7 @@ export function AppearanceFields({ draft, onChange }) {
     <fieldset><legend>動き</legend><MotionPicker value={motion} onChange={value => onChange('motion', value)} /></fieldset>
     <fieldset><legend>カラー</legend><div className="swatches">{PALETTE.map(item => <button key={item.color} type="button" title={item.name} aria-label={item.name} aria-pressed={color.toLowerCase() === item.color.toLowerCase()} className={color.toLowerCase() === item.color.toLowerCase() ? 'swatch selected' : 'swatch'} style={{ '--swatch': item.color }} onClick={() => chooseColor(item.color)}>{color.toLowerCase() === item.color.toLowerCase() ? <CheckIcon size={16} weight="bold" /> : null}</button>)}</div></fieldset>
     <label className="field"><span>好きな色を指定</span><div className="color-custom"><input type="color" aria-label="カラーピッカー" value={color} onChange={e => chooseColor(e.target.value)} /><input aria-label="カラーコード" value={draft.color} maxLength={7} spellCheck="false" onChange={e => { onChange('color', e.target.value); }} /></div>{!valid ? <small className="field-error">#と6桁の英数字で指定してください。</small> : null}</label>
-    <p className="field-hint">形・色・動きは、いつでも変更できます。端末で動きを減らす設定をしている場合は静止します。</p>
+    <p className="field-hint">形・色・動きは、いつでも変更できます。<br />端末で動きを減らす設定をしている場合は静止します。</p>
   </div>;
 }
 
@@ -70,7 +82,7 @@ export function AppearanceEditor({ member, onSave, onCancel }) {
     } finally { working.current = false; setSaving(false); }
   }}>
     <AppearanceFields draft={draft} onChange={(key, value) => setDraft(current => ({ ...current, [key]: value }))} />
-    <div className="form-actions">{onCancel ? <button type="button" className="button subtle" onClick={onCancel}>キャンセル</button> : null}<button type="button" className="button subtle" onClick={() => setDraft(member)}>最新の内容を読み込む</button><button className="button primary" disabled={!valid || saving}>{saving ? '保存しています…' : '保存'}</button></div>
+    <div className="form-actions">{onCancel ? <button type="button" className="button subtle" onClick={onCancel}>やめる</button> : null}<button type="button" className="button subtle" onClick={() => setDraft(member)}>最新の内容を読み込む</button><button className="button primary" disabled={!valid || saving}>{saving ? '保存しています…' : '保存'}</button></div>
   </form>;
 }
 

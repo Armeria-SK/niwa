@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { editSchema } from '../src/storage/database.ts';
 import { Runtime } from '../src/runtime/runtime.ts';
 import { Backups } from '../src/backup/backups.ts';
 import { prepareRestore } from '../src/backup/restore.ts';
@@ -57,9 +58,12 @@ function rewindLocalLlm(file: string, member: string): void {
   try {
     const sql = (name: string) => String(db.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(name)!.sql);
     const version = Number(db.prepare('PRAGMA schema_version').get()!.schema_version);
-    db.exec('BEGIN; PRAGMA writable_schema=ON;');
-    for (const name of ['agents', 'model_settings']) db.prepare('UPDATE sqlite_schema SET sql=? WHERE name=?').run(sql(name).replaceAll("'local_llm'", "'ollama'"), name);
-    db.exec(`PRAGMA schema_version=${version + 1}; PRAGMA writable_schema=OFF; COMMIT;`);
+    db.exec('BEGIN;');
+    editSchema(db, () => {
+      for (const name of ['agents', 'model_settings']) db.prepare('UPDATE sqlite_schema SET sql=? WHERE name=?').run(sql(name).replaceAll("'local_llm'", "'ollama'"), name);
+      db.exec(`PRAGMA schema_version=${version + 1}`);
+    });
+    db.exec('COMMIT;');
     db.exec(`ALTER TABLE model_settings RENAME COLUMN local_llm_url TO ollama_url;
       UPDATE agents SET provider='ollama' WHERE provider='local_llm'; UPDATE model_settings SET fallback_provider='ollama' WHERE fallback_provider='local_llm';
       UPDATE generated_model SET provider='ollama' WHERE provider='local_llm'; UPDATE model_routes SET provider='ollama' WHERE provider='local_llm'; PRAGMA user_version=52;`);
@@ -74,7 +78,7 @@ function assertLocalLlm(file: string, member: string, autonomy: number): void {
   const db = new DatabaseSync(file);
   try {
     const sql = (name: string) => String(db.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(name)!.sql);
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 54);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 55);
     assert.equal(db.prepare('PRAGMA integrity_check').get()!.integrity_check, 'ok');
     assert.doesNotMatch(sql('agents') + sql('model_settings'), /ollama/);
     assert.equal(db.prepare('SELECT provider FROM agents WHERE id=?').get(member)!.provider, 'local_llm');

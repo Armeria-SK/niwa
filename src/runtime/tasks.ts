@@ -495,6 +495,13 @@ export class Tasks {
   discardPrompt(actor:Actor,lease:TaskLease,id:number){this.#owned(actor,lease);this.#db.prepare("UPDATE prompt_runs SET status='discarded' WHERE id=? AND task_id=?").run(id,lease.task.id);}
   promptAttempts(actor:Actor,lease:TaskLease,phase:string):number{this.#owned(actor,lease);return Number(this.#db.prepare("SELECT count(*) AS count FROM prompt_runs WHERE task_id=? AND phase=? AND status NOT IN ('failed','discarded')").get(lease.task.id,phase)!.count);}
   promptRuns(actor:Actor,id:string){this.get(actor,id);return this.#db.prepare('SELECT * FROM prompt_runs WHERE task_id=? ORDER BY id').all(id);}
+  /** Model use across all work since a time, for the administrator: reported tokens, with the estimate standing in where none was reported. */
+  usageSince(actor:Actor,since:number){
+    this.#admin(actor);check(Number.isSafeInteger(since)&&since>=0,'invalid','Invalid time');
+    const row=this.#db.prepare(`SELECT count(*) AS calls,coalesce(sum(coalesce(input_tokens,estimated_input_tokens)),0) AS input,coalesce(sum(output_tokens),0) AS output,
+      coalesce(sum(input_tokens IS NULL),0) AS estimated FROM prompt_runs WHERE created_at>=? AND status<>'discarded'`).get(since)!;
+    return {since,calls:Number(row.calls),input:Number(row.input),output:Number(row.output),estimated:Number(row.estimated)};
+  }
   steps(actor: Actor, id: string): { step: number; memory_revision: number; rules_revision: number; discarded: number; events: ModelEvent[] }[] {
     const task = this.get(actor, id);
     const db = this.#access.memory(actor, task.agent_id);

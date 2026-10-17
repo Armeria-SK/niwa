@@ -97,3 +97,42 @@ test('procedures persist across restart but changed sources cannot be used and m
     assert.throws(() => runtime.procedureTool(actor, lease, 'read-again', 'procedure_read', { id, revision: null }), /unavailable/);
   } finally { db.close(); runtime.close(); }
 });
+
+test('administrators read the procedure book with use counts and can turn a procedure off and on; bots cannot', t => {
+  const f = fixture(t);
+  assert.deepEqual(f.runtime.procedureBook(f.admin, f.leader.id), []);
+  const { id } = f.run('procedure_save', { id: null, expected_revision: 0, procedure: f.procedure }, 'create');
+  f.run('procedure_apply', { id, revision: 1, plan_revision: 0, applicability: '同じ資料の更新' }, 'apply');
+  const [entry] = f.runtime.procedureBook(f.admin, f.leader.id);
+  assert.deepEqual({ ...entry, saved_at: 0, last_used_at: 0 }, { id, revision: 1, enabled: true, title: '資料確認', conditions: '同じ資料の更新を調べるとき', steps: ['原文を読む', '前回と比較する'],
+    saved_at: 0, uses: 1, last_used_at: 0, disabled_reason: null, room_title: '共有', private: false });
+  f.runtime.setProcedureEnabled(f.admin, f.leader.id, String(id), false);
+  assert.equal(f.runtime.procedureBook(f.admin, f.leader.id)[0]!.enabled, false);
+  assert.equal((f.run('procedure_search', { query: '資料確認' }).results as JsonObject[]).length, 0);
+  f.runtime.setProcedureEnabled(f.admin, f.leader.id, String(id), true);
+  assert.equal((f.run('procedure_search', { query: '資料確認' }).results as JsonObject[]).length, 1);
+  assert.throws(() => f.runtime.setProcedureEnabled(f.admin, f.leader.id, 'f'.repeat(64), false), /not found/);
+  assert.throws(() => f.runtime.procedureBook(f.actor, f.leader.id));
+});
+
+test('a memory correction stops only procedures citing it, keeps the old wording only when asked, and deletion still forgets everything derived', t => {
+  const f = fixture(t);
+  const memory = f.runtime.remember(f.actor, f.source.id, '資料は毎週月曜に更新される');
+  const cited = { ...f.procedure, title: '記憶を使う手順', sources: [{ kind: 'memory', source_id: memory.id, revision: f.runtime.readHistory(f.actor, f.room.id, 'memory', memory.id).revision }] };
+  const plain = f.run('procedure_save', { id: null, expected_revision: 0, procedure: f.procedure }, 'plain').id as string;
+  const citing = f.run('procedure_save', { id: null, expected_revision: 0, procedure: cited }, 'citing').id as string;
+  const impact = f.runtime.memoryImpact(f.admin, f.leader.id, memory.id);
+  assert.deepEqual(impact.procedures, [{ id: citing, title: '記憶を使う手順' }]); assert.equal(impact.procedure_count, 2); assert.ok(impact.open_tasks >= 1);
+  f.runtime.correctMemory(f.admin, f.leader.id, memory.id, 1, '資料は毎週火曜に更新される');
+  const book = new Map(f.runtime.procedureBook(f.admin, f.leader.id).map(entry => [entry.id, entry]));
+  assert.equal(book.get(plain)!.enabled, true); assert.equal(book.get(citing)!.enabled, false); assert.equal(book.get(citing)!.disabled_reason, 'memory_corrected');
+  assert.throws(() => f.runtime.setProcedureEnabled(f.admin, f.leader.id, citing, true), /corrected/);
+  assert.equal((f.runtime.memoryCorrections(f.admin, f.leader.id, memory.id) as { previous_body: string | null }[])[0]!.previous_body, null);
+  f.runtime.correctMemory(f.admin, f.leader.id, memory.id, 2, '資料は毎週水曜に更新される', true);
+  assert.equal((f.runtime.memoryCorrections(f.admin, f.leader.id, memory.id) as { previous_body: string | null }[]).at(-1)!.previous_body, '資料は毎週火曜に更新される');
+  f.runtime.updateProfile(f.admin, f.leader.id, { persona: '新しい人工の性格' });
+  assert.equal(f.runtime.procedureBook(f.admin, f.leader.id).length, 2);
+  f.runtime.deleteMemory(f.admin, f.leader.id, memory.id, 3);
+  assert.deepEqual(f.runtime.procedureBook(f.admin, f.leader.id), []);
+  assert.ok((f.runtime.memoryAudit(f.admin, f.leader.id) as { previous_body: string | null }[]).every(row => row.previous_body === null));
+});

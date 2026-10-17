@@ -1,3 +1,4 @@
+import type { DatabaseSync } from 'node:sqlite';
 export const controlSchema = `
 CREATE TABLE agents (
   id TEXT PRIMARY KEY,
@@ -127,4 +128,13 @@ CREATE INDEX memory_creation_order ON memory_audit(sequence,memory_id) WHERE act
 CREATE TABLE task_memory_reviews (
   task_id TEXT PRIMARY KEY, memory_revision INTEGER NOT NULL, rules_revision INTEGER NOT NULL
 ) STRICT;
-`];
+`, memoryCorrectionSchema];
+
+/** Idempotent. Procedures are no longer dropped on every memory revision: deletions remove them in code, and a correction stops only those
+ * citing the memory. The previous wording is kept only when the administrator asks for it on a correction, and cleared when the memory is deleted. */
+function memoryCorrectionSchema(db: DatabaseSync): void {
+  db.exec('DROP TRIGGER IF EXISTS invalidate_procedures');
+  const has = (table: string, column: string) => db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column);
+  if (!has('procedures', 'disabled_reason')) db.exec('ALTER TABLE procedures ADD COLUMN disabled_reason TEXT');
+  if (!has('memory_audit', 'previous_body')) db.exec('ALTER TABLE memory_audit ADD COLUMN previous_body TEXT');
+}
