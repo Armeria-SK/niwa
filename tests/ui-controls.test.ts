@@ -104,3 +104,18 @@ test('second opinions show the estimate before asking, explain failures by kind 
  assert.deepEqual(modelCheckView({review_model:'anthropic/claude-x/high',checks:'broken'}).checks,[]);
  assert.deepEqual(checkProviders(['anthropic','local_llm','openai_compatible'],['openai_subscription','anthropic']),['anthropic']);
 });
+test('the watch tab has its own URL and reads tools, outcomes, times and limits in plain words',async()=>{
+ const {parseRoute,routeHash}=await ui('route.js');
+ assert.deepEqual(parseRoute('#records/watch'),{page:'records',tab:'watch'});assert.equal(routeHash({page:'records',tab:'watch'}),'#records/watch');
+ const {toolLabel,outcomeLabel,agoLabel,limitLabel,nightLine}=await ui('watch.js');
+ assert.equal(toolLabel('browser_form_submit'),'フォームの送信');assert.equal(toolLabel('page_read'),'ページの取得');
+ assert.equal(toolLabel('mcp_github_create_issue'),'MCPの操作（github：create_issue）');assert.equal(toolLabel('odd_tool'),'そのほかの操作（odd_tool）');
+ assert.equal(outcomeLabel({outcome:'recorded',failed:false}),'記録あり');assert.equal(outcomeLabel({outcome:'recorded',failed:true}),'記録あり（失敗の記録）');assert.equal(outcomeLabel({outcome:'unknown'}),'結果不明');
+ const now=Date.UTC(2026,9,17,12);
+ assert.deepEqual([agoLabel(now-30_000,now),agoLabel(now-5*60_000,now),agoLabel(now-3*3600_000,now),agoLabel(now-2*86400_000,now),agoLabel(now+1000,now),agoLabel(0,now)],['たった今','5分前','3時間前','2日前','','']);
+ assert.equal(limitLabel(5,24),'5 / 24回');assert.equal(limitLabel(1200),'1,200回');
+ assert.equal(nightLine({decision:'approved',used:3,limit:30,in_night:true}),'今夜の上限：モデル呼び出し 3 / 30回');
+ assert.equal(nightLine({decision:'approved',used:0,limit:30,in_night:false}),'今夜の上限：モデル呼び出し 0 / 30回（夜はまだ始まっていません）');
+ assert.equal(nightLine({decision:'skipped'}),'今夜は休ませると決めています。');
+ assert.match(nightLine({decision:null,preview:true}),/まだ決めていません/);assert.match(nightLine({decision:null,preview:false}),/下見はオフ/);
+});

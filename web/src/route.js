@@ -3,7 +3,7 @@ export const PAGES = ['today', 'conversation', 'bots', 'records', 'settings'];
 export const BOT_TABS = ['profile', 'memory', 'procedures'];
 // 「みんなの記憶」は、Botの代わりに everyone を選んだ形で開く（#bots/everyone/conflicts）。
 export const EVERYONE_TABS = ['search', 'conflicts'];
-export const RECORD_TABS = ['recap', 'running', 'approval', 'artifacts', 'schedules'];
+export const RECORD_TABS = ['recap', 'running', 'approval', 'artifacts', 'schedules', 'watch'];
 export const SETTINGS_TABS = ['theme', 'rules', 'models', 'mcp', 'activity', 'backup'];
 // 前の名前のURL（ブックマークや、MCPの認証から戻るページ）もそのまま開けるようにする。
 const OLD_NAMES = { members: 'bots', activity: 'records' };

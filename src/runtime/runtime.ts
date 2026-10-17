@@ -56,6 +56,7 @@ import { findMemoryConflicts } from './memory-conflicts.ts';
 import { nightSchema } from '../storage/night-schema.ts';
 import { NightPlans } from './night-plans.ts';
 import { secondOpinionSchema } from '../storage/second-opinion-schema.ts';
+import { Watch } from './watch.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -103,6 +104,7 @@ export class Runtime {
   readonly tasks: Tasks;
   readonly autonomousWakes: AutonomousWakes;
   readonly nights: NightPlans;
+  readonly watch: Watch;
   readonly artifactVersions: ArtifactVersions;
   readonly schedules: Schedules;
   readonly providerLimits: ProviderLimits;
@@ -139,6 +141,7 @@ export class Runtime {
     this.workareas = new Workareas(this.#db,this,actor=>this.#principal(actor));
     this.initiatives = new Initiatives(this.#db,this,actor=>this.#principal(actor));
     this.nights = new NightPlans(this.#db, actor => this.#admin(actor));
+    this.watch = new Watch(this.#db, this, actor => this.#admin(actor));
     this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id,this.initiatives,now=>this.nights.gate(now));
     this.quality = new ArtifactQuality(this.#db,this,actor=>this.#principal(actor));
     this.artifactVersions = new ArtifactVersions(this.#db,this,actor=>this.#principal(actor));

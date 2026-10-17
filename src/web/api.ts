@@ -263,6 +263,8 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       run: (m, b) => { runtime.tasks.instruct(admin, m[1]!, b.body as string); return { ok: true }; } },
     {method:'GET',path:/^\/api\/tasks\/([0-9a-f-]{36})\/prompt-runs$/,run:m=>runtime.tasks.promptRuns(admin,m[1]!)},
     { method: 'GET', path: /^\/api\/night$/, run: () => runtime.nights.state(admin, Date.now()) },
+    // The watch screen reads only; its one action, pausing everything, is the existing PATCH /api/settings.
+    { method: 'GET', path: /^\/api\/watch$/, run: () => runtime.watch.state(admin, Date.now()) },
     { method: 'POST', path: /^\/api\/night\/decision$/, schema: object({ night: Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }), approved: Type.Boolean(), call_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })) }),
       run: (_m, b) => runtime.nights.decide(admin, Date.now(), b.night as string, b.approved as boolean, b.call_limit as number | undefined) },
     { method: 'POST', path: /^\/api\/night\/preview$/, schema: object({ enabled: Type.Boolean() }), run: (_m, b) => runtime.nights.setPreview(admin, b.enabled as boolean) },

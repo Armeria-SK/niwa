@@ -393,6 +393,22 @@
   .model-check { border: 1px solid var(--border); border-radius: var(--r-m); padding: 10px 12px; display: grid; gap: 6px; font-size: var(--fs-1); }
   .model-check ul { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; line-height: 1.7; }
   .model-check .stale { color: var(--warn); }
+  /* 見張り：読むだけの4つの枠。状態の色は役割の名前だけを使う。 */
+  .watch-view .section-toolbar { align-items: flex-start; }
+  .watch-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding-bottom: 24px; }
+  .watch-grid h3 { font-size: var(--fs-3); font-weight: 500; margin-bottom: 10px; }
+  .watch-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .watch-list li { display: grid; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-2); }
+  .watch-list li:last-child { border-bottom: 0; padding-bottom: 0; }
+  .watch-list li > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .watch-list li .muted { font-size: var(--fs-1); }
+  .watch-list p { overflow-wrap: anywhere; line-height: 1.7; }
+  .watch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: var(--fs-1); color: var(--muted); }
+  .watch-address { font-size: var(--fs-1); color: var(--muted); }
+  .watch-night { font-size: var(--fs-2); margin: 12px 0; }
+  .watch-meters { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; font-size: var(--fs-1); }
+  .watch-meters li { display: grid; grid-template-columns: minmax(0, 8em) minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+  .watch-meters meter { width: 100%; }
   @keyframes drawer-in { from { transform: translateX(28px); opacity: 0; } }
   .memory-search { position: sticky; top: -5px; z-index: 1; background: var(--canvas); padding-block: 4px 0; }
   .memory-search .memory-count { margin: 10px 0 4px; }
@@ -611,6 +627,7 @@
     .message-reply, .message-compare { opacity: .55; }
     .message-compare { margin-left: -6px; }
     .opinion-compare { grid-template-columns: 1fr; }
+    .watch-grid { grid-template-columns: 1fr; }
     .message-content h1 { font-size: var(--fs-4); line-height: 1.65; margin-top: 8px; }
     .message-content p { font-size: var(--fs-2); line-height: 1.9; margin-top: 8px; }
     .root-message .message-content p { margin-top: 10px; }
