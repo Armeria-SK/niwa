@@ -262,6 +262,10 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/tasks\/([0-9a-f-]{36})\/instruct$/, schema: object({ body: string }),
       run: (m, b) => { runtime.tasks.instruct(admin, m[1]!, b.body as string); return { ok: true }; } },
     {method:'GET',path:/^\/api\/tasks\/([0-9a-f-]{36})\/prompt-runs$/,run:m=>runtime.tasks.promptRuns(admin,m[1]!)},
+    // Replay is for the administrator only; a branch is a new task and never changes the original.
+    { method: 'GET', path: /^\/api\/tasks\/([0-9a-f-]{36})\/replay$/, run: m => runtime.replays.timeline(admin, m[1]!) },
+    { method: 'POST', path: /^\/api\/tasks\/([0-9a-f-]{36})\/branch$/, schema: object({ at: Type.Integer({ minimum: 0, maximum: 8_000_000_000_000_000 }), prompt: Type.String({ minLength: 1, maxLength: 8000 }) }),
+      run: (m, b) => { const task = runtime.replays.branch(admin, m[1]!, b.at as number, b.prompt as string); return { task_id: task.id }; } },
     { method: 'GET', path: /^\/api\/night$/, run: () => runtime.nights.state(admin, Date.now()) },
     // Trust follows the administrator's record of approvals: Niwa suggests, and only these presses raise or lower it.
     { method: 'GET', path: /^\/api\/trust$/, run: () => runtime.trust.state(admin) },

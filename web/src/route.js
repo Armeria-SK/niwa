@@ -14,11 +14,11 @@ export function parseRoute(hash) {
   const [head = '', ...rest] = String(hash || '').replace(/^#/, '').split('/').map(part => { try { return decodeURIComponent(part); } catch { return ''; } });
   const page = OLD_NAMES[head] || head;
   if (!PAGES.includes(page)) return { page: 'today' };
-  const [first, second] = rest;
+  const [first, second, third] = rest;
   if (page === 'conversation') return ID.test(first || '') ? { page, id: first } : { page };
   if (page === 'bots') return ID.test(first || '') ? { page, id: first, ...((first === 'everyone' ? EVERYONE_TABS : BOT_TABS).includes(second) ? { tab: second } : {}) } : { page };
   if (page === 'records') {
-    if (first === 'task' && ID.test(second || '')) return { page, task: second };
+    if (first === 'task' && ID.test(second || '')) return { page, task: second, ...(third === 'replay' ? { replay: true } : {}) };
     return RECORD_TABS.includes(first) ? { page, tab: first } : { page };
   }
   if (page === 'settings') return SETTINGS_TABS.includes(first) ? { page, tab: first } : { page };
@@ -27,10 +27,10 @@ export function parseRoute(hash) {
 
 /** parseRoute の逆。余分な部分は付けない。 */
 export function routeHash(route) {
-  const { page, id, tab, task } = route, parts = [page];
+  const { page, id, tab, task, replay } = route, parts = [page];
   if (page === 'conversation' && id) parts.push(id);
   else if (page === 'bots' && id) parts.push(id, ...(tab ? [tab] : []));
-  else if (page === 'records') parts.push(...(task ? ['task', task] : tab ? [tab] : []));
+  else if (page === 'records') parts.push(...(task ? ['task', task, ...(replay ? ['replay'] : [])] : tab ? [tab] : []));
   else if (page === 'settings' && tab) parts.push(tab);
   return '#' + parts.map(encodeURIComponent).join('/');
 }

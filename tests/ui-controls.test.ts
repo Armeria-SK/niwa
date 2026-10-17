@@ -137,3 +137,17 @@ test('attachments are sorted into text, images and PDFs by their bytes, and an i
  assert.equal(unseenNotice(['リーダー','カナデ']),'リーダー・カナデのモデルは画像を見られないため、この画像を認識できませんでした。');assert.equal(unseenNotice([]),'');
  assert.deepEqual([formatSize(512),formatSize(2048),formatSize(3*1024*1024)],['512 B','2.0 KB','3.0 MB']);
 });
+test('a task replay has its own URL and reads each kind of record in plain words',async()=>{
+ const {parseRoute,routeHash}=await ui('route.js');
+ assert.deepEqual(parseRoute('#records/task/t-1/replay'),{page:'records',task:'t-1',replay:true});assert.deepEqual(parseRoute('#records/task/t-1/other'),{page:'records',task:'t-1'});
+ assert.equal(routeHash({page:'records',task:'t-1',replay:true}),'#records/task/t-1/replay');assert.equal(routeHash({page:'records',task:'t-1'}),'#records/task/t-1');
+ const {replayItemView}=await ui('replay.js');
+ assert.deepEqual(replayItemView({type:'event',code:'running'}),{label:'状態',detail:'実行を開始',tone:'info'});
+ assert.equal(replayItemView({type:'model',phase:'work',status:'completed',input_tokens:1200,output_tokens:60,estimated_input_tokens:1300}).detail,'返答・作業：完了（入力1,200・出力60）');
+ assert.equal(replayItemView({type:'model',phase:'memory_review',status:'unknown',input_tokens:null,output_tokens:null,estimated_input_tokens:900}).detail,'記憶の整理：結果不明（入力の見積もり900）');
+ assert.deepEqual(replayItemView({type:'tool',name:'web_read',args:'{"url":"u"}',result:'本文',failed:false}),{label:'道具 web_read',detail:'{"url":"u"} → 本文',tone:'info'});
+ assert.equal(replayItemView({type:'tool',name:'web_read',args:'',result:'',failed:true}).detail,'→ 失敗');
+ assert.deepEqual(replayItemView({type:'outside',name:'browser_form_submit',outcome:'unknown'}),{label:'外部への操作 browser_form_submit',detail:'結果不明',tone:'warn'});
+ assert.equal(replayItemView({type:'message',link:'response',author:'リーダー',text:'答え'}).label,'返答（リーダー）');
+ assert.equal(replayItemView({type:'approval',decision:'auto'}).detail,'任せた範囲で自動');
+});
