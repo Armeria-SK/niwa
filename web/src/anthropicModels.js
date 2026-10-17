@@ -5,8 +5,9 @@ import { api } from './api.js';
 export const ANTHROPIC_CHANGED = 'niwa:anthropic-changed';
 export const notifyAnthropicChanged = () => window.dispatchEvent(new Event(ANTHROPIC_CHANGED));
 
-/** APIキーが保存されていれば、そのキーで使えるClaudeのモデルを新しい順に取得する。キーの保存・削除後は自動で取り直す。 */
-export function useAnthropicModels() {
+/** APIキーが保存されていれば、そのキーで使えるClaudeのモデルを新しい順に取得する。キーの保存・削除後は自動で取り直す。
+ * enabled を外すと取りに行かない（親が取った一覧を使い回すとき）。 */
+export function useAnthropicModels(enabled = true) {
   const [state, setState] = useState({ keyConfigured: false, models: [], error: '', manual: false, loading: true });
   const reload = useCallback(async () => {
     setState(current => ({ ...current, loading: true }));
@@ -23,9 +24,10 @@ export function useAnthropicModels() {
     } catch (error) { setState({ keyConfigured: false, models: [], error: error.message, manual: false, loading: false }); }
   }, []);
   useEffect(() => {
+    if (!enabled) return undefined;
     void reload();
     window.addEventListener(ANTHROPIC_CHANGED, reload);
     return () => window.removeEventListener(ANTHROPIC_CHANGED, reload);
-  }, [reload]);
+  }, [reload, enabled]);
   return { ...state, reload };
 }

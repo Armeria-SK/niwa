@@ -144,7 +144,7 @@ export function App() {
   async function refresh() {
     const version = ++refreshVersion.current;
     try {
-      const [state, modelSettings, savedUpdates, savedArtifacts, savedSchedules] = await Promise.all([api('/state'), api('/model-settings'), api('/updates'), api('/artifacts'), api('/schedules')]);
+      const [state, savedUpdates, savedArtifacts, savedSchedules] = await Promise.all([api('/state'), api('/updates'), api('/artifacts'), api('/schedules')]);
       if (version !== refreshVersion.current) return true;
       if (previousTasks.current) for (const task of state.tasks) {
         if (task.state !== 'completed' || previousTasks.current.get(task.id) === 'completed') continue;
@@ -175,7 +175,7 @@ export function App() {
       setSchedules(savedSchedules);
       api('/model-ready').then(result => { if (version === refreshVersion.current) setReadyProviders(result.providers); }).catch(() => {});
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
-        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, localLlmUrl: modelSettings.localLlmUrl || '', maxParallel: modelSettings.maxParallel ?? 1, rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
+        concurrent: state.settings.concurrencyLimit ?? 3, backupDays: state.settings.backupDays, backupTime: state.settings.backupTime, backupEnabled: state.settings.backupEnabled, autonomous: state.settings.autonomous, rules: state.commonRules.body, rulesRevision: state.commonRules.revision }));
       setReady(true);
       setLoadError(''); setOffline(false);
       return true;
@@ -274,8 +274,6 @@ export function App() {
       ...(touched.has('backupEnabled') ? { backupEnabled: next.backupEnabled } : {}), ...(touched.has('autonomous') ? { autonomous: next.autonomous } : {}),
       ...(touched.has('theme') ? { theme: next.theme } : {}) };
     if (Object.keys(patch).length) await api('/settings', 'PATCH', patch);
-    const model = { ...(touched.has('localLlmUrl') ? { localLlmUrl: next.localLlmUrl || null } : {}), ...(touched.has('maxParallel') ? { maxParallel: Number(next.maxParallel) } : {}) };
-    if (Object.keys(model).length) await api('/model-settings', 'PATCH', model);
     setSettings(current => ({ ...current, theme: next.theme }));
   }); }
   const leader = members.find(member => member.authority === 'leader');

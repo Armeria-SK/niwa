@@ -332,6 +332,12 @@
   .settings-save { margin-top: 29px; border-top: 1px solid var(--border); }
   .connection-row { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding: 0 0 15px; font-size: var(--fs-3); }
   .connection-row strong { font-weight: 500; }
+  .model-picker { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .model-picker-more > summary { width: fit-content; cursor: pointer; padding: 4px 0; font-size: var(--fs-1); color: var(--muted); }
+  .model-picker-more > summary:hover { color: var(--accent-text); }
+  .model-picker-more > .inline-actions:first-of-type { margin-top: 6px; }
+  .model-choice { display: flex; flex-direction: column; gap: 6px; margin-bottom: 22px; }
+  .model-choice > .inline-actions { margin-top: 4px; }
   .connection-state { display: flex; align-items: center; gap: 7px; color: var(--faint); font-size: var(--fs-1); }
   .connection-state .status-dot { background: var(--border-strong); }
   .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 10px 0; position: relative; cursor: pointer; }
