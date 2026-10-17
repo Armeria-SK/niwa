@@ -7,11 +7,15 @@ import { DAY, dayLabel, todayDigest } from '../today.js';
 import { ChatIcon, ChevronRightIcon, FileIcon, PauseIcon, PlayIcon } from '../icons.jsx';
 
 /** 開いて最初に見る画面。あなたの番・直近24時間にできたもの・庭の様子を1枚にまとめる。 */
-export function Today({ notice, paused, onPause, attention, members, memberMap, activities, artifacts, decisions, threads, onOpenTask, onThread, onRead, onRecap, onArtifact, onMember, onNewThread }) {
+export function Today({ onConflicts, notice, paused, onPause, attention, members, memberMap, activities, artifacts, decisions, threads, onOpenTask, onThread, onRead, onRecap, onArtifact, onMember, onNewThread }) {
   // 開いたままでも日付と「直近24時間」がずれないよう、5分ごとに今の時刻を取り直す。
   const [now, setNow] = useState(Date.now);
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 300_000); return () => clearInterval(timer); }, []);
-  const digest = todayDigest({ now, paused, attention, activities, artifacts, decisions });
+  // 記憶の食い違いは開いたときに1回だけ数える（AIモデルは使わない）。0組なら何も出さない。
+  const [conflicts, setConflicts] = useState(0);
+  useEffect(() => { let active = true; api('/memories/conflicts').then(items => { if (active) setConflicts(items.length); }).catch(() => {}); return () => { active = false; }; }, []);
+  const items = conflicts ? [...attention, { kind: 'conflicts', id: 'conflicts', title: `食い違いかもしれない記憶が${conflicts}組あります`, detail: 'Botが覚えていることを見比べて、直すか、そのままにするかを決めます。' }] : attention;
+  const digest = todayDigest({ now, paused, attention: items, activities, artifacts, decisions });
   const [usage, setUsage] = useState(null);
   const finished = activities.filter(task => task.state === 'completed').length;
   useEffect(() => {
@@ -28,7 +32,7 @@ export function Today({ notice, paused, onPause, attention, members, memberMap, 
       {threads.length ? null : <section className="today-card today-start"><h2>最初の会話を始めましょう</h2><p>リーダーに、名前や好きなことを話してみてください。<br />話した内容から、少しずつ記憶が育ちます。</p><button className="button primary" onClick={onNewThread}><ChatIcon size={17} />会話を始める</button></section>}
       <div className="today-grid">
         <div className="today-main">
-          <AttentionList items={attention} members={memberMap} onOpen={onOpenTask} onThread={onThread} onRead={onRead} onRecap={onRecap} />
+          <AttentionList items={items} members={memberMap} onOpen={onOpenTask} onThread={onThread} onRead={onRead} onRecap={onRecap} onConflicts={onConflicts} />
           <section className="today-card" aria-labelledby="today-made">
             <h2 id="today-made">直近24時間にできたもの</h2>
             {digest.decided.length || digest.made.length ? <ul className="today-list">

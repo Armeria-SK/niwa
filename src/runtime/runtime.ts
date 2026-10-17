@@ -51,6 +51,8 @@ import { providerRetrySchema } from '../storage/provider-retry-schema.ts';
 import { commonRulesSchema } from '../storage/common-rules-schema.ts';
 import { commonRulesDefaultSchema, commonRulesGeneralDefaultSchema } from '../storage/common-rules-default-schema.ts';
 import { THEME_IDS, themeSchema } from '../storage/theme-schema.ts';
+import { memoryConflictSchema } from '../storage/memory-conflict-schema.ts';
+import { findMemoryConflicts } from './memory-conflicts.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -110,7 +112,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -1155,18 +1157,56 @@ export class Runtime {
     const row = this.#db.prepare("SELECT title,visibility FROM rooms WHERE id=? AND id NOT IN (SELECT id FROM deleted_content WHERE kind='room')").get(id);
     return row ? { title: String(row.title), visibility: String(row.visibility) } : undefined;
   }
-  /** Administrator view of memoryPage: when each memory was made and the conversation and words it came from. Bots never receive this. */
-  memoryPageWithSources(actor: Actor, agentId: string, query = '', before = Number.MAX_SAFE_INTEGER) {
-    this.#admin(actor);
-    const page = this.memoryPage(actor, agentId, query, before), db = this.#memory(actor, agentId);
+  /** When each memory was made and the conversation and words it came from. For administrator views only; Bots never receive this. */
+  #withSources(db: DatabaseSync, items: Memory[]) {
     const created = db.prepare("SELECT created_at FROM memory_audit WHERE memory_id=? AND action='created' ORDER BY sequence LIMIT 1");
     const message = this.#db.prepare('SELECT m.body,m.author_id,m.created_at,a.name FROM messages m LEFT JOIN agents a ON a.id=m.author_id WHERE m.id=? AND m.room_id=?');
-    return { ...page, items: page.items.map(item => {
+    return items.map(item => {
       const source = this.#liveRoom(item.source_room_id), said = source ? message.get(item.source_message_id, item.source_room_id) : undefined;
       return { ...item, created_at: String(created.get(item.id)?.created_at ?? ''),
         source: source ? { room_title: String(source.title), private: source.visibility === 'private',
           ...(said ? { excerpt: String(said.body).slice(0, 160), author_id: String(said.author_id), author_name: said.name === null ? null : String(said.name), said_at: String(said.created_at) } : {}) } : null };
-    }) };
+    });
+  }
+  /** Administrator view of memoryPage, with where each memory came from. */
+  memoryPageWithSources(actor: Actor, agentId: string, query = '', before = Number.MAX_SAFE_INTEGER) {
+    this.#admin(actor);
+    const page = this.memoryPage(actor, agentId, query, before);
+    return { ...page, items: this.#withSources(this.#memory(actor, agentId), page.items) };
+  }
+  /** Administrator search across every Bot's memories: who knows about something. Words separated by spaces must all appear. */
+  whoKnows(actor: Actor, query: string) {
+    this.#admin(actor);
+    const terms = typeof query === 'string' ? query.trim().split(/\s+/).filter(Boolean) : [];
+    check(query.length <= 200 && terms.length >= 1 && terms.length <= 8, 'invalid', 'Invalid memory search');
+    const where = terms.map(() => "m.body LIKE ? ESCAPE '\\'").join(' AND '), patterns = terms.map(term => `%${term.replace(/[\\%_]/g, '\\$&')}%`);
+    return this.agents(actor).flatMap(agent => {
+      const db = this.#memory(actor, agent.id);
+      const total = Number(db.prepare(`SELECT count(*) AS total FROM memories m WHERE ${where}`).get(...patterns)!.total);
+      if (!total) return [];
+      const items = db.prepare(`SELECT m.* FROM memories m JOIN memory_audit a ON a.memory_id=m.id AND a.action='created' WHERE ${where} ORDER BY a.sequence DESC LIMIT 20`).all(...patterns) as unknown as Memory[];
+      return [{ agent_id: agent.id, name: agent.name, total, items: this.#withSources(db, items) }];
+    }).sort((a, b) => b.total - a.total);
+  }
+  /** Memories that may disagree, within one Bot or between Bots, minus pairs the administrator already marked as fine. No model is called. */
+  memoryConflicts(actor: Actor) {
+    this.#admin(actor);
+    const agents = this.agents(actor), names = new Map(agents.map(agent => [agent.id, agent.name]));
+    const recent = "SELECT m.id,m.body,m.revision FROM memories m JOIN memory_audit a ON a.memory_id=m.id AND a.action='created' ORDER BY a.sequence DESC LIMIT 2000";
+    const memories = agents.flatMap(agent => this.#memory(actor, agent.id).prepare(recent).all().map(row => ({ agent_id: agent.id, id: String(row.id), body: String(row.body), revision: Number(row.revision) })));
+    const dismissed = new Set(this.#db.prepare('SELECT pair FROM memory_conflict_dismissals').all().map(row => String(row.pair)));
+    const detail = (memory: { agent_id: string; id: string }) => {
+      const db = this.#memory(actor, memory.agent_id), row = db.prepare('SELECT * FROM memories WHERE id=?').get(memory.id) as unknown as Memory;
+      return { ...this.#withSources(db, [row])[0]!, agent_id: memory.agent_id, agent_name: names.get(memory.agent_id) ?? '' };
+    };
+    return findMemoryConflicts(memories, 200).filter(conflict => !dismissed.has(conflict.pair)).slice(0, 50)
+      .map(conflict => ({ pair: conflict.pair, differences: conflict.differences, same_bot: conflict.a.agent_id === conflict.b.agent_id, memories: [detail(conflict.a), detail(conflict.b)] }));
+  }
+  dismissMemoryConflict(actor: Actor, pair: string): { ok: true } {
+    this.#admin(actor);
+    check(typeof pair === 'string' && /^[0-9a-f]{64}$/.test(pair), 'invalid', 'Invalid memory pair');
+    this.#db.prepare('INSERT OR IGNORE INTO memory_conflict_dismissals(pair,created_at) VALUES (?,?)').run(pair, Date.now());
+    return { ok: true };
   }
   /** Administrator view of a Bot's procedure book: the current version of each procedure, its conversation, and how often it was applied. */
   procedureBook(actor: Actor, agentId: string) {

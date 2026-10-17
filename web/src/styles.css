@@ -381,6 +381,18 @@
   @keyframes drawer-in { from { transform: translateX(28px); opacity: 0; } }
   .memory-search { position: sticky; top: -5px; z-index: 1; background: var(--canvas); padding-block: 4px 0; }
   .memory-search .memory-count { margin: 10px 0 4px; }
+  .everyone-row .everyone-icon { width: 44px; height: 44px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; background: var(--selected); color: var(--accent-text); }
+  .everyone-memory { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+  .who-knows-group { margin-top: 18px; }
+  .who-knows-bot { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 4px; text-align: left; border-bottom: 1px solid var(--border); }
+  .who-knows-bot strong { font-size: var(--fs-3); font-weight: 500; }
+  .who-knows-bot span { margin-left: auto; font-size: var(--fs-1); color: var(--muted); }
+  .who-knows-bot:hover strong { color: var(--accent-text); text-decoration: underline; text-underline-offset: 4px; }
+  .conflict-card { margin-top: 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--r-l); background: var(--paper); }
+  .conflict-top { display: flex; align-items: flex-start; gap: 10px; }
+  .conflict-top ul { margin: 0; padding-left: 18px; font-size: var(--fs-2); }
+  .conflict-card .inline-actions { margin-top: 8px; }
+  .memory-owner { display: inline-flex; align-items: center; gap: 6px; color: var(--accent-text); font-weight: 500; }
   .today-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; padding: 5px 10px 18px 4px; }
   .today-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 22px; align-items: start; }
   .today-main, .today-side { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
