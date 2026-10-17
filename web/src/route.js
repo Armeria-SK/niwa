@@ -2,6 +2,7 @@
 export const PAGES = ['today', 'conversation', 'bots', 'records', 'settings'];
 export const BOT_TABS = ['profile', 'memory', 'procedures', 'export'];
 // 「みんなの記憶」は、Botの代わりに everyone を選んだ形で開く（#bots/everyone/conflicts）。
+// 「Botの読み込み」も、Botの代わりに import を選んだ形で開く（#bots/import）。こちらに欄はない。
 export const EVERYONE_TABS = ['search', 'conflicts'];
 export const RECORD_TABS = ['recap', 'running', 'approval', 'artifacts', 'schedules', 'watch'];
 export const SETTINGS_TABS = ['theme', 'rules', 'models', 'mcp', 'activity', 'backup'];
@@ -16,6 +17,7 @@ export function parseRoute(hash) {
   if (!PAGES.includes(page)) return { page: 'today' };
   const [first, second, third] = rest;
   if (page === 'conversation') return ID.test(first || '') ? { page, id: first } : { page };
+  if (page === 'bots' && first === 'import') return { page, id: first };
   if (page === 'bots') return ID.test(first || '') ? { page, id: first, ...((first === 'everyone' ? EVERYONE_TABS : BOT_TABS).includes(second) ? { tab: second } : {}) } : { page };
   if (page === 'records') {
     if (first === 'task' && ID.test(second || '')) return { page, task: second, ...(third === 'replay' ? { replay: true } : {}) };
@@ -29,7 +31,7 @@ export function parseRoute(hash) {
 export function routeHash(route) {
   const { page, id, tab, task, replay } = route, parts = [page];
   if (page === 'conversation' && id) parts.push(id);
-  else if (page === 'bots' && id) parts.push(id, ...(tab ? [tab] : []));
+  else if (page === 'bots' && id) parts.push(id, ...(tab && id !== 'import' ? [tab] : []));
   else if (page === 'records') parts.push(...(task ? ['task', task, ...(replay ? ['replay'] : [])] : tab ? [tab] : []));
   else if (page === 'settings' && tab) parts.push(tab);
   return '#' + parts.map(encodeURIComponent).join('/');

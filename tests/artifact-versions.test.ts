@@ -76,7 +76,7 @@ test('schema31 upgrade retains existing work, content and settings without backf
  const snapshot=(database:InstanceType<typeof DatabaseSync>)=>tables.map(table=>createHash('sha256').update(JSON.stringify(database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map(row=>{const {source_message_id,internal_autonomous,backup_enabled,...original}=row;return original;}))).digest('hex'));
  const before=snapshot(db);db.close();const reopened=new Runtime(root),after=new DatabaseSync(join(root,'control.db'));
  try{
-  assert.equal(after.prepare('PRAGMA user_version').get()!.user_version,60);assert.equal(reopened.settings(reopened.administrator()).backupEnabled,true);assert.deepEqual(snapshot(after),before);
+  assert.equal(after.prepare('PRAGMA user_version').get()!.user_version,61);assert.equal(reopened.settings(reopened.administrator()).backupEnabled,true);assert.deepEqual(snapshot(after),before);
   assert.equal(reopened.coordination(reopened.administrator(),room.id)[0]!.blocker,'');
   assert.equal(reopened.tasks.get(reopened.administrator(),lease.task.id).state,'waiting_user');
  }finally{after.close();reopened.close();}

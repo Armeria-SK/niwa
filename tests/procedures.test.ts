@@ -105,7 +105,7 @@ test('administrators read the procedure book with use counts and can turn a proc
   f.run('procedure_apply', { id, revision: 1, plan_revision: 0, applicability: '同じ資料の更新' }, 'apply');
   const [entry] = f.runtime.procedureBook(f.admin, f.leader.id);
   assert.deepEqual({ ...entry, saved_at: 0, last_used_at: 0 }, { id, revision: 1, enabled: true, title: '資料確認', conditions: '同じ資料の更新を調べるとき', steps: ['原文を読む', '前回と比較する'],
-    saved_at: 0, uses: 1, last_used_at: 0, disabled_reason: null, room_title: '共有', private: false });
+    saved_at: 0, uses: 1, last_used_at: 0, disabled_reason: null, room_title: '共有', private: false, imported: false });
   f.runtime.setProcedureEnabled(f.admin, f.leader.id, String(id), false);
   assert.equal(f.runtime.procedureBook(f.admin, f.leader.id)[0]!.enabled, false);
   assert.equal((f.run('procedure_search', { query: '資料確認' }).results as JsonObject[]).length, 0);
