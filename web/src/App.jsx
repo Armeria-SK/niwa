@@ -224,8 +224,8 @@ export function App() {
     if (existing) { openThread(existing.id); return; }
     setModal({ type: 'new-thread', member: id, scope: 'private' });
   }
-  function saveMemory(memory, text) {
-    return mutate(() => api(`/agents/${memory.member}/memories/${memory.id}`, 'PATCH', { revision: memory.revision, body: text }), '記憶を訂正しました');
+  function saveMemory(memory, text, keepPrevious = false) {
+    return mutate(() => api(`/agents/${memory.member}/memories/${memory.id}`, 'PATCH', { revision: memory.revision, body: text, keep_previous: keepPrevious }), '記憶を訂正しました');
   }
   function deleteMemory(memory) {
     return mutate(() => api(`/agents/${memory.member}/memories/${memory.id}`, 'DELETE', { revision: memory.revision }), '記憶を削除しました');

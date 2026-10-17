@@ -232,6 +232,14 @@
   .procedure-bottom { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 12px; }
   .procedure-bottom span { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
   .procedure-bottom .button { min-height: 32px; padding: 5px 10px; font-size: 12px; }
+  .procedure-stopped { font-size: 12px; color: #9b6a2f; line-height: 1.7; }
+  .keep-previous { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; cursor: pointer; }
+  .keep-previous input { margin-top: 5px; }
+  .keep-previous small { display: block; font-size: 12px; color: var(--muted); }
+  .memory-impact { margin: 0; padding: 12px 14px 12px 30px; border-radius: 9px; background: var(--surface); font-size: 13px; line-height: 1.8; color: var(--text); }
+  .revision-list > div { flex-wrap: wrap; }
+  .revision-previous { display: block; flex-basis: 100%; margin: 2px 0 0 28px; font-size: 12px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+  blockquote.revision-previous { border-left: 2px solid var(--border); padding-left: 10px; }
   .memory-actions { display: flex; gap: 4px; }
   .memory-actions .icon-button { width: 28px; height: 28px; }
   .revision-link { font-size: 10px; }

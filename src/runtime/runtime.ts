@@ -86,6 +86,10 @@ export type Actor = { readonly [identity]: true };
 type Principal = { kind: 'admin'; id: 'administrator' } | { kind: 'agent'; id: string };
 
 /** Trusted application service. Do not expose this object to generated code or models. */
+/** Procedures whose current version cites the memory bound to the single parameter. */
+const CITING_PROCEDURES = `SELECT p.id FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision, json_each(v.body,'$.sources') s
+  WHERE json_extract(s.value,'$.kind')='memory' AND json_extract(s.value,'$.source_id')=?`;
+
 export class Runtime {
   readonly quality: ArtifactQuality;
   readonly initiatives: Initiatives;
@@ -655,7 +659,7 @@ export class Runtime {
             memory.prepare('DELETE FROM memories WHERE id=?').run(row.id as string);
             this.#audit(memory, row.id as string, 'deleted', 'administrator', Number(row.revision) + 1);
           }
-          memory.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]';");
+          memory.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]'; DELETE FROM procedures;");
         });
       }
       transaction(this.#db, () => {
@@ -1052,11 +1056,13 @@ export class Runtime {
     }
     return db;
   }
-  #audit(db: DatabaseSync, id: string, action: string, actorId: string, revision: number): void {
-    db.prepare('INSERT INTO memory_audit(memory_id, action, actor_id, revision, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(id, action, actorId, revision, new Date().toISOString());
+  #audit(db: DatabaseSync, id: string, action: string, actorId: string, revision: number, previousBody: string | null = null): void {
+    db.prepare('INSERT INTO memory_audit(memory_id, action, actor_id, revision, created_at, previous_body) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, action, actorId, revision, new Date().toISOString(), previousBody);
     // New memories are picked up on the next turn. Corrections/deletions invalidate old generated output.
     if (action !== 'created') db.exec('UPDATE memory_state SET revision = revision + 1 WHERE id = 1');
+    // A deleted memory may be quoted anywhere in derived procedures, and its kept wording must go with it.
+    if (action === 'deleted') { db.exec('DELETE FROM procedures'); db.prepare('UPDATE memory_audit SET previous_body=NULL WHERE memory_id=?').run(id); }
   }
   remember(actor: Actor, sourceMessageId: string, body: string, operationId?: string): Memory {
     const principal = this.#bot(actor);
@@ -1164,7 +1170,7 @@ export class Runtime {
   procedureBook(actor: Actor, agentId: string) {
     this.#admin(actor);
     const db = this.#memory(actor, agentId);
-    return db.prepare(`SELECT p.id,p.room_id,p.revision,p.enabled,v.body,v.created_at,(SELECT count(*) FROM procedure_uses u WHERE u.procedure_id=p.id) AS uses,
+    return db.prepare(`SELECT p.id,p.room_id,p.revision,p.enabled,p.disabled_reason,v.body,v.created_at,(SELECT count(*) FROM procedure_uses u WHERE u.procedure_id=p.id) AS uses,
       (SELECT max(created_at) FROM procedure_uses u WHERE u.procedure_id=p.id) AS last_used_at
       FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision ORDER BY v.created_at DESC LIMIT 200`).all().map(row => {
       let body: { title?: unknown; conditions?: unknown; steps?: unknown } = {};
@@ -1172,26 +1178,42 @@ export class Runtime {
       const source = this.#liveRoom(String(row.room_id));
       return { id: String(row.id), revision: Number(row.revision), enabled: row.enabled === 1, title: String(body.title ?? ''), conditions: String(body.conditions ?? ''),
         steps: Array.isArray(body.steps) ? body.steps.map(String) : [], saved_at: Number(row.created_at), uses: Number(row.uses),
-        last_used_at: row.last_used_at === null ? null : Number(row.last_used_at), room_title: source ? String(source.title) : null, private: source?.visibility === 'private' };
+        last_used_at: row.last_used_at === null ? null : Number(row.last_used_at), disabled_reason: row.disabled_reason === null ? null : String(row.disabled_reason), room_title: source ? String(source.title) : null, private: source?.visibility === 'private' };
     });
   }
   /** Turning a procedure back on does not vouch for it: the Bot still rechecks its sources before each use and disables it if they changed. */
   setProcedureEnabled(actor: Actor, agentId: string, id: string, enabled: boolean): void {
     this.#admin(actor);
     check(typeof enabled === 'boolean', 'invalid', 'Expected boolean');
-    const result = this.#memory(actor, agentId).prepare('UPDATE procedures SET enabled=? WHERE id=?').run(enabled ? 1 : 0, id);
-    check(Number(result.changes) === 1, 'not_found', 'Procedure not found');
+    const db = this.#memory(actor, agentId), row = db.prepare('SELECT disabled_reason FROM procedures WHERE id=?').get(id);
+    check(row, 'not_found', 'Procedure not found');
+    check(!enabled || row.disabled_reason !== 'memory_corrected', 'conflict', 'A memory this procedure cites was corrected; the Bot must save it again');
+    db.prepare('UPDATE procedures SET enabled=?,disabled_reason=NULL WHERE id=?').run(enabled ? 1 : 0, id);
   }
-  correctMemory(actor: Actor, agentId: string, id: string, revision: number, body: string): void {
+  /** The previous wording is kept only when asked, so a correction that removes something private leaves no copy. */
+  correctMemory(actor: Actor, agentId: string, id: string, revision: number, body: string, keepPrevious = false): void {
     const principal = this.#admin(actor);
     text(body);
+    check(typeof keepPrevious === 'boolean', 'invalid', 'Expected boolean');
     const db = this.#memory(actor, agentId);
     transaction(db, () => {
+      const previous = db.prepare('SELECT body FROM memories WHERE id=? AND revision=?').get(text(id, 100), this.#revision(revision));
       const result = db.prepare('UPDATE memories SET body = ?, revision = revision + 1 WHERE id = ? AND revision = ?')
-        .run(body, text(id, 100), this.#revision(revision));
+        .run(body, id, revision);
       check(result.changes === 1, 'conflict', 'Memory revision changed or memory was deleted');
-      this.#audit(db, id, 'admin_corrected', principal.id, revision + 1);
+      this.#audit(db, id, 'admin_corrected', principal.id, revision + 1, keepPrevious ? String(previous!.body) : null);
+      db.prepare(`UPDATE procedures SET enabled=0,disabled_reason='memory_corrected' WHERE id IN (${CITING_PROCEDURES})`).run(id);
     });
+  }
+  /** What a correction of this memory changes, shown before saving: procedures citing it stop, and this Bot's open work starts its step again. */
+  memoryImpact(actor: Actor, agentId: string, id: string) {
+    this.#admin(actor);
+    const db = this.#memory(actor, agentId);
+    check(db.prepare('SELECT 1 FROM memories WHERE id=?').get(text(id, 100)), 'not_found', 'Memory not found');
+    const citing = db.prepare(`SELECT p.id,v.body FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision WHERE p.id IN (${CITING_PROCEDURES})`).all(id)
+      .map(row => { let title = ''; try { title = String((JSON.parse(String(row.body)) as { title?: unknown }).title ?? ''); } catch { /* Untitled. */ } return { id: String(row.id), title }; });
+    return { procedures: citing, procedure_count: Number(db.prepare('SELECT count(*) AS n FROM procedures').get()!.n),
+      open_tasks: Number(this.#db.prepare("SELECT count(*) AS n FROM tasks WHERE agent_id=? AND state NOT IN ('completed','failed','cancelled')").get(agentId)!.n) };
   }
   deleteMemory(actor: Actor, agentId: string, id: string, revision: number): void {
     const principal = this.#admin(actor);
@@ -1214,7 +1236,7 @@ export class Runtime {
     this.#admin(actor);
     const db = this.#memory(actor, agentId);
     check(db.prepare('SELECT 1 FROM memories WHERE id=?').get(text(id, 100)), 'not_found', 'Memory not found');
-    return db.prepare("SELECT sequence,actor_id,revision,created_at FROM memory_audit WHERE memory_id=? AND action='admin_corrected' ORDER BY sequence DESC LIMIT 100").all(id).reverse();
+    return db.prepare("SELECT sequence,actor_id,revision,created_at,previous_body FROM memory_audit WHERE memory_id=? AND action='admin_corrected' ORDER BY sequence DESC LIMIT 100").all(id).reverse();
   }
   deletionRecords(actor: Actor): { agent_id: string; memory_id: string; revision: number }[] {
     this.#admin(actor);
@@ -1237,7 +1259,8 @@ export class Runtime {
       const db = this.#memory(actor, record.agent_id);
       transaction(db, () => {
         db.prepare('DELETE FROM memories WHERE id=?').run(record.memory_id);
-        db.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]';");
+        db.prepare('UPDATE memory_audit SET previous_body=NULL WHERE memory_id=?').run(record.memory_id);
+        db.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]'; DELETE FROM procedures;");
       });
     }
   }
