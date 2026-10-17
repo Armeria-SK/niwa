@@ -12,15 +12,14 @@ import { createApiServer } from '../src/web/api.ts';
 import { Backups } from '../src/backup/backups.ts';
 import { initializeProduct } from '../src/config/paths.ts';
 
-test('content deletion and approval endpoints require login and reject stale approval details', async t => {
+test('content deletion and approval endpoints refuse other sites and reject stale approval details', async t => {
   const f = await fixture(t); const actor = f.runtime.agentSession(f.leader.id); const room = f.runtime.createRoom(f.admin, '人工会話');
   const artifact = f.runtime.createArtifact(actor, room.id, '人工.txt', '資料', '説明', '本文');
   const task = f.runtime.tasks.create(f.admin, f.leader.id, room.id, '人工確認'); const lease = f.runtime.tasks.claim(f.admin)!;
   f.runtime.requestApproval(actor, lease, '承認する案', '人工の条件');
   const version = f.runtime.approvals(f.admin)[0]!.version;
-  assert.equal((await f.call(`/api/artifacts/${artifact}`, 'DELETE', {})).status, 401);
-  assert.equal((await f.call(`/api/rooms/${room.id}`, 'DELETE', {})).status, 401);
-  await f.login();
+  assert.equal((await f.call(`/api/artifacts/${artifact}`, 'DELETE', {}, { origin: 'https://evil.test' })).status, 403);
+  assert.equal((await f.call(`/api/rooms/${room.id}`, 'DELETE', {}, { 'sec-fetch-site': 'cross-site' })).status, 403);
   assert.equal((await f.call(`/api/approvals/${task.id}`, 'POST', { approved: true })).status, 400);
   assert.equal((await f.call(`/api/approvals/${task.id}`, 'POST', { approved: true, version: randomUUID() })).status, 409);
   assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'waiting_user');
@@ -32,19 +31,18 @@ test('content deletion and approval endpoints require login and reject stale app
   assert.equal((await f.call(`/api/rooms/${room.id}/messages`)).status, 404);
 });
 
-test('backup API reports incomplete storage on its first authenticated listing and can still save',async t=>{
+test('backup API reports incomplete storage on its first listing and can still save',async t=>{
  const f=await fixture(t,true);mkdirSync(join(f.root,'backups',randomUUID()));
- assert.equal((await f.call('/api/backups')).status,401);await f.login();
+ assert.equal((await f.call('/api/backups','GET',undefined,{'sec-fetch-site':'cross-site'})).status,403);
  const first=await f.call('/api/backups');assert.equal(first.status,200);
  const listing=await first.json();assert.match(listing.error,/確認できない/);assert.deepEqual(listing.items,[]);
  assert.equal((await f.call('/api/backups','POST',{})).status,200);
  const next=await (await f.call('/api/backups')).json();assert.equal(next.items.length,1);assert.match(next.error,/確認できない/);
 });
 
-test('backup switch API requires authentication and saves a boolean without deleting snapshots', async t => {
+test('backup switch API refuses other sites and saves a boolean without deleting snapshots', async t => {
   const f = await fixture(t, true);
-  assert.equal((await f.call('/api/settings', 'PATCH', { backupEnabled: false })).status, 401);
-  await f.login();
+  assert.equal((await f.call('/api/settings', 'PATCH', { backupEnabled: false }, { origin: 'https://evil.test' })).status, 403);
   assert.equal((await f.call('/api/settings', 'PATCH', { backupEnabled: 'false' })).status, 400);
   assert.equal((await f.call('/api/backups', 'POST', {})).status, 200);
   assert.equal((await f.call('/api/settings', 'PATCH', { backupEnabled: false })).status, 200);
@@ -57,16 +55,15 @@ test('backup switch API requires authentication and saves a boolean without dele
 async function fixture(t: { after: (fn: () => Promise<void>) => void }, includeBackups=false) {
   const root = mkdtempSync(join(tmpdir(), 'niwa-web-'));
   const runtime = new Runtime(root); const admin = runtime.administrator(); const leader = runtime.bootstrap(admin);
-  const key = randomBytes(32).toString('base64url'); const origin = 'https://niwa.test';
+  const origin = 'https://niwa.test';
   const backups=includeBackups?new Backups(runtime,initializeProduct(root),{version:1,origin,port:3210}):undefined;
-  const server = createApiServer(runtime, new WebAuth(origin, key),undefined,undefined,backups);
+  const server = createApiServer(runtime, new WebAuth(origin),undefined,undefined,backups);
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address() as { port: number };
   t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); await backups?.stop();runtime.close(); rmSync(root, { recursive: true, force: true }); });
-  let cookie = '';
   const call = (path: string, method = 'GET', body?: unknown, extra: Record<string, string> = {}) => new Promise<Response>((resolve, reject) => {
     const outgoing = request(`http://127.0.0.1:${address.port}${path}`, {
-      method, headers: { host: 'niwa.test', origin, cookie, 'content-type': 'application/json',
+      method, headers: { host: 'niwa.test', origin, 'content-type': 'application/json',
         ...(body === undefined ? {} : { 'content-length': Buffer.byteLength(JSON.stringify(body)) }), ...extra },
     }, incoming => {
       const chunks: Buffer[] = [];
@@ -80,18 +77,12 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }, includeB
     });
     outgoing.on('error', reject); outgoing.end(body === undefined ? undefined : JSON.stringify(body));
   });
-  const login = async () => {
-    const response = await call('/api/login', 'POST', { key }); assert.equal(response.status, 200);
-    cookie = response.headers.get('set-cookie')!.split(';')[0]!;
-    return response;
-  };
-  return { runtime, admin, leader, call, login, root, port: address.port };
+  return { runtime, admin, leader, call, root, port: address.port };
 }
 
 test('administrator schedules API validates input and persists stop/resume', async t => {
   const f = await fixture(t);
-  assert.equal((await f.call('/api/schedules')).status, 401);
-  await f.login();
+  assert.equal((await f.call('/api/schedules', 'GET', undefined, { 'sec-fetch-site': 'same-site' })).status, 403);
   const room = f.runtime.createRoom(f.admin, '定期の依頼');
   const input = { id: randomUUID(), agent_id: f.leader.id, room_id: room.id, prompt: '調査を更新',
     interval_ms: 86400_000, next_at: Date.now() + 60_000, max_runs: 7, timeout_ms: 3600_000 };
@@ -110,7 +101,7 @@ test('administrator schedules API validates input and persists stop/resume', asy
 });
 
 test('thread organization persists, preserves messages and requires restoration for new submissions', async t => {
-  const f = await fixture(t); await f.login();
+  const f = await fixture(t);
   const room = f.runtime.createRoom(f.admin, '保管する会話');
   const message = f.runtime.post(f.admin, room.id, '残す内容');
   const path = `/api/rooms/${room.id}/organization`;
@@ -127,41 +118,34 @@ test('thread organization persists, preserves messages and requires restoration 
   assert.equal(f.runtime.messages(f.admin, room.id)[0]?.id, message.id);
 });
 
-test('HTTP authentication rejects forged identity and cross-origin mutations; logout revokes session', async t => {
+test('there is no login: identity headers grant nothing, and other origins, hosts and sites are refused', async t => {
   const f = await fixture(t);
-  assert.equal((await f.call('/api/state', 'GET', undefined, { 'x-agent-id': f.leader.id, 'x-role': 'admin' })).status, 401);
-  assert.equal((await f.call('/api/login', 'POST', { key: 'wrong' })).status, 401);
-  const login = await f.login();
-  assert.match(login.headers.get('set-cookie')!, /HttpOnly; SameSite=Strict.*Secure/);
-  assert.equal((await f.call('/api/state')).status, 200);
+  const state = await f.call('/api/state', 'GET', undefined, { 'x-agent-id': f.leader.id, 'x-role': 'admin' });
+  assert.equal(state.status, 200); assert.equal(state.headers.get('set-cookie'), null);
+  assert.equal((await f.call('/api/login', 'POST', { key: 'anything' })).status, 404);
+  assert.equal((await f.call('/api/session')).status, 404);
   assert.equal((await f.call('/api/settings', 'PATCH', { paused: true }, { origin: 'https://other.test' })).status, 403);
   assert.equal((await f.call('/api/settings', 'PATCH', { paused: true }, { origin: '' })).status, 403);
+  assert.equal((await f.call('/api/settings', 'PATCH', { paused: true }, { 'sec-fetch-site': 'cross-site' })).status, 403);
   assert.equal((await f.call('/api/state', 'GET', undefined, { host: 'attacker.test' })).status, 403);
+  assert.equal((await f.call('/api/state', 'GET', undefined, { 'sec-fetch-site': 'cross-site' })).status, 403);
   assert.equal(f.runtime.settings(f.admin).paused, false);
-  assert.equal((await f.call('/api/logout', 'POST', {})).status, 200);
-  assert.equal((await f.call('/api/state')).status, 401);
+  assert.equal((await f.call('/api/settings', 'PATCH', { paused: true }, { 'sec-fetch-site': 'same-origin' })).status, 200);
+  assert.equal(f.runtime.settings(f.admin).paused, true);
 });
 
-test('login lockout is per client address, counts only failures, and answers 429 with Retry-After', async t => {
-  const f = await fixture(t); 
-  const auth = new WebAuth('https://niwa.test', 'k'.repeat(43));
-  const req = (address: string) => ({ socket: { remoteAddress: address }, headers: {} }) as never;
-  const res = { setHeader() {} } as never;
-  for (let i = 0; i < 12; i++) assert.equal(auth.login('k'.repeat(43), req('10.0.0.1'), res), 'ok');
-  for (let i = 0; i < 10; i++) assert.equal(auth.login('wrong', req('10.0.0.2'), res), 'denied');
-  const locked = auth.login('k'.repeat(43), req('10.0.0.2'), res);
-  assert.ok(typeof locked === 'object' && locked.retryAfter >= 1 && locked.retryAfter <= 60);
-  assert.equal(auth.login('k'.repeat(43), req('10.0.0.1'), res), 'ok');
-  for (let i = 0; i < 300; i++) auth.login('wrong', req(`10.1.${i >> 8}.${i & 255}`), res);
-  assert.equal(auth.login('k'.repeat(43), req('10.0.0.3'), res), 'ok');
-  for (let i = 0; i < 10; i++) assert.equal((await f.call('/api/login', 'POST', { key: 'wrong' })).status, 401);
-  const blocked = await f.call('/api/login', 'POST', { key: 'wrong' });
-  assert.equal(blocked.status, 429); assert.ok(Number(blocked.headers.get('retry-after')) >= 1);
-  assert.deepEqual(await blocked.json(), { error: 'rate_limited' });
+test('the web origin must be exact, plain HTTP is only for this computer, and only same-origin or address-bar requests count as Niwa\'s own', () => {
+  assert.throws(() => new WebAuth('http://niwa.example.net'), /HTTPS/);
+  assert.throws(() => new WebAuth('https://niwa.test/path'), /exact/);
+  assert.doesNotThrow(() => new WebAuth('http://127.0.0.1:3210'));
+  assert.doesNotThrow(() => new WebAuth('https://niwa.tailnet.example.net'));
+  const auth = new WebAuth('https://niwa.test');
+  const sent = (site?: string) => auth.sentByThisSite({ headers: site === undefined ? {} : { 'sec-fetch-site': site } } as never);
+  assert.deepEqual([sent(), sent('same-origin'), sent('none'), sent('same-site'), sent('cross-site')], [true, true, true, false, false]);
 });
 
 test('HTTP submission posts and queues atomically, rejects extra authority, and deduplicates retries', async t => {
-  const f = await fixture(t); await f.login();
+  const f = await fixture(t);
   const room = await (await f.call('/api/rooms', 'POST', { title: 'HTTPの庭' })).json() as { id: string };
   const path = `/api/rooms/${room.id}/messages`;
   const body = { id: randomUUID(), body: '仕事の依頼', agent_id: f.leader.id };
@@ -182,7 +166,7 @@ test('HTTP submission posts and queues atomically, rejects extra authority, and 
 });
 
 test('HTTP memory edits use revisions, accept tool-generated ids, and never return old audit text', async t => {
-  const f = await fixture(t); await f.login();
+  const f = await fixture(t);
   const room = f.runtime.createRoom(f.admin, '庭'); const source = f.runtime.post(f.admin, room.id, '出所');
   const memory = f.runtime.remember(f.runtime.agentSession(f.leader.id), source.id, '古い人工記憶', 'tool-operation');
   const path = `/api/agents/${f.leader.id}/memories/${memory.id}`;
@@ -194,7 +178,7 @@ test('HTTP memory edits use revisions, accept tool-generated ids, and never retu
 });
 
 test('conversation creation retries return the same room, message and job; a bad recipient leaves no room', async t => {
-  const f = await fixture(t); await f.login();
+  const f = await fixture(t);
   const body = { id: randomUUID(), title: '新しい会話', body: '最初の依頼', agent_id: f.leader.id };
   const first = await (await f.call('/api/conversations', 'POST', body)).json();
   assert.deepEqual(await (await f.call('/api/conversations', 'POST', body)).json(), first);
@@ -207,7 +191,7 @@ test('conversation creation retries return the same room, message and job; a bad
 });
 
 test('profile updates persist display choices without granting leader authority or exposing other profiles', async t => {
-  const f = await fixture(t); await f.login();
+  const f = await fixture(t);
   const actor = f.runtime.agentSession(f.leader.id);
   const child = f.runtime.createAgent(actor, '人工の子');
   const patch = { name: '新しい名前', role: 'リーダー', persona: '静かに話す', shape: 'cat', color: '#123abc', motion: 'sway' };
@@ -226,7 +210,7 @@ test('profile updates persist display choices without granting leader authority 
 });
 
 test('administrator deletion requires the displayed Bot version and retains history attribution', async t => {
-  const f = await fixture(t); await f.login();
+  const f = await fixture(t);
   const child = f.runtime.createAgent(f.runtime.agentSession(f.leader.id), '削除する人工Bot');
   const version = f.runtime.profileVersion(f.admin, child.id);
   f.runtime.updateProfile(f.admin, child.id, { name: '変更後の人工Bot' });
@@ -244,8 +228,7 @@ test('administrator deletion requires the displayed Bot version and retains hist
 
 test('member creation, structured reply and schedule edit routes validate authorization and persistence', async t => {
   const f = await fixture(t); const draft = { id: randomUUID(), name: 'UI member', profile: { role: 'Testing' } };
-  assert.equal((await f.call('/api/agents', 'POST', draft)).status, 401);
-  await f.login();
+  assert.equal((await f.call('/api/agents', 'POST', draft, { origin: 'https://evil.test' })).status, 403);
   const created = await (await f.call('/api/agents', 'POST', draft)).json() as { id: string };
   assert.equal((await (await f.call('/api/agents', 'POST', draft)).json()).id, created.id);
   assert.equal(f.runtime.rooms(f.admin).length, 0);
@@ -262,14 +245,13 @@ test('member creation, structured reply and schedule edit routes validate author
   assert.equal((await f.call(`/api/schedules/${id}`, 'PUT', { ...body, version: saved.version, run_count: 0 })).status, 400);
 });
 
-test('artifact review and freezing require authenticated exact hashes without approving external work',async t=>{
+test('artifact review and freezing require exact hashes from Niwa\'s own page without approving external work',async t=>{
  const f=await fixture(t),actor=f.runtime.agentSession(f.leader.id),room=f.runtime.createRoom(f.admin,'版の確認');
  const id=f.runtime.createArtifact(actor,room.id,'version.txt','資料','人工','body');
  const hash=f.runtime.artifactVersions.inspect(actor,id).sha256;
  const review={expected_sha256:hash,verdict:'approved',note:'人工の確認'};
- assert.equal((await f.call(`/api/artifacts/${id}/review`,'POST',review)).status,401);
- assert.equal((await f.call(`/api/artifacts/${id}/freeze`,'POST',{expected_sha256:hash})).status,401);
- await f.login();
+ assert.equal((await f.call(`/api/artifacts/${id}/review`,'POST',review,{origin:'https://evil.test'})).status,403);
+ assert.equal((await f.call(`/api/artifacts/${id}/freeze`,'POST',{expected_sha256:hash},{'sec-fetch-site':'cross-site'})).status,403);
  assert.equal((await f.call(`/api/artifacts/${id}/freeze`,'POST',{expected_sha256:hash})).status,409);
  assert.equal((await f.call(`/api/artifacts/${id}/review`,'POST',{...review,expected_sha256:'0'.repeat(64)})).status,409);
  assert.equal((await f.call(`/api/artifacts/${id}/review`,'POST',review)).status,200);
@@ -280,19 +262,18 @@ test('artifact review and freezing require authenticated exact hashes without ap
  assert.equal(board.digest.artifact_count,1);
 });
 
-test('webhook endpoint takes its own token instead of the admin session, bounds the body and is reachable through a proxy host', async t => {
+test('webhook endpoint takes its own token, bounds the body and is reachable through a proxy host', async t => {
   const f = await fixture(t); const room = f.runtime.createRoom(f.admin, '外部の通知');
   const schedule = { id: randomUUID(), agent_id: f.leader.id, room_id: room.id, prompt: '届いた通知を確認する', interval_ms: 60_000,
     next_at: Date.now() + 60_000, max_runs: 5, timeout_ms: 60_000, trigger_kind: 'webhook' };
-  assert.equal((await f.call(`/api/schedules/${schedule.id}/token`, 'POST', {})).status, 401);
-  await f.login();
+  assert.equal((await f.call(`/api/schedules/${schedule.id}/token`, 'POST', {}, { origin: 'https://evil.test' })).status, 403);
   assert.equal((await f.call('/api/schedules', 'POST', { ...schedule, source_url: 'https://news.example.com/' })).status, 400);
   assert.equal((await f.call('/api/schedules', 'POST', schedule)).status, 200);
   const issued = await (await f.call(`/api/schedules/${schedule.id}/token`, 'POST', {})).json() as { token: string; path: string };
   assert.equal(issued.path, `/api/hooks/${schedule.id}`); assert.match(issued.token, /^[A-Za-z0-9_-]{43}$/);
   const listed = await (await f.call('/api/schedules')).json() as { hook_ready: number }[];
   assert.equal(listed[0]!.hook_ready, 1); assert.ok(!JSON.stringify(listed).includes(issued.token));
-  // No admin cookie, no Origin, and the Host an HTTPS proxy forwards.
+  // No Origin, and the Host an HTTPS proxy forwards.
   const hook = (headers: Record<string, string>, body: string | Buffer = '{"event":"issue"}', method = 'POST', path = issued.path) => new Promise<{ status: number; headers: Record<string, unknown> }>((resolve, reject) => {
     const outgoing = request(`http://127.0.0.1:${f.port}${path}`, { method, agent: false, headers: { host: 'niwa.tailnet.example.net', 'content-type': 'application/json', ...headers } }, incoming => {
       incoming.resume(); incoming.on('end', () => resolve({ status: incoming.statusCode!, headers: incoming.headers }));

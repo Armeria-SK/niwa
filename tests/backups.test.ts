@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { gunzipSync } from 'node:zlib';
 import { createHash, randomUUID } from 'node:crypto';
 import { Runtime } from '../src/runtime/runtime.ts';
-import { initializeInstallation, adminKey, readInstallation } from '../src/config/installation.ts';
+import { initializeInstallation, readInstallation } from '../src/config/installation.ts';
 import { Backups } from '../src/backup/backups.ts';
 import { prepareRestore, restoreInstallation } from '../src/backup/restore.ts';
 import { acquireProcessLock } from '../src/runtime/process-lock.ts';
@@ -300,11 +300,11 @@ test('restore validates the snapshot, reapplies later deletions and starts pause
   } finally { await backups.stop(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
-test('installation restore refuses a running source, preserves it, and creates a separate paused installation with fresh authentication', async () => {
+test('installation restore refuses a running source, preserves it, and creates a separate paused installation without copying secrets', async () => {
   const base = mkdtempSync(join(tmpdir(), 'niwa-restore-installation-'));
   const root = join(base, 'source'); const destination = join(base, 'restored');
   const installation = { version: 1 as const, origin: 'https://niwa.test', port: 3210 };
-  const paths = initializeInstallation(root, installation); const key = adminKey(paths);
+  const paths = initializeInstallation(root, installation);
   const runtime = new Runtime(paths.state); const admin = runtime.administrator(); runtime.bootstrap(admin);
   const backups = new Backups(runtime, paths, installation);
   try {
@@ -316,8 +316,8 @@ test('installation restore refuses a running source, preserves it, and creates a
     const restoredPaths = await restoreInstallation(root, manifest.id, destination);
     assert.deepEqual(readInstallation(destination), installation);
     assert.deepEqual(readdirSync(restoredPaths.secrets), []);
-    assert.notEqual(adminKey(restoredPaths), key);
-    assert.equal(adminKey(paths), key);
+    // There is no login key any more; nothing is created in its place.
+    assert.equal(existsSync(join(restoredPaths.secrets, 'admin-key')), false);
     const restored = new Runtime(restoredPaths.state);
     try { assert.equal(restored.settings(restored.administrator()).paused, true); }
     finally { restored.close(); }

@@ -79,12 +79,12 @@ def fingerprint(root):
 def wait_http(root):
     config = json.loads((root / 'config/niwa.json').read_text())
     http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    request = urllib.request.Request(f"http://127.0.0.1:{config['port']}/api/session",
+    request = urllib.request.Request(f"http://127.0.0.1:{config['port']}/api/model-ready",
                                      headers={'Host': urllib.parse.urlsplit(config['origin']).netloc})
     for _ in range(30):
         try:
             with http.open(request, timeout=2) as response:
-                if response.status == 200 and json.load(response) == {'authenticated': False}:
+                if response.status == 200 and isinstance(json.load(response).get('providers'), list):
                     return
         except OSError:
             pass

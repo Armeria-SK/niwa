@@ -16,7 +16,7 @@ try {
   } else {
     if (values.origin || values.port) throw new Error('Edit config/niwa.json to change the installed origin or port.');
     const service = await startService(values.root);
-    process.stdout.write('Niwa is running. The administrator login key is in secrets/admin-key under the product root.\n');
+    process.stdout.write('Niwa is running. There is no login: anyone who can open the configured origin uses it as the administrator.\n');
     for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void service.close(); });
   }
 } catch {

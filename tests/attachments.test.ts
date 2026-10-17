@@ -137,17 +137,18 @@ for (const promptVersion of ['legacy-v4', 'structured-v5'] as const) test(`${pro
   assert.ok(String(first.text).includes('短い資料') && String(next.text).length > 0 && next.next_offset === null);
 });
 
-test('attachment API validates uploads and serves text only to the logged-in administrator', async t => {
+test('attachment API validates uploads and serves files only to Niwa\'s own page, never to another site', async t => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-attachment-web-'));
   const runtime = new Runtime(root); const admin = runtime.administrator(); runtime.bootstrap(admin);
-  const key = randomBytes(32).toString('base64url'); const origin = 'https://niwa.test';
-  const server = createApiServer(runtime, new WebAuth(origin, key)); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const origin = 'https://niwa.test';
+  const server = createApiServer(runtime, new WebAuth(origin)); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const { port } = server.address() as { port: number };
   t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); runtime.close(); rmSync(root, { recursive: true, force: true }); });
-  let cookie = '';
+  // Which site the browser says sent the request; another site's pages are refused.
+  let site = 'cross-site';
   const call = (path: string, method = 'GET', body?: unknown) => new Promise<{ status: number; headers: Record<string, unknown>; text: string }>((resolve, reject) => {
     const data = body === undefined ? undefined : JSON.stringify(body);
-    const outgoing = request(`http://127.0.0.1:${port}${path}`, { method, headers: { host: 'niwa.test', origin, cookie, 'content-type': 'application/json', ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } }, incoming => {
+    const outgoing = request(`http://127.0.0.1:${port}${path}`, { method, headers: { host: 'niwa.test', origin, 'sec-fetch-site': site, 'content-type': 'application/json', ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } }, incoming => {
       const chunks: Buffer[] = []; incoming.on('data', chunk => chunks.push(Buffer.from(chunk)));
       incoming.on('end', () => resolve({ status: incoming.statusCode!, headers: incoming.headers, text: Buffer.concat(chunks).toString('utf8') })); incoming.on('error', reject);
     });
@@ -155,8 +156,8 @@ test('attachment API validates uploads and serves text only to the logged-in adm
   });
   const room = runtime.createRoom(admin, '共有');
   const big = file('大きい資料.csv', 'a,b\n'.repeat(60_000));
-  assert.equal((await call(`/api/rooms/${room.id}/messages`, 'POST', { id: randomUUID(), body: '資料', attachments: [big] })).status, 401);
-  const login = await call('/api/login', 'POST', { key }); cookie = String(login.headers['set-cookie']).split(';')[0]!;
+  assert.equal((await call(`/api/rooms/${room.id}/messages`, 'POST', { id: randomUUID(), body: '資料', attachments: [big] })).status, 403);
+  site = 'same-origin';
   assert.equal((await call(`/api/rooms/${room.id}/messages`, 'POST', { id: randomUUID(), body: '', attachments: [file('bin.dat', Buffer.from([0, 1, 2]))] })).status, 400);
   assert.equal((await call(`/api/rooms/${room.id}/messages`, 'POST', { id: randomUUID(), body: '', attachments: Array.from({ length: 6 }, () => file('a.txt', 'a')) })).status, 400);
   assert.equal((await call(`/api/rooms/${room.id}/messages`, 'POST', { id: randomUUID(), body: 'x'.repeat(70_000) })).status, 400);
@@ -173,6 +174,6 @@ test('attachment API validates uploads and serves text only to the logged-in adm
   assert.equal((await call(`/api/attachments/${randomUUID()}`)).status, 404);
   runtime.deleteContent(admin, 'room', room.id);
   assert.equal((await call(`/api/attachments/${csv!.id}`)).status, 404);
-  cookie = '';
-  assert.equal((await call(`/api/attachments/${csv!.id}`)).status, 401);
+  site = 'cross-site';
+  assert.equal((await call(`/api/attachments/${csv!.id}`)).status, 403);
 });

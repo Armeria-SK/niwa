@@ -55,7 +55,7 @@ export async function prepareRestore(backup: string, target: string, deletions: 
 
 /** Restore into an explicitly named new installation; the existing installation stays intact. `origin` and `port` replace the copied values, checked like the installer does. */
 export async function restoreInstallation(root: string, id: string, destination: string, overrides: { origin?: string; port?: number } = {}) {
-  if (overrides.origin !== undefined) new WebAuth(overrides.origin, 'a'.repeat(43));
+  if (overrides.origin !== undefined) new WebAuth(overrides.origin);
   if (overrides.port !== undefined && !(Number.isInteger(overrides.port) && overrides.port >= 1 && overrides.port <= 65535)) throw new Error('Invalid port');
   const source = productPaths(root); const target = productPaths(destination);
   const relation = relative(source.root, target.root);

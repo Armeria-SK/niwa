@@ -1,5 +1,5 @@
 import { constants, closeSync, fsyncSync, fstatSync, lstatSync, openSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
@@ -38,7 +38,7 @@ function validate(input: unknown, source = 'config/niwa.json'): Installation {
   }
   if(config.workareasEnabled&&!config.programExecutorUid)throw new Error('Workareas require the program executor');
   if (config.packagesEnabled && !config.programExecutorUid) throw new Error('Packages require the program executor');
-  new WebAuth(config.origin, 'a'.repeat(43)); // Same origin rules as the HTTP service.
+  new WebAuth(config.origin); // Same origin rules as the HTTP service.
   return config;
 }
 export function initializeInstallation(root: string, input: Installation): ProductPaths {
@@ -81,22 +81,4 @@ export function saveMcpInstallation(root:string,servers:McpServerConfig[],expect
   try{renameSync(temp,join(dir,'mcp.json'));}catch(error){unlinkSync(temp);throw error;}
   if(process.platform!=='win32'){const directory=openSync(dir,'r');try{fsyncSync(directory);}finally{closeSync(directory);}}
   return servers;
-}
-/** Invoke under the product process lock. No key is sent to logs or model context. */
-export function adminKey(paths: ProductPaths): string {
-  const file = join(paths.secrets, 'admin-key');
-  try {
-    const descriptor = openSync(file, 'wx', 0o600);
-    try { writeFileSync(descriptor, randomBytes(32).toString('base64url')); fsyncSync(descriptor); }
-    finally { closeSync(descriptor); }
-  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-  const stat = lstatSync(file);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size !== 43
-    || (process.platform !== 'win32' && (stat.mode & 0o077) !== 0)) throw new Error('Unsafe admin key file');
-  const descriptor = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const key = readFileSync(descriptor, 'utf8');
-    if (!/^[A-Za-z0-9_-]{43}$/.test(key)) throw new Error('Invalid admin key file');
-    return key;
-  } finally { closeSync(descriptor); }
 }

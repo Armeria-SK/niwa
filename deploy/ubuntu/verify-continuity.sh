@@ -27,8 +27,8 @@ runuser -u niwa -- /usr/bin/node "$root/deploy/ubuntu/verify-services.mjs"
   let failure;
   for(let attempt=0;attempt<20;attempt++) {
     try {
-      const response=await fetch("http://127.0.0.1:3210/api/session",{signal:AbortSignal.timeout(1000)});
-      assert.equal(response.status,200); assert.deepEqual(await response.json(),{authenticated:false});
+      const response=await fetch("http://127.0.0.1:3210/api/model-ready",{signal:AbortSignal.timeout(1000)});
+      assert.equal(response.status,200); assert.ok(Array.isArray((await response.json()).providers));
       failure=undefined; break;
     } catch(error) {failure=error; await setTimeout(250);}
   }

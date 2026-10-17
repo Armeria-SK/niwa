@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
@@ -38,12 +38,13 @@ test('service uses installed paths, runs queued work, prevents duplicate startup
     assert.equal(service.runtime.messages(admin, room.id)[0]?.body, '常駐処理からの回答');
     service.runtime.updateSettings(admin, { paused: true });
     const pending = service.runtime.tasks.create(admin, leader.id, room.id, '再起動後の仕事');
-    const key = readFileSync(join(root, 'secrets', 'admin-key'), 'utf8');
+    // There is no login: the service never creates a login key.
+    assert.equal(existsSync(join(root, 'secrets', 'admin-key')), false);
     await service.close(); await service.close();
     service = await startService(root, resolve, 0);
     const nextAdmin = service.runtime.administrator();
     assert.equal(service.runtime.settings(nextAdmin).paused, true);
     assert.equal(service.runtime.tasks.get(nextAdmin, pending.id).state, 'queued');
-    assert.equal(readFileSync(join(root, 'secrets', 'admin-key'), 'utf8'), key);
+    assert.equal(existsSync(join(root, 'secrets', 'admin-key')), false);
   } finally { await service.close(); rmSync(root, { recursive: true, force: true }); }
 });

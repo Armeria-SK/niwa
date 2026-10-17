@@ -141,19 +141,19 @@ test('a model response obtained before settings changed cannot dispatch to the r
  await runner.run(r.tasks.claim(admin)!,AbortSignal.timeout(3000));
  assert.ok(!f.methods.includes('tools/call'));assert.ok(!replacement.methods.includes('tools/call'));assert.ok(calls>=2);
 });
-test('MCP settings and probing require administrator authentication and same-origin writes',async t=>{
- const f=await fixture(t),r=new Runtime(join(f.root,'state')),origin='https://niwa.test',key='k'.repeat(43);r.bootstrap(r.administrator());
- const server=createApiServer(r,new WebAuth(origin,key),undefined,undefined,undefined,undefined,undefined,undefined,f.manager);server.listen(0,'127.0.0.1');await once(server,'listening');
+test('MCP settings and probing refuse other sites and need same-origin writes',async t=>{
+ const f=await fixture(t),r=new Runtime(join(f.root,'state')),origin='https://niwa.test';r.bootstrap(r.administrator());
+ const server=createApiServer(r,new WebAuth(origin),undefined,undefined,undefined,undefined,undefined,undefined,f.manager);server.listen(0,'127.0.0.1');await once(server,'listening');
  t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));r.close();});
- const port=(server.address() as {port:number}).port;let cookie='';
+ const port=(server.address() as {port:number}).port;let site='cross-site';
  const call=(path:string,method='GET',body?:unknown,requestOrigin=origin)=>new Promise<{status:number;body:any;cookie:string}>((resolve,reject)=>{
-  const req=request({host:'127.0.0.1',port,path,method,headers:{host:'niwa.test',origin:requestOrigin,cookie,'Content-Type':'application/json'}},res=>{
+  const req=request({host:'127.0.0.1',port,path,method,headers:{host:'niwa.test',origin:requestOrigin,'sec-fetch-site':site,'Content-Type':'application/json'}},res=>{
    const chunks:Buffer[]=[];res.on('data',chunk=>chunks.push(Buffer.from(chunk)));res.on('end',()=>resolve({status:res.statusCode!,body:JSON.parse(Buffer.concat(chunks).toString()),cookie:res.headers['set-cookie']?.[0]?.split(';')[0]??''}));
   });req.on('error',reject);req.end(body?JSON.stringify(body):undefined);
  });
  const payload={revision:f.manager.status().revision,servers:[f.config]};
- assert.equal((await call('/api/mcp','PUT',payload)).status,401);assert.equal((await call('/api/mcp/probe','POST',{socket:f.socket})).status,401);
- cookie=(await call('/api/login','POST',{key})).cookie;
+ assert.equal((await call('/api/mcp','PUT',payload)).status,403);assert.equal((await call('/api/mcp/probe','POST',{socket:f.socket})).status,403);
+ site='same-origin';
  assert.equal((await call('/api/mcp','PUT',payload,'http://foreign.test')).status,403);assert.equal((await call('/api/mcp/probe','POST',{socket:f.socket})).body.ok,true);
  const saved=await call('/api/mcp','PUT',payload);assert.equal(saved.status,200);assert.equal(saved.body.applied,true);assert.deepEqual(saved.body.connected,['local']);
  assert.equal((await call('/api/mcp','PUT',payload)).status,409);assert.equal((await call('/api/mcp','PUT',{...payload,unexpected:true})).status,400);

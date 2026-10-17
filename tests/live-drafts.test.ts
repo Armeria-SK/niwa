@@ -12,7 +12,7 @@ import { Runtime } from '../src/runtime/runtime.ts';
 import { TurnRunner } from '../src/runtime/turns.ts';
 import { WebAuth } from '../src/web/auth.ts';
 import { createApiServer } from '../src/web/api.ts';
-import { LiveStreams, STREAMS_PER_SESSION } from '../src/web/live-stream.ts';
+import { LiveStreams, MAX_STREAMS } from '../src/web/live-stream.ts';
 import { MemoryCredentialStore } from '../src/auth/credential-store.ts';
 import { OpenAISubscriptionAdapter, openAISubscriptionAdapterCapabilities } from '../src/providers/codex/adapter.ts';
 import { collectModelEvents, type ModelAdapter } from '../src/providers/shared/adapter.ts';
@@ -162,14 +162,13 @@ test('a cancelled turn clears its draft as cancelled', async t => {
 });
 
 type Sse = { status: number; events: { event: string; data: unknown }[]; response: IncomingMessage; close: () => void; wait: (match: (event: { event: string; data: unknown }) => boolean, ms?: number) => Promise<{ event: string; data: unknown }> };
-test('event stream requires login and origin, bounds streams per session, and only relays visible drafts', async t => {
-  const f = turnFixture(t); const key = randomBytes(32).toString('base64url'); const origin = 'https://niwa.test';
-  const server = createApiServer(f.runtime, new WebAuth(origin, key)); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+test('event stream needs no login but refuses other sites, bounds open streams, and only relays visible drafts', async t => {
+  const f = turnFixture(t); const origin = 'https://niwa.test';
+  const server = createApiServer(f.runtime, new WebAuth(origin)); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const port = (server.address() as { port: number }).port;
   t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); });
-  let cookie = '';
   const open = (headers: Record<string, string> = {}) => new Promise<Sse>((resolve, reject) => {
-    const outgoing = httpRequest(`http://127.0.0.1:${port}/api/events/stream`, { headers: { host: 'niwa.test', cookie, ...headers } }, response => {
+    const outgoing = httpRequest(`http://127.0.0.1:${port}/api/events/stream`, { headers: { host: 'niwa.test', ...headers } }, response => {
       const events: Sse['events'] = []; let buffer = ''; const waiters = new Set<() => void>();
       response.setEncoding('utf8');
       response.on('data', (chunk: string) => {
@@ -191,19 +190,14 @@ test('event stream requires login and origin, bounds streams per session, and on
     });
     outgoing.on('error', reject); outgoing.end();
   });
-  const anonymous = await open(); assert.equal(anonymous.status, 401); anonymous.close();
-  await new Promise<void>((resolve, reject) => {
-    const body = JSON.stringify({ key });
-    const outgoing = httpRequest(`http://127.0.0.1:${port}/api/login`, { method: 'POST', headers: { host: 'niwa.test', origin, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } }, response => {
-      cookie = String(response.headers['set-cookie']![0]).split(';')[0]!; response.resume(); response.on('end', resolve);
-    });
-    outgoing.on('error', reject); outgoing.end(body);
-  });
   const foreign = await open({ origin: 'https://evil.test' }); assert.equal(foreign.status, 403); foreign.close();
-  const stream = await open(); assert.equal(stream.status, 200);
+  const crossSite = await open({ 'sec-fetch-site': 'cross-site' }); assert.equal(crossSite.status, 403); crossSite.close();
+  const sameSite = await open({ 'sec-fetch-site': 'same-site' }); assert.equal(sameSite.status, 403); sameSite.close();
+  const rebound = await open({ host: 'evil.test' }); assert.equal(rebound.status, 403); rebound.close();
+  const stream = await open({ 'sec-fetch-site': 'same-origin' }); assert.equal(stream.status, 200);
   assert.match(String(stream.response.headers['content-type']), /^text\/event-stream/u);
   await stream.wait(event => event.event === 'ready');
-  const extra: Sse[] = []; for (let index = 1; index < STREAMS_PER_SESSION; index++) { const next = await open(); assert.equal(next.status, 200); extra.push(next); }
+  const extra: Sse[] = []; for (let index = 1; index < MAX_STREAMS; index++) { const next = await open(); assert.equal(next.status, 200); extra.push(next); }
   const over = await open(); assert.equal(over.status, 429); over.close();
   // Content changes become a content-free refresh hint.
   f.runtime.post(f.admin, f.room.id, '人工の変更');
@@ -227,21 +221,17 @@ test('event stream requires login and origin, bounds streams per session, and on
   for (const item of [stream, reopened, ...extra]) item.close();
 });
 
-test('event stream heartbeats and ends when the session logs out', async t => {
-  const f = turnFixture(t); const key = randomBytes(32).toString('base64url'); const origin = 'https://niwa.test'; const auth = new WebAuth(origin, key);
-  const live = new LiveStreams(f.runtime, f.admin, auth, { heartbeatMs: 30, pollMs: 20 });
-  const server = createServer((req, res) => {
-    if (req.url === '/login') { auth.login(key, req, res); res.end(); return; }
-    live.open(req, res);
-  });
+test('event stream heartbeats and ends when Niwa closes it', async t => {
+  const f = turnFixture(t);
+  const live = new LiveStreams(f.runtime, f.admin, { heartbeatMs: 30, pollMs: 20 });
+  const server = createServer((req, res) => { live.open(req, res); });
   server.listen(0, '127.0.0.1'); await once(server, 'listening'); const port = (server.address() as { port: number }).port;
   t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); });
-  const get = (path: string, cookie = '') => new Promise<IncomingMessage>((resolve, reject) => { const outgoing = httpRequest(`http://127.0.0.1:${port}${path}`, { headers: { cookie } }, resolve); outgoing.on('error', reject); outgoing.end(); });
-  const login = await get('/login'); login.resume(); const cookie = String(login.headers['set-cookie']![0]).split(';')[0]!;
-  const stream = await get('/stream', cookie); assert.equal(stream.statusCode, 200);
+  const get = (path: string) => new Promise<IncomingMessage>((resolve, reject) => { const outgoing = httpRequest(`http://127.0.0.1:${port}${path}`, resolve); outgoing.on('error', reject); outgoing.end(); });
+  const stream = await get('/stream'); assert.equal(stream.statusCode, 200);
   let text = ''; stream.setEncoding('utf8'); stream.on('data', (chunk: string) => { text += chunk; });
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.match(text, /event: ready/u); assert.match(text, /: ping/u); assert.equal(live.size, 1);
-  auth.logout({ headers: { cookie } } as IncomingMessage, { setHeader() { /* artificial response */ } } as unknown as ServerResponse);
+  live.close();
   await once(stream, 'end'); assert.equal(live.size, 0);
 });

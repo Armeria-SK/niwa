@@ -2,7 +2,6 @@ import {memberWork} from './work-display.js';
 import { useEffect, useRef, useState } from 'react';
 import { initialSettings, THEMES } from './data.js';
 import { api } from './api.js';
-import { Login } from './Login.jsx';
 import { AppearanceEditor, IconButton, Modal, Segmented, EmptyState, SetupNotice, Sentences } from './components.jsx';
 import { modelSetupNotice } from './providers.js';
 import { markSeen, readSeen, startSeen, unreadOf, writeSeen } from './unread.js';
@@ -43,7 +42,6 @@ export function App() {
   const [recordTab, setRecordTab] = useState('recap');
   const taskReturn = useRef(null);
   const seen = Object.fromEntries(updates.filter(item => item.seen).map(item => [item.id, true]));
-  const [authenticated, setAuthenticated] = useState(null);
   const [ready, setReady] = useState(false);
   const [readyProviders, setReadyProviders] = useState(null);
   const [loadError, setLoadError] = useState('');
@@ -110,7 +108,6 @@ export function App() {
   useEffect(() => { document.title = `Niwa · ${navItems.find(item => item.id === page)?.label || 'きょう'}`; }, [page]);
   useEffect(() => () => { clearTimeout(toastTimer.current); for (const timer of celebrationTimers.current.values()) clearTimeout(timer); }, []);
   useEffect(() => { try { sessionStorage.setItem('niwa-thread', selectedThread); } catch { /* Optional browser state. */ } }, [selectedThread]);
-  useEffect(() => { api('/session').then(result => setAuthenticated(result.authenticated)).catch(() => setAuthenticated(false)); }, []);
   const pushed = useRef({ busy: false, again: false, timer: null, last: 0 });
   // Pushed hints are coalesced: one refresh at a time, at most about once per 0.8 seconds.
   function requestRefresh() {
@@ -122,11 +119,11 @@ export function App() {
       try { await refresh(); } finally { state.busy = false; if (state.again) { state.again = false; requestRefresh(); } }
     }, Math.max(0, state.last + 800 - Date.now()));
   }
-  const live = useLiveStream(!!authenticated && ready, requestRefresh);
+  const live = useLiveStream(ready, requestRefresh);
   const liveConnected = useRef(false); const pollNow = useRef(null);
   useEffect(() => { const lost = liveConnected.current && !live.connected; liveConnected.current = live.connected; if (lost) pollNow.current?.(); }, [live.connected]);
+  // ログインはない（持ち主だけが開けるネットワークで使う）。開いたらすぐ読み込みを始める。
   useEffect(() => {
-    if (!authenticated) return;
     let stopped = false; let timer; let running = false; let failures = 0;
     // Hidden tabs stop polling; failures back off from 2 s to 30 s. While the stream is connected, polling is only a slow safety net.
     async function poll() {
@@ -139,7 +136,7 @@ export function App() {
     document.addEventListener('visibilitychange', onVisibility);
     if (!document.hidden) void poll();
     return () => { stopped = true; pollNow.current = null; clearTimeout(timer); clearTimeout(pushed.current.timer); pushed.current.timer = null; document.removeEventListener('visibilitychange', onVisibility); refreshVersion.current++; };
-  }, [authenticated]);
+  }, []);
 
   async function refresh() {
     const version = ++refreshVersion.current;
@@ -181,7 +178,6 @@ export function App() {
       return true;
     } catch (error) {
       if (version !== refreshVersion.current) return true;
-      if (error.status === 401) { setAuthenticated(false); setReady(false); return true; }
       setLoadError('庭を読み込めませんでした。サーバーの接続とバージョンを確認してください。'); setOffline(true);
       return false;
     }
@@ -282,7 +278,6 @@ export function App() {
   const threadNotice = thread ? modelSetupNotice(readyProviders, thread.scope === 'private' ? memberMap[thread.members[0]] : leader) : null;
   const unreadCounts = new Map(threads.map(item => [item.id, unreadOf(item, seenMessages)]));
   const visibleThreads = threads.filter(item => (scope === 'archived' ? item.archived : !item.archived) && (scope === 'all' || scope === 'archived' || item.scope === scope) && (roomSearch.ids?.has(item.id) || `${item.title} ${item.members.map(id => memberMap[id]?.name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivity - a.lastActivity);
-  if (!authenticated) return <Login loading={authenticated === null} onLogin={() => setAuthenticated(true)} />;
   if (!ready) return <main className="login-page">{loadError ? <div><p role="alert">{loadError}</p><button className="button secondary" onClick={() => { setLoadError(''); void refresh(); }}>再試行</button></div> : <p role="status">庭を読み込んでいます…</p>}</main>;
 
   return <div className={`app-shell page-${page} ${mobileDetail ? 'mobile-detail' : ''}`} >
@@ -299,7 +294,7 @@ export function App() {
           <span className="thread-item-bottom"><span>{item.scope === 'private' ? '個別' : '共有'} · {item.members.slice(0, 3).map(id => memberMap[id]?.name).join(' / ')}</span>{unreadCounts.get(item.id) > 0 ? <span className="unread-count" aria-label={`${unreadCounts.get(item.id)}件の未読`}>{unreadCounts.get(item.id)}</span> : <span className="reply-count">{Math.max(0, item.message_count - 1)}</span>}</span>
         </button><div className="thread-quick-actions"><IconButton label={item.pinned ? `${item.title}のピン留めを解除` : `${item.title}をピン留め`} onClick={() => organizeThread(item.id, 'pinned')}><PinIcon size={16} /></IconButton><IconButton label={`${item.title}を削除`} onClick={() => setModal({ type: 'delete-content', kind: 'room', id: item.id, title: item.title })}><TrashIcon size={16} /></IconButton></div></div>) : roomSearch.loading || roomSearch.error ? null : <ThreadListEmpty search={search} scope={scope} onClear={() => { setSearch(''); setScope('all'); }} onShowAll={() => setScope('all')} onCreate={() => setModal({ type: 'new-thread' })} />}</div>
       </div>
-      <div className="sidebar-bottom"><a href="#settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined}><SettingsIcon size={23} /><span>設定</span></a><button className="preview-label" onClick={async () => { await api('/logout', 'POST', {}); setAuthenticated(false); setReady(false); }}><span className="preview-dot" />ログアウト<InfoIcon size={13} /></button></div>
+      <div className="sidebar-bottom"><a href="#settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined}><SettingsIcon size={23} /><span>設定</span></a></div>
     </aside>
     {page === 'today' ? <Today notice={setupNotice ? <SetupNotice notice={setupNotice} onConnect={openModelSettings} /> : null} paused={paused} onPause={togglePause} attention={attention} members={animatedMembers} memberMap={memberMap} activities={activities} artifacts={artifacts} decisions={updates} threads={threads} onOpenTask={openTask} onThread={openThread} onRead={readUpdates} onRecap={() => navigate({ page: 'records', tab: 'recap' })} onArtifact={openArtifact} onMember={openMember} onNewThread={() => setModal({ type: 'new-thread' })} onConflicts={() => navigate({ page: 'bots', id: 'everyone', tab: 'conflicts' })} onTrust={() => navigate({ page: 'records', tab: 'approval' })} /> : null}
     {page === 'conversation' && !thread ? <main className="conversation" id="main-content">{setupNotice ? <EmptyState title={setupNotice.title} action={<button className="button primary" onClick={openModelSettings}>モデルをつなぐ</button>}>{setupNotice.body}</EmptyState> : <EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState>}</main> : null}

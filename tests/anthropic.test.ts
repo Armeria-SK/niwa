@@ -134,7 +134,7 @@ test('the catalog endpoint returns the listed models newest first with display n
   const root = mkdtempSync(join(tmpdir(), 'niwa-anthropic-web-'));
   const runtime = new Runtime(root); const admin = runtime.administrator(); runtime.bootstrap(admin);
   const key = randomBytes(32).toString('base64url'); const origin = 'https://niwa.test';
-  const api = createApiServer(runtime, new WebAuth(origin, key), new ModelGateway(runtime, fake.transport, undefined, undefined, { key: new MemoryApiKeyStore() }));
+  const api = createApiServer(runtime, new WebAuth(origin), new ModelGateway(runtime, fake.transport, undefined, undefined, { key: new MemoryApiKeyStore() }));
   api.listen(0, '127.0.0.1'); await once(api, 'listening');
   t.after(async () => { await new Promise<void>(resolve => { api.close(() => resolve()); api.closeAllConnections(); }); runtime.close(); await fake.close(); rmSync(root, { recursive: true, force: true }); });
   let cookie = '';
@@ -146,7 +146,6 @@ test('the catalog endpoint returns the listed models newest first with display n
     });
     outgoing.on('error', reject); outgoing.end(text);
   });
-  cookie = (await call('/api/login', 'POST', { key })).cookie!;
   assert.equal(((await call('/api/anthropic/check', 'POST', {})).body as { code: string }).code, 'NOT_CONFIGURED');
   const saved = await call('/api/anthropic', 'PUT', { apiKey: KEY });
   assert.equal(saved.status, 200); assert.ok(!JSON.stringify(saved.body).includes(KEY)); assert.equal((saved.body as { keyConfigured: boolean }).keyConfigured, true);

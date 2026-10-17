@@ -77,7 +77,7 @@ async function readBody(req: IncomingMessage, limit = 65_536): Promise<unknown> 
 export function createApiServer(runtime: Runtime, auth: WebAuth, models = new ModelGateway(runtime), webRoot?: string, backups?: Backups,
   workspace?: { read: WorkspaceRead; download: WorkspaceDownload }, workareas?:WorkareaTransport, mcp?:McpConnector, mcpSettings?:McpSettings) {
   const admin = runtime.administrator();
-  const live = new LiveStreams(runtime, admin, auth);
+  const live = new LiveStreams(runtime, admin);
   const opinions = new SecondOpinions(runtime, (selection, signal) => models.adapterFor(selection, signal));
   const selection = { provider, model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 64 }) };
   /** The signal aborts when the browser goes away before the answer, so a model call nobody waits for stops. */
@@ -313,7 +313,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       if (url.origin !== auth.origin) { send(res, 403, { error: 'origin_rejected' }); return; }
       if (!url.pathname.startsWith('/api/') && webRoot && serveStatic(webRoot, req, res)) return;
       if (!url.pathname.startsWith('/api/')) { send(res, 404, { error: 'not_found' }); return; }
-      // The browser returns from the provider without the Strict admin cookie. The single-use state created by an authenticated start is the proof instead.
+      // The browser returns here from the provider's site. The single-use state created when the login started is the proof.
       if (req.method === 'GET' && url.pathname === '/api/mcp/oauth/callback' && mcpSettings) {
         res.setHeader('Referrer-Policy', 'no-referrer');
         const once = (name: string) => { const all = url.searchParams.getAll(name); return all.length > 1 ? null : all[0]; };
@@ -324,15 +324,8 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
         else sendNotice(res, 400, params.error ? 'ログインが取り消されたか、拒否されました。Niwaの設定から、もう一度ログインしてください。' : 'ログインを完了できませんでした。Niwaの設定から、もう一度ログインしてください。');
         return;
       }
-      if (req.method === 'POST' && url.pathname === '/api/login') {
-        const body = await readBody(req);
-        if (!Value.Check(object({ key: Type.String({ maxLength: 128 }) }), body)) throw new DomainError('invalid', 'Invalid login');
-        const result = auth.login((body as { key: string }).key, req, res);
-        if (typeof result === 'object') { res.setHeader('Retry-After', String(result.retryAfter)); send(res, 429, { error: 'rate_limited' }); return; }
-        send(res, result === 'ok' ? 200 : 401, { authenticated: result === 'ok', ...(result === 'ok' ? {} : { error: 'invalid_key' }) }); return;
-      }
-      if (req.method === 'GET' && url.pathname === '/api/session') { send(res, 200, { authenticated: auth.authenticated(req) }); return; }
-      if (!auth.authenticated(req)) { send(res, 401, { error: 'authentication_required' }); return; }
+      // There is no login (the owner reaches Niwa over their own network). Every other API request must be sent by Niwa's own page or by a program, never by another site.
+      if (!auth.sentByThisSite(req)) { send(res, 403, { error: 'origin_rejected' }); return; }
       const resource=/^\/api\/mcp\/([a-z][a-z0-9_]{0,19})\/resource$/.exec(url.pathname);
       const resourceMcp=mcpSettings?.connector??mcp;
       if(req.method==='GET'&&resource&&resourceMcp){
@@ -350,7 +343,6 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
         res.writeHead(200,{'Content-Type':binary?file.media_type:'text/plain; charset=utf-8','Content-Disposition':`${inline?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase())}`,'Content-Length':data.length,
           'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"});res.end(data);return;
       }
-      if (req.method === 'POST' && url.pathname === '/api/logout') { auth.logout(req, res); send(res, 200, { ok: true }); return; }
       if (req.method === 'GET' && url.pathname === '/api/events/stream') { live.open(req, res); return; }
       for (const route of routes) {
         const match = url.pathname.match(route.path);

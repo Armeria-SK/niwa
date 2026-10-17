@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import { initializeProduct } from '../config/paths.ts';
-import { adminKey, readInstallation } from '../config/installation.ts';
+import { readInstallation } from '../config/installation.ts';
 import { WebAuth } from '../web/auth.ts';
 import { createApiServer } from '../web/api.ts';
 import { Runtime } from './runtime.ts';
@@ -48,7 +48,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
   try {
     const config = readInstallation(root);
     mcpSettings=await McpSettings.open(root,servers=>{config.mcpServers=servers;});
-    const auth = new WebAuth(config.origin, adminKey(paths));
+    const auth = new WebAuth(config.origin);
     runtime = new Runtime(paths.state);
     const admin = runtime.administrator(); runtime.bootstrap(admin); runtime.tasks.recover(admin); runtime.tasks.recoverProviderWaits(admin,true);
     subscription = new Subscription(new FileCredentialStore(join(paths.secrets, 'codex.json')), () => runtime!.invalidateProvider(admin, 'openai_subscription'), {}, config.reasoningSummary===true);

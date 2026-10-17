@@ -99,20 +99,20 @@ test('MCP rejects unprotected sockets, missing tools and duplicate registrations
  await assert.rejects(McpConnector.connect([f.config,f.config]));
  chmodSync(f.socket,0o666);await assert.rejects(McpConnector.connect([f.config]));
 });
-test('MCP resources are downloadable only after administrator login in a valid conversation',async t=>{
+test('MCP resources are downloadable only from Niwa\'s own page in a valid conversation',async t=>{
  const f=await fixture(t),mcp=await McpConnector.connect([f.config]);
  const admin=f.runtime.administrator();f.runtime.bootstrap(admin);const room=f.runtime.createRoom(admin,'人工の会話');
- const origin='https://niwa.test',key='k'.repeat(43),server=createApiServer(f.runtime,new WebAuth(origin,key),undefined,undefined,undefined,undefined,undefined,mcp);
+ const origin='https://niwa.test',server=createApiServer(f.runtime,new WebAuth(origin),undefined,undefined,undefined,undefined,undefined,mcp);
  server.listen(0,'127.0.0.1');await once(server,'listening');t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
- const port=(server.address() as {port:number}).port;let cookie='';
+ const port=(server.address() as {port:number}).port;let site='cross-site';
  const call=(path:string,body?:unknown)=>new Promise<{status:number;body:string;cookie:string;attachment:unknown}>((resolve,reject)=>{
-  const req=request({host:'127.0.0.1',port,path,method:body?'POST':'GET',headers:{host:'niwa.test',origin,cookie,'Content-Type':'application/json'}},res=>{
+  const req=request({host:'127.0.0.1',port,path,method:body?'POST':'GET',headers:{host:'niwa.test',origin,'sec-fetch-site':site,'Content-Type':'application/json'}},res=>{
    const chunks:Buffer[]=[];res.on('data',chunk=>chunks.push(Buffer.from(chunk)));res.on('end',()=>resolve({status:res.statusCode!,body:Buffer.concat(chunks).toString(),cookie:res.headers['set-cookie']?.[0]?.split(';')[0]??'',attachment:res.headers['content-disposition']}));
   });req.on('error',reject);req.end(body?JSON.stringify(body):undefined);
  });
  const url=`/api/mcp/local/resource?room=${room.id}&uri=fixture%3A%2F%2Fdocument`;
- assert.equal((await call(url)).status,401);assert.equal((await call('/api/mcp')).status,401);
- cookie=(await call('/api/login',{key})).cookie;
+ assert.equal((await call(url)).status,403);assert.equal((await call('/api/mcp')).status,403);
+ site='same-origin';
  const state=await call('/api/mcp');assert.equal(state.status,200);assert.equal(JSON.parse(state.body).available,true);assert.equal(JSON.parse(state.body).tools.length,2);
  const result=await call(url);assert.equal(result.status,200);assert.equal(result.body,'人工のファイル');assert.equal(result.attachment,'attachment');
  assert.equal((await call('/api/mcp/local/resource?room=absent&uri=fixture://document')).status,404);

@@ -115,20 +115,18 @@ test('upgrading widens the size limit in place and replays safely', t => {
 
 test('the API shows an image inline only when asked, serves a PDF as a download and its text on request, all inert', async t => {
   const { runtime, admin, room } = fixture(t);
-  const key = randomBytes(32).toString('base64url'), origin = 'https://niwa.test';
-  const server = createApiServer(runtime, new WebAuth(origin, key)); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const origin = 'https://niwa.test';
+  const server = createApiServer(runtime, new WebAuth(origin)); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const { port } = server.address() as { port: number };
   t.after(() => new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }));
-  let cookie = '';
   const call = (path: string, method = 'GET', body?: unknown) => new Promise<{ status: number; headers: Record<string, unknown>; body: Buffer }>((resolve, reject) => {
     const data = body === undefined ? undefined : JSON.stringify(body);
-    const outgoing = request(`http://127.0.0.1:${port}${path}`, { method, headers: { host: 'niwa.test', origin, cookie, 'content-type': 'application/json', ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } }, incoming => {
+    const outgoing = request(`http://127.0.0.1:${port}${path}`, { method, headers: { host: 'niwa.test', origin, 'content-type': 'application/json', ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } }, incoming => {
       const chunks: Buffer[] = []; incoming.on('data', chunk => chunks.push(Buffer.from(chunk)));
       incoming.on('end', () => resolve({ status: incoming.statusCode!, headers: incoming.headers, body: Buffer.concat(chunks) })); incoming.on('error', reject);
     });
     outgoing.on('error', reject); outgoing.end(data);
   });
-  cookie = String((await call('/api/login', 'POST', { key })).headers['set-cookie']).split(';')[0]!;
   const big = Buffer.concat([png(10, 10), Buffer.alloc(2 * 1024 * 1024)]);
   assert.equal((await call(`/api/rooms/${room.id}/messages`, 'POST', { id: randomUUID(), body: '写真', attachments: [file('庭.png', big), file('案内.pdf', pdf('Gate 10'))] })).status, 200);
   const [image, document] = runtime.messageAttachments(admin, room.id);

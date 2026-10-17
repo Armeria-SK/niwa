@@ -12,7 +12,7 @@ try {
 Next steps:
   1. Stop the source service, or restore with --port/--origin so both can run (the copied origin and port are those of the source).
   2. Start it: npm start -- --root ${target.root}
-  3. Sign in with the new administrator key in ${target.root}/secrets/admin-key, then resume activities from the UI.
+  3. Open Niwa at its origin (there is no login) and resume activities from the UI.
   4. Reconnect model and X accounts; credentials, workspace files and container images are not part of a backup.
 `);
 } catch {
