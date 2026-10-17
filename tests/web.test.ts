@@ -11,6 +11,7 @@ import { WebAuth } from '../src/web/auth.ts';
 import { createApiServer } from '../src/web/api.ts';
 import { Backups } from '../src/backup/backups.ts';
 import { initializeProduct } from '../src/config/paths.ts';
+import { initializeInstallation, readInstallation } from '../src/config/installation.ts';
 
 test('content deletion and approval endpoints refuse other sites and reject stale approval details', async t => {
   const f = await fixture(t); const actor = f.runtime.agentSession(f.leader.id); const room = f.runtime.createRoom(f.admin, '人工会話');
@@ -52,18 +53,19 @@ test('backup switch API refuses other sites and saves a boolean without deleting
   assert.equal(f.runtime.settings(f.admin).backupEnabled, true);
 });
 
-async function fixture(t: { after: (fn: () => Promise<void>) => void }, includeBackups=false) {
+/** `login` is what Tailscale Serve would name (null: a request that did not come through Serve); `logins` is config/niwa.json `tailscaleLogins`. */
+async function fixture(t: { after: (fn: () => Promise<void>) => void }, includeBackups=false, serve: { login?: string | null; logins?: string[] } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'niwa-web-'));
   const runtime = new Runtime(root); const admin = runtime.administrator(); const leader = runtime.bootstrap(admin);
   const origin = 'https://niwa.test';
   const backups=includeBackups?new Backups(runtime,initializeProduct(root),{version:1,origin,port:3210}):undefined;
-  const server = createApiServer(runtime, new WebAuth(origin),undefined,undefined,backups);
+  const server = createApiServer(runtime, new WebAuth(origin, serve.logins),undefined,undefined,backups);
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address() as { port: number };
   t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); await backups?.stop();runtime.close(); rmSync(root, { recursive: true, force: true }); });
   const call = (path: string, method = 'GET', body?: unknown, extra: Record<string, string> = {}) => new Promise<Response>((resolve, reject) => {
     const outgoing = request(`http://127.0.0.1:${address.port}${path}`, {
-      method, headers: { host: 'niwa.test', origin, 'content-type': 'application/json',
+      method, headers: { host: 'niwa.test', origin, 'content-type': 'application/json', ...(serve.login === null ? {} : { 'tailscale-user-login': serve.login ?? 'owner@example.com' }),
         ...(body === undefined ? {} : { 'content-length': Buffer.byteLength(JSON.stringify(body)) }), ...extra },
     }, incoming => {
       const chunks: Buffer[] = [];
@@ -142,6 +144,44 @@ test('the web origin must be exact, plain HTTP is only for this computer, and on
   const auth = new WebAuth('https://niwa.test');
   const sent = (site?: string) => auth.sentByThisSite({ headers: site === undefined ? {} : { 'sec-fetch-site': site } } as never);
   assert.deepEqual([sent(), sent('same-origin'), sent('none'), sent('same-site'), sent('cross-site')], [true, true, true, false, false]);
+});
+
+test('a remote origin needs the person Tailscale Serve names, one of the allowed accounts when set, and a local origin needs neither', () => {
+  const ask = (auth: WebAuth, login?: string) => auth.fromTailnet({ headers: login === undefined ? {} : { 'tailscale-user-login': login } } as never);
+  const local = new WebAuth('http://127.0.0.1:3210'), remote = new WebAuth('https://niwa.test');
+  assert.equal(ask(local), true); assert.equal(ask(new WebAuth('http://localhost:3210')), true);
+  assert.deepEqual([ask(remote), ask(remote, ''), ask(remote, 'owner@example.com'), ask(remote, 'owner@example.com, guest@example.com'), ask(remote, 'two words')],
+    [false, false, true, false, false]);
+  const narrowed = new WebAuth('https://niwa.test', ['Owner@Example.com']);
+  assert.deepEqual([ask(narrowed, 'owner@example.com'), ask(narrowed, 'guest@example.com'), ask(narrowed)], [true, false, false]);
+  assert.throws(() => new WebAuth('https://niwa.test', ['a, b']), /Tailscale login/);
+  assert.throws(() => new WebAuth('https://niwa.test', ['']), /Tailscale login/);
+});
+
+test('without the Serve identity the page and API are refused, while schedule hooks and the MCP login return still answer', async t => {
+  const f = await fixture(t, false, { login: null });
+  const state = await f.call('/api/state');
+  assert.equal(state.status, 403); assert.equal((await state.json()).error, 'tailnet_required');
+  assert.equal((await f.call('/api/settings', 'PATCH', { paused: true })).status, 403); assert.equal(f.runtime.settings(f.admin).paused, false);
+  const page = await f.call('/');
+  assert.equal(page.status, 403); assert.match(await page.text(), /Tailscale Serve を通した接続だけ/);
+  const room = f.runtime.createRoom(f.admin, '通知の庭'), id = randomUUID();
+  f.runtime.schedules.create(f.admin, { id, agent_id: f.leader.id, room_id: room.id, prompt: '届いた通知を読む', interval_ms: 60_000, next_at: Date.now() + 60_000, max_runs: 5, timeout_ms: 60_000, trigger_kind: 'webhook' });
+  const { token } = f.runtime.schedules.issueHookToken(f.admin, id);
+  assert.equal((await f.call(`/api/hooks/${id}`, 'POST', { event: 'push' }, { authorization: `Bearer ${token}` })).status, 202);
+  const callback = await f.call('/api/mcp/oauth/callback?state=x&code=y');
+  assert.notEqual(callback.status === 403 ? (await callback.json()).error : '', 'tailnet_required');
+});
+
+test('allowed Tailscale accounts narrow who may use Niwa from another device', async t => {
+  const guest = await fixture(t, false, { login: 'guest@example.com', logins: ['owner@example.com'] });
+  assert.equal((await guest.call('/api/state')).status, 403);
+  const owner = await fixture(t, false, { login: 'OWNER@example.com', logins: ['owner@example.com'] });
+  assert.equal((await owner.call('/api/state')).status, 200);
+  const root = mkdtempSync(join(tmpdir(), 'niwa-logins-')); t.after(async () => rmSync(root, { recursive: true, force: true }));
+  initializeInstallation(join(root, 'kept'), { version: 1, origin: 'https://niwa.test', port: 3210, tailscaleLogins: ['owner@example.com'] });
+  assert.deepEqual(readInstallation(join(root, 'kept')).tailscaleLogins, ['owner@example.com']);
+  assert.throws(() => initializeInstallation(join(root, 'listed'), { version: 1, origin: 'https://niwa.test', port: 3210, tailscaleLogins: ['owner@example.com, guest@example.com'] }), /Tailscale login/);
 });
 
 test('HTTP submission posts and queues atomically, rejects extra authority, and deduplicates retries', async t => {

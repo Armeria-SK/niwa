@@ -147,7 +147,7 @@ test('MCP settings and probing refuse other sites and need same-origin writes',a
  t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));r.close();});
  const port=(server.address() as {port:number}).port;let site='cross-site';
  const call=(path:string,method='GET',body?:unknown,requestOrigin=origin)=>new Promise<{status:number;body:any;cookie:string}>((resolve,reject)=>{
-  const req=request({host:'127.0.0.1',port,path,method,headers:{host:'niwa.test',origin:requestOrigin,'sec-fetch-site':site,'Content-Type':'application/json'}},res=>{
+  const req=request({host:'127.0.0.1',port,path,method,headers:{host:'niwa.test','tailscale-user-login':'owner@example.com',origin:requestOrigin,'sec-fetch-site':site,'Content-Type':'application/json'}},res=>{
    const chunks:Buffer[]=[];res.on('data',chunk=>chunks.push(Buffer.from(chunk)));res.on('end',()=>resolve({status:res.statusCode!,body:JSON.parse(Buffer.concat(chunks).toString()),cookie:res.headers['set-cookie']?.[0]?.split(';')[0]??''}));
   });req.on('error',reject);req.end(body?JSON.stringify(body):undefined);
  });

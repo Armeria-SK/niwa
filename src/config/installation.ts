@@ -11,6 +11,7 @@ import {DomainError} from '../domain/types.ts';
 const schema = Type.Object({ version: Type.Literal(1), origin: Type.String({ maxLength: 2048 }),
   mcpServers:Type.Optional(Type.Array(mcpServerSchema,{maxItems:8})),
   reasoningSummary: Type.Optional(Type.Boolean()),
+  tailscaleLogins: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 32 })),
   promptVersion: Type.Optional(Type.Union([Type.Literal('legacy-v4'),Type.Literal('structured-v5')])),
   port: Type.Integer({ minimum: 1, maximum: 65535 }), workspaceExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
   programExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })), browserExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -38,7 +39,7 @@ function validate(input: unknown, source = 'config/niwa.json'): Installation {
   }
   if(config.workareasEnabled&&!config.programExecutorUid)throw new Error('Workareas require the program executor');
   if (config.packagesEnabled && !config.programExecutorUid) throw new Error('Packages require the program executor');
-  new WebAuth(config.origin); // Same origin rules as the HTTP service.
+  new WebAuth(config.origin, config.tailscaleLogins); // Same origin and account rules as the HTTP service.
   return config;
 }
 export function initializeInstallation(root: string, input: Installation): ProductPaths {

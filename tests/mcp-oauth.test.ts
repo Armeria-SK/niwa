@@ -135,7 +135,7 @@ async function niwa(t:After,retry={initial:20,max:40}){
  t.after(async()=>{manager.close();api.closeAllConnections();await new Promise<void>(resolve=>api.close(()=>resolve()));runtime.close();rmSync(root,{recursive:true,force:true});});
  const port=(api.address() as {port:number}).port;
  const call=(path:string,method='GET',payload?:unknown,options:{cookie?:boolean;origin?:string;site?:string}={})=>new Promise<{status:number;text:string;json:any;headers:IncomingMessage['headers']}>((resolve,reject)=>{
-  const headers:Record<string,string>={host:'niwa.test','Content-Type':'application/json',...(method==='GET'?{}:{origin:options.origin??origin}),...(options.site?{'sec-fetch-site':options.site}:{})};
+  const headers:Record<string,string>={host:'niwa.test','tailscale-user-login':'owner@example.com','Content-Type':'application/json',...(method==='GET'?{}:{origin:options.origin??origin}),...(options.site?{'sec-fetch-site':options.site}:{})};
   const req=request({host:'127.0.0.1',port,path,method,headers},res=>{
    const chunks:Buffer[]=[];res.on('data',chunk=>chunks.push(Buffer.from(chunk)));
    res.on('end',()=>{const text=Buffer.concat(chunks).toString();let json:unknown;try{json=JSON.parse(text);}catch{}resolve({status:res.statusCode!,text,json,headers:res.headers});});

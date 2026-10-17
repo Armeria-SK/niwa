@@ -140,7 +140,7 @@ test('the catalog endpoint returns the listed models newest first with display n
   let cookie = '';
   const call = (path: string, method = 'GET', body?: unknown) => new Promise<{ status: number; body: unknown; cookie?: string }>((resolve, reject) => {
     const text = body === undefined ? undefined : JSON.stringify(body);
-    const outgoing = httpRequest(`http://127.0.0.1:${(api.address() as { port: number }).port}${path}`, { method, headers: { host: 'niwa.test', origin, cookie, 'content-type': 'application/json', ...(text ? { 'content-length': Buffer.byteLength(text) } : {}) } }, incoming => {
+    const outgoing = httpRequest(`http://127.0.0.1:${(api.address() as { port: number }).port}${path}`, { method, headers: { host: 'niwa.test', 'tailscale-user-login': 'owner@example.com', origin, cookie, 'content-type': 'application/json', ...(text ? { 'content-length': Buffer.byteLength(text) } : {}) } }, incoming => {
       const chunks: Buffer[] = []; incoming.on('data', chunk => chunks.push(Buffer.from(chunk)));
       incoming.on('end', () => resolve({ status: incoming.statusCode!, body: JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null'), ...(incoming.headers['set-cookie'] ? { cookie: incoming.headers['set-cookie'][0]!.split(';')[0]! } : {}) }));
     });

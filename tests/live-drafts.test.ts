@@ -168,7 +168,7 @@ test('event stream needs no login but refuses other sites, bounds open streams, 
   const port = (server.address() as { port: number }).port;
   t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); });
   const open = (headers: Record<string, string> = {}) => new Promise<Sse>((resolve, reject) => {
-    const outgoing = httpRequest(`http://127.0.0.1:${port}/api/events/stream`, { headers: { host: 'niwa.test', ...headers } }, response => {
+    const outgoing = httpRequest(`http://127.0.0.1:${port}/api/events/stream`, { headers: { host: 'niwa.test', 'tailscale-user-login': 'owner@example.com', ...headers } }, response => {
       const events: Sse['events'] = []; let buffer = ''; const waiters = new Set<() => void>();
       response.setEncoding('utf8');
       response.on('data', (chunk: string) => {

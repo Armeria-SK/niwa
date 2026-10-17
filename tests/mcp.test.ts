@@ -106,7 +106,7 @@ test('MCP resources are downloadable only from Niwa\'s own page in a valid conve
  server.listen(0,'127.0.0.1');await once(server,'listening');t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
  const port=(server.address() as {port:number}).port;let site='cross-site';
  const call=(path:string,body?:unknown)=>new Promise<{status:number;body:string;cookie:string;attachment:unknown}>((resolve,reject)=>{
-  const req=request({host:'127.0.0.1',port,path,method:body?'POST':'GET',headers:{host:'niwa.test',origin,'sec-fetch-site':site,'Content-Type':'application/json'}},res=>{
+  const req=request({host:'127.0.0.1',port,path,method:body?'POST':'GET',headers:{host:'niwa.test','tailscale-user-login':'owner@example.com',origin,'sec-fetch-site':site,'Content-Type':'application/json'}},res=>{
    const chunks:Buffer[]=[];res.on('data',chunk=>chunks.push(Buffer.from(chunk)));res.on('end',()=>resolve({status:res.statusCode!,body:Buffer.concat(chunks).toString(),cookie:res.headers['set-cookie']?.[0]?.split(';')[0]??'',attachment:res.headers['content-disposition']}));
   });req.on('error',reject);req.end(body?JSON.stringify(body):undefined);
  });

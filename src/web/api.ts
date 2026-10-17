@@ -37,10 +37,10 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 /** Landing page for the cross-site OAuth return. A link, not a redirect, so the Strict session cookie is sent when the person comes back. */
-function sendNotice(res: ServerResponse, status: number, message: string): void {
+function sendNotice(res: ServerResponse, status: number, message: string, back = true): void {
   res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" });
-  res.end(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Niwa</title><body style="font-family:sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.7"><p>${message}</p><p><a href="/#settings/mcp">Niwaの画面に戻る</a></p></body></html>`);
+  res.end(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Niwa</title><body style="font-family:sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.7"><p>${message}</p>${back ? '<p><a href="/#settings/mcp">Niwaの画面に戻る</a></p>' : ''}</body></html>`);
 }
 /** Webhook bodies: at most 64 KiB of UTF-8 JSON or plain text. The content stays untrusted data for the next run. */
 async function readHook(req: IncomingMessage): Promise<{ type: string; text: string } | number> {
@@ -316,6 +316,12 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       if (!auth.validOrigin(req)) { send(res, 403, { error: 'origin_rejected' }); return; }
       const url = new URL(req.url ?? '/', auth.origin);
       if (url.origin !== auth.origin) { send(res, 403, { error: 'origin_rejected' }); return; }
+      // Remote use goes through Tailscale Serve, which names the person. The OAuth return keeps its own single-use proof, like the hooks above.
+      if (!(req.method === 'GET' && url.pathname === '/api/mcp/oauth/callback') && !auth.fromTailnet(req)) {
+        if (url.pathname.startsWith('/api/')) send(res, 403, { error: 'tailnet_required' });
+        else sendNotice(res, 403, 'このNiwaは、Tailscale Serve を通した接続だけを受け付けます。<br>自分のTailscaleのネットワークにつないだ端末から開いてください。', false);
+        return;
+      }
       if (!url.pathname.startsWith('/api/') && webRoot && serveStatic(webRoot, req, res)) return;
       if (!url.pathname.startsWith('/api/')) { send(res, 404, { error: 'not_found' }); return; }
       // The browser returns here from the provider's site. The single-use state created when the login started is the proof.
