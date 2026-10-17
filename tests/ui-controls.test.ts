@@ -119,3 +119,12 @@ test('the watch tab has its own URL and reads tools, outcomes, times and limits 
  assert.equal(nightLine({decision:'skipped'}),'今夜は休ませると決めています。');
  assert.match(nightLine({decision:null,preview:true}),/まだ決めていません/);assert.match(nightLine({decision:null,preview:false}),/下見はオフ/);
 });
+test('trust suggestions name the Bot, the kind and the run of approvals, and come after urgent items',async()=>{
+ const {kindLabel,suggestionText,trustAttention}=await ui('trust.js');
+ assert.equal(kindLabel('mcp:mcp_notes_append_note'),'MCPの書き込み（notes：append_note）');
+ assert.deepEqual(['form','page_request','request','action','odd'].map(kindLabel),['Webフォームの送信','ページからの送信','支払い・購入・公開などの承認','そのほかの操作','そのほかの操作']);
+ const item={agent_id:'a1',name:'リーダー',kind:'mcp:mcp_notes_append_note',streak:5,last_at:10};
+ assert.equal(suggestionText(item),'リーダーの「MCPの書き込み（notes：append_note）」を、5回続けてそのまま承認しています。この種類は聞かずに進めてよいですか？');
+ assert.deepEqual(trustAttention([item]).map((i:{kind:string;id:string;member:string})=>[i.kind,i.id,i.member]),[['trust','a1:mcp:mcp_notes_append_note','a1']]);
+ assert.deepEqual(trustAttention(undefined),[]);
+});

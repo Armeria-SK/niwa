@@ -416,7 +416,7 @@ test('upgrading a schema51 database widens the provider and fallback constraints
     runtime = new Runtime(root); admin = runtime.administrator();
     const after = new DatabaseSync(join(root, 'control.db'));
     try {
-      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 58);
+      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 59);
       assert.equal(JSON.stringify(after.prepare('SELECT * FROM agents ORDER BY id').all()), before);
       assert.equal(after.prepare('SELECT count(*) AS count FROM agent_autonomy').get()!.count, autonomy);
       assert.match(String(after.prepare("SELECT sql FROM sqlite_schema WHERE name='agents'").get()!.sql), /'openai_compatible','anthropic'/);

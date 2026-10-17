@@ -5,17 +5,21 @@ import { MorningBasket, NightPreview, useNight } from '../NightPlan.jsx';
 import { Avatar, StatusLabel, Sentences } from '../components.jsx';
 import { documentName, kindLabel, qualityLabel } from '../artifact-display.js';
 import { DAY, dayLabel, todayDigest } from '../today.js';
+import { trustAttention } from '../trust.js';
 import { ChatIcon, ChevronRightIcon, FileIcon, PauseIcon, PlayIcon } from '../icons.jsx';
 
 /** 開いて最初に見る画面。あなたの番・直近24時間にできたもの・庭の様子を1枚にまとめる。 */
-export function Today({ onConflicts, notice, paused, onPause, attention, members, memberMap, activities, artifacts, decisions, threads, onOpenTask, onThread, onRead, onRecap, onArtifact, onMember, onNewThread }) {
+export function Today({ onConflicts, onTrust, notice, paused, onPause, attention, members, memberMap, activities, artifacts, decisions, threads, onOpenTask, onThread, onRead, onRecap, onArtifact, onMember, onNewThread }) {
   // 開いたままでも日付と「直近24時間」がずれないよう、5分ごとに今の時刻を取り直す。
   const [now, setNow] = useState(Date.now);
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 300_000); return () => clearInterval(timer); }, []);
   // 記憶の食い違いは開いたときに1回だけ数える（AIモデルは使わない）。0組なら何も出さない。
   const [conflicts, setConflicts] = useState(0);
   useEffect(() => { let active = true; api('/memories/conflicts').then(items => { if (active) setConflicts(items.length); }).catch(() => {}); return () => { active = false; }; }, []);
-  const items = conflicts ? [...attention, { kind: 'conflicts', id: 'conflicts', title: `食い違いかもしれない記憶が${conflicts}組あります`, detail: 'Botが覚えていることを見比べて、直すか、そのままにするかを決めます。' }] : attention;
+  // 任せる範囲の提案も開いたときに1回だけ読む。急ぎではないので、ほかの項目のあとに並べる。
+  const [trust, setTrust] = useState([]);
+  useEffect(() => { let active = true; api('/trust').then(value => { if (active) setTrust(trustAttention(value.suggestions)); }).catch(() => {}); return () => { active = false; }; }, []);
+  const items = [...attention, ...(conflicts ? [{ kind: 'conflicts', id: 'conflicts', title: `食い違いかもしれない記憶が${conflicts}組あります`, detail: 'Botが覚えていることを見比べて、直すか、そのままにするかを決めます。' }] : []), ...trust];
   const digest = todayDigest({ now, paused, attention: items, activities, artifacts, decisions });
   const [usage, setUsage] = useState(null);
   const finished = activities.filter(task => task.state === 'completed').length;
@@ -36,7 +40,7 @@ export function Today({ onConflicts, notice, paused, onPause, attention, members
         <div className="today-main">
           {night ? <NightPreview key={night.night.key} state={night} onChange={setNight} /> : null}
           {night ? <MorningBasket state={night} artifacts={artifacts} memberMap={memberMap} onOpenTask={onOpenTask} onArtifact={onArtifact} /> : null}
-          <AttentionList items={items} members={memberMap} onOpen={onOpenTask} onThread={onThread} onRead={onRead} onRecap={onRecap} onConflicts={onConflicts} />
+          <AttentionList items={items} members={memberMap} onOpen={onOpenTask} onThread={onThread} onRead={onRead} onRecap={onRecap} onConflicts={onConflicts} onTrust={onTrust} />
           <section className="today-card" aria-labelledby="today-made">
             <h2 id="today-made">直近24時間にできたもの</h2>
             {digest.decided.length || digest.made.length ? <ul className="today-list">

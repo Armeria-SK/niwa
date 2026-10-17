@@ -140,11 +140,12 @@ test('prompt runs accept calls without a task after upgrading, and the change re
   const { root, runtime, db } = fixture(t);
   const column = () => db.prepare('PRAGMA table_info(prompt_runs)').all().find(row => row.name === 'task_id')!;
   assert.equal(column().notnull, 0);
+  const latest = db.prepare('PRAGMA user_version').get()!.user_version;
   runtime.close();
   db.exec('PRAGMA user_version=57');
   const reopened = new Runtime(root);
   try {
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 58);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, latest);
     assert.equal(column().notnull, 0);
     assert.equal(db.prepare('PRAGMA quick_check').get()!.quick_check, 'ok');
   } finally { reopened.close(); }

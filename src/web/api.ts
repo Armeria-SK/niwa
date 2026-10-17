@@ -263,6 +263,10 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       run: (m, b) => { runtime.tasks.instruct(admin, m[1]!, b.body as string); return { ok: true }; } },
     {method:'GET',path:/^\/api\/tasks\/([0-9a-f-]{36})\/prompt-runs$/,run:m=>runtime.tasks.promptRuns(admin,m[1]!)},
     { method: 'GET', path: /^\/api\/night$/, run: () => runtime.nights.state(admin, Date.now()) },
+    // Trust follows the administrator's record of approvals: Niwa suggests, and only these presses raise or lower it.
+    { method: 'GET', path: /^\/api\/trust$/, run: () => runtime.trust.state(admin) },
+    { method: 'POST', path: /^\/api\/trust\/(grant|revoke|dismiss)$/, schema: object({ agent_id: id, kind: Type.String({ minLength: 1, maxLength: 200 }) }),
+      run: (m, b) => runtime.trust[m[1] as 'grant' | 'revoke' | 'dismiss'](admin, b.agent_id as string, b.kind as string) },
     // The watch screen reads only; its one action, pausing everything, is the existing PATCH /api/settings.
     { method: 'GET', path: /^\/api\/watch$/, run: () => runtime.watch.state(admin, Date.now()) },
     { method: 'POST', path: /^\/api\/night\/decision$/, schema: object({ night: Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }), approved: Type.Boolean(), call_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })) }),

@@ -409,6 +409,12 @@
   .watch-meters { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; font-size: var(--fs-1); }
   .watch-meters li { display: grid; grid-template-columns: minmax(0, 8em) minmax(0, 1fr) auto; align-items: center; gap: 10px; }
   .watch-meters meter { width: 100%; }
+  /* 任せる範囲：提案と、いま任せている種類。 */
+  .trust-panel { border: 1px solid var(--border); border-radius: var(--r-l); background: var(--paper); padding: 16px 18px; margin-bottom: 22px; display: grid; gap: 10px; }
+  .trust-panel h2 { font-size: var(--fs-3); font-weight: 500; display: flex; align-items: center; gap: 8px; }
+  .trust-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  .trust-list li { display: grid; gap: 8px; padding: 12px 14px; border-radius: var(--r-m); background: var(--surface); font-size: var(--fs-2); line-height: 1.8; }
+  .trust-list .muted { font-size: var(--fs-1); }
   @keyframes drawer-in { from { transform: translateX(28px); opacity: 0; } }
   .memory-search { position: sticky; top: -5px; z-index: 1; background: var(--canvas); padding-block: 4px 0; }
   .memory-search .memory-count { margin: 10px 0 4px; }

@@ -57,6 +57,8 @@ import { nightSchema } from '../storage/night-schema.ts';
 import { NightPlans } from './night-plans.ts';
 import { secondOpinionSchema } from '../storage/second-opinion-schema.ts';
 import { Watch } from './watch.ts';
+import { trustSchema } from '../storage/trust-schema.ts';
+import { Trust, type ApprovalKind } from './trust.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -105,6 +107,7 @@ export class Runtime {
   readonly autonomousWakes: AutonomousWakes;
   readonly nights: NightPlans;
   readonly watch: Watch;
+  readonly trust: Trust;
   readonly artifactVersions: ArtifactVersions;
   readonly schedules: Schedules;
   readonly providerLimits: ProviderLimits;
@@ -118,7 +121,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -142,6 +145,7 @@ export class Runtime {
     this.initiatives = new Initiatives(this.#db,this,actor=>this.#principal(actor));
     this.nights = new NightPlans(this.#db, actor => this.#admin(actor));
     this.watch = new Watch(this.#db, this, actor => this.#admin(actor));
+    this.trust = new Trust(this.#db, actor => this.#admin(actor));
     this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id,this.initiatives,now=>this.nights.gate(now));
     this.quality = new ArtifactQuality(this.#db,this,actor=>this.#principal(actor));
     this.artifactVersions = new ArtifactVersions(this.#db,this,actor=>this.#principal(actor));
@@ -270,6 +274,7 @@ export class Runtime {
         this.#db.prepare("UPDATE schedules SET deleted=1,enabled=0,prompt='',source_revision='',wait_reason=NULL WHERE agent_id=?").run(record.id);
         for(const task of this.tasks.list(actor))if(task.agent_id===record.id)this.tasks.clearActivity(actor,task.id);
         this.#db.prepare('DELETE FROM agent_profiles WHERE agent_id=?').run(record.id);
+        this.trust.forgetAgent(record.id);
         this.#db.prepare('DELETE FROM tool_receipts WHERE task_id IN (SELECT id FROM tasks WHERE agent_id=?)').run(record.id);
         this.#db.prepare("UPDATE agents SET name='削除したBot',status='dormant' WHERE id=?").run(record.id);
         this.#db.prepare('INSERT OR IGNORE INTO deleted_agents VALUES (?,?)').run(record.id, record.deleted_at);
@@ -608,15 +613,17 @@ export class Runtime {
     this.#admin(actor);
     return this.#db.prepare("SELECT a.* FROM approval_requests a JOIN tasks t ON t.id=a.task_id WHERE a.status='pending' AND t.state='waiting_user'").all();
   }
-  requestApproval(actor: Actor, lease: TaskLease, title: string, detail: string): void {
+  /** kind says what is being approved (see Trust); a Bot's own request for a payment, purchase or publication is 'request'. */
+  requestApproval(actor: Actor, lease: TaskLease, title: string, detail: string, kind: ApprovalKind = 'request'): void {
     check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active'); text(title, 200); text(detail, 2000);
     transaction(this.#db, () => {
-      this.#db.prepare("INSERT INTO approval_requests(task_id,title,detail,version,status) VALUES (?,?,?,?,'pending') ON CONFLICT(task_id) DO UPDATE SET title=excluded.title,detail=excluded.detail,version=excluded.version,status='pending',action_hash=NULL,operation_id=NULL").run(lease.task.id, title, detail, randomUUID());
+      this.#db.prepare("INSERT INTO approval_requests(task_id,title,detail,version,status,kind) VALUES (?,?,?,?,'pending',?) ON CONFLICT(task_id) DO UPDATE SET title=excluded.title,detail=excluded.detail,version=excluded.version,status='pending',action_hash=NULL,operation_id=NULL,kind=excluded.kind").run(lease.task.id, title, detail, randomUUID(), kind);
       this.tasks.wait(actor, lease, 'waiting_user', title);this.tasks.waitKind(actor,lease,'approval');
     });
   }
-  /** Caller supplies the complete normalized operation. The display and binding use identical bytes. */
-  authorizeAction(actor: Actor, lease: TaskLease, operationId: string, title: string, action: JsonObject): boolean {
+  /** Caller supplies the complete normalized operation. The display and binding use identical bytes.
+   * A kind the administrator let this Bot do without asking goes ahead at once and is recorded as automatic; every other kind asks. */
+  authorizeAction(actor: Actor, lease: TaskLease, operationId: string, title: string, action: JsonObject, kind: ApprovalKind = 'action'): boolean {
     check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
     check(/^[A-Za-z0-9:_-]{1,160}$/.test(operationId), 'invalid', 'Invalid approval operation');
     const detail = JSON.stringify(action, null, 2); text(detail, 2000);
@@ -624,7 +631,8 @@ export class Runtime {
     return transaction(this.#db, () => {
       const prior = this.#db.prepare('SELECT action_hash,operation_id,status FROM approval_requests WHERE task_id=?').get(lease.task.id);
       if (prior?.action_hash === hash && prior.operation_id === operationId && prior.status === 'approved') return true;
-      this.requestApproval(actor, lease, title, detail);
+      if (this.trust.granted(lease.task.agent_id, kind)) { this.trust.record(lease.task.id, lease.task.agent_id, kind, 'auto', `${operationId}:${hash}`); return true; }
+      this.requestApproval(actor, lease, title, detail, kind);
       this.#db.prepare('UPDATE approval_requests SET action_hash=?,operation_id=? WHERE task_id=?').run(hash, operationId, lease.task.id);
       return false;
     });
@@ -636,6 +644,7 @@ export class Runtime {
       const request = this.#db.prepare("SELECT * FROM approval_requests WHERE task_id=? AND status='pending'").get(id);
       check(request && request.version === version && task.state === 'waiting_user', 'conflict', 'Approval is no longer pending');
       this.#db.prepare('UPDATE approval_requests SET status=? WHERE task_id=?').run(approved ? 'approved' : 'declined', id);
+      this.trust.record(id, task.agent_id, String(request.kind ?? 'action'), approved ? 'approved' : 'declined', request.operation_id === null ? null : `${String(request.operation_id)}:${String(request.action_hash)}`);
       if (approved) this.tasks.resume(actor, id, `管理者が次の内容を承認しました：${request.title}\n${request.detail}`, { preservePause: true });
       else this.tasks.cancel(actor, id);
     });
@@ -688,7 +697,7 @@ export class Runtime {
           this.#db.prepare('DELETE FROM task_coordination WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
           this.#db.prepare("UPDATE tasks SET prompt='',result=NULL,wait_reason=NULL,source_message_id=NULL WHERE room_id=?").run(record.id);
           for(const task of this.tasks.list(actor))if(task.room_id===record.id)this.tasks.clearActivity(actor,task.id);
-          for (const table of ['autonomous_boundaries', 'work_notes', 'task_replies', 'tool_receipts', 'business_tasks', 'approval_requests']) this.#db.prepare('DELETE FROM ' + table + ' WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
+          for (const table of ['autonomous_boundaries', 'work_notes', 'task_replies', 'tool_receipts', 'business_tasks', 'approval_requests', 'approval_history']) this.#db.prepare('DELETE FROM ' + table + ' WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
         } else {
           this.#db.prepare('DELETE FROM updates WHERE artifact_id=?').run(record.id);
           this.#db.prepare('DELETE FROM artifacts WHERE id=?').run(record.id);
