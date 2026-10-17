@@ -21,5 +21,5 @@ export function replayItemView(item) {
   }
 }
 
-/** 時刻の表示（日本時間・時:分:秒）。 */
-export const replayTime = at => new Date(at).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false });
+/** 時刻の表示（時:分:秒）。ほかの画面と同じく、ブラウザーの時刻で出す。 */
+export const replayTime = at => new Date(at).toLocaleTimeString('ja-JP', { hour12: false });

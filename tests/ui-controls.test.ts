@@ -159,6 +159,14 @@ test('a task replay has its own URL and reads each kind of record in plain words
  assert.equal(replayItemView({type:'message',link:'response',author:'リーダー',text:'答え'}).label,'返答（リーダー）');
  assert.equal(replayItemView({type:'approval',decision:'auto'}).detail,'任せた範囲で自動');
 });
+test('replay times follow the browser clock like the other screens, not a fixed Japan time',async()=>{
+ const {replayTime}=await ui('replay.js');const at=Date.UTC(2026,9,17,3,4,5),zone=process.env.TZ;
+ try{
+  process.env.TZ='UTC';assert.equal(replayTime(at),'3:04:05');
+  process.env.TZ='America/New_York';assert.equal(replayTime(at),'23:04:05');
+  process.env.TZ='Asia/Tokyo';assert.equal(replayTime(at),'12:04:05');
+ }finally{if(zone===undefined)delete process.env.TZ;else process.env.TZ=zone;}
+});
 test('the Bot export has its own URL and says what goes in and what cannot',async()=>{
  const {parseRoute,routeHash}=await ui('route.js');
  assert.deepEqual(parseRoute('#bots/b-1/export'),{page:'bots',id:'b-1',tab:'export'});assert.equal(routeHash({page:'bots',id:'b-1',tab:'export'}),'#bots/b-1/export');
