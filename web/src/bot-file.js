@@ -1,5 +1,5 @@
 /** 書き出す中身を一行で。人格と見た目はいつも入り、手順と記憶は選んだ数だけ。 */
-export function seedSummary(procedures = 0, memories = 0) {
+export function exportSummary(procedures = 0, memories = 0) {
   return `人格・見た目${procedures ? `・手順${procedures}件` : ''}${memories ? `・記憶${memories}件` : ''}`;
 }
 

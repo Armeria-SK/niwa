@@ -1,6 +1,6 @@
 /** 画面ごとのURL（#のあと）。共有したり、戻る・進むで行き来したりできるようにする。 */
 export const PAGES = ['today', 'conversation', 'bots', 'records', 'settings'];
-export const BOT_TABS = ['profile', 'memory', 'procedures', 'seed'];
+export const BOT_TABS = ['profile', 'memory', 'procedures', 'export'];
 // 「みんなの記憶」は、Botの代わりに everyone を選んだ形で開く（#bots/everyone/conflicts）。
 export const EVERYONE_TABS = ['search', 'conflicts'];
 export const RECORD_TABS = ['recap', 'running', 'approval', 'artifacts', 'schedules', 'watch'];
