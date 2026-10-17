@@ -22,10 +22,10 @@ export function MemberScroll({ children }) {
     element.scrollBy({ top: direction * Math.max(64, element.clientHeight * 0.7), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
   }
   return <div className="member-list-shell">
-    <div className="member-list" ref={list} onScroll={update} tabIndex={0} aria-label="メンバー一覧">{children}</div>
+    <div className="member-list" ref={list} onScroll={update} tabIndex={0} aria-label="Botの一覧">{children}</div>
     {position.overflow ? <div className="member-scroll-controls">
-      <button type="button" className="member-scroll-up" aria-label="メンバー一覧を上へスクロール" disabled={position.top} onClick={() => scroll(-1)}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 10 4-4 4 4" /></svg></button>
-      <button type="button" className="member-scroll-down" aria-label="メンバー一覧を下へスクロール" disabled={position.bottom} onClick={() => scroll(1)}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg></button>
+      <button type="button" className="member-scroll-up" aria-label="Botの一覧を上へ動かす" disabled={position.top} onClick={() => scroll(-1)}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 10 4-4 4 4" /></svg></button>
+      <button type="button" className="member-scroll-down" aria-label="Botの一覧を下へ動かす" disabled={position.bottom} onClick={() => scroll(1)}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg></button>
     </div> : null}
   </div>;
 }

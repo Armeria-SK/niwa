@@ -155,7 +155,7 @@ export function App() {
       previousTasks.current = new Map(state.tasks.map(task => [task.id, task.state]));
       const time = value => new Date(value).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
       setDeletedMembers((state.deletedAgents || []).map(agent => ({ id: agent.id, name: '削除したBot', deleted: true, shape: 'pebble', color: '#9a9a91', status: 'sleeping', motion: 'none' })));
-      setMembers(state.agents.map(agent => ({ ...agent, authority: agent.role, role: agent.profile.role || (agent.role === 'leader' ? 'リーダー' : '仲間'),
+      setMembers(state.agents.map(agent => ({ ...agent, authority: agent.role, role: agent.profile.role || (agent.role === 'leader' ? 'リーダー' : 'Bot'),
         shape: 'pebble', color: '#61B8A5', persona: '', interests: [], ...agent.profile, effort: agent.reasoning,
         runtimeMotion: memberWork(state.tasks.filter(task=>task.agent_id===agent.id),state.settings.paused,agent.status==='dormant').kind==='running'?'sway':'none', status: agent.status === 'dormant' ? 'sleeping' : 'active', activity:memberWork(state.tasks.filter(task=>task.agent_id===agent.id),state.settings.paused,agent.status==='dormant').activity })));
       setThreads(state.rooms.map(room => ({ ...room, scope: room.visibility, members: room.participants,
@@ -165,8 +165,8 @@ export function App() {
       const business = new Map((state.businessTasks || []).map(item => [item.task_id, item]));
       const businessRoots=new Set(state.tasks.filter(task=>business.has(task.id)).map(task=>task.work_root_id||task.id));
       setActivities(state.tasks.map(task => ({ ...task, member: task.agent_id, thread: task.room_id, approvalVersion: approvals.get(task.id)?.version, business: businessRoots.has(task.work_root_id||task.id), title: approvals.get(task.id)?.title || business.get(task.id)?.title || task.prompt,
-        instructions: task.replies.map((reply, index) => ({ id: index, time: time(reply.created_at), text: reply.body })), detail: approvals.get(task.id)?.detail || business.get(task.id)?.detail || task.result || task.wait_reason || ({ queued: '順番を待っています', running: '実行中です', waiting_child: '仲間の結果を待っています' })[task.state],
-        reason: task.wait_reason, status: approvals.has(task.id) ? 'approval' : task.paused ? 'paused' : ({ completed: 'done', failed: 'failed', cancelled: 'canceled', waiting_child: 'waiting', waiting_user: 'waiting', waiting_provider: 'waiting' })[task.state] || 'running', time: time(task.updated_at), steps: [task.progress?.label || ({ queued: '順番を待っています', running: '実行中', waiting_child: '仲間を待っています', waiting_user: '回答を待っています', waiting_provider: '接続を待っています', completed: '完了', failed: '失敗', cancelled: '取り消し' })[task.state]] })));
+        instructions: task.replies.map((reply, index) => ({ id: index, time: time(reply.created_at), text: reply.body })), detail: approvals.get(task.id)?.detail || business.get(task.id)?.detail || task.result || task.wait_reason || ({ queued: '順番を待っています', running: '実行中です', waiting_child: 'ほかのBotの結果を待っています' })[task.state],
+        reason: task.wait_reason, status: approvals.has(task.id) ? 'approval' : task.paused ? 'paused' : ({ completed: 'done', failed: 'failed', cancelled: 'canceled', waiting_child: 'waiting', waiting_user: 'waiting', waiting_provider: 'waiting' })[task.state] || 'running', time: time(task.updated_at), steps: [task.progress?.label || ({ queued: '順番を待っています', running: '実行中', waiting_child: 'ほかのBotを待っています', waiting_user: '回答を待っています', waiting_provider: '接続を待っています', completed: '完了', failed: '失敗', cancelled: '中止' })[task.state]] })));
       setUpdates(savedUpdates.filter(item => item.kind === 'decision').map(item => ({ ...item, member: item.author_id, thread: item.room_id, artifact: item.artifact_id, activity: item.task_id, time: new Date(item.created_at).toLocaleString('ja-JP') })));
       setQuestions(savedUpdates.filter(item => item.kind === 'question').map(item => ({ ...item, member: item.author_id, thread: item.room_id, activity: item.task_id })));
       setArtifacts(savedArtifacts.map(item => ({ ...item, member: item.author_id, thread: item.room_id, scope: state.rooms.find(room => room.id === item.room_id)?.visibility, updated: new Date(item.created_at).toLocaleString('ja-JP') })));
@@ -204,7 +204,7 @@ export function App() {
   const shownBot = (members.find(item => item.id === route.id) || members[0])?.id;
   function organizeThread(id, field) {
     const value = !threads.find(item => item.id === id)[field];
-    return mutate(() => api(`/rooms/${id}/organization`, 'PATCH', { [field]: value }), field === 'pinned' ? (value ? 'スレッドをピン留めしました' : 'ピン留めを解除しました') : (value ? 'アーカイブしました。会話は残っています。' : 'スレッドを戻しました'));
+    return mutate(() => api(`/rooms/${id}/organization`, 'PATCH', { [field]: value }), field === 'pinned' ? (value ? '会話をピン留めしました' : 'ピン留めを解除しました') : (value ? '保管しました。中身はそのまま残っています。' : '会話を保管から戻しました'));
   }
   async function updateMember(id, patch) {
     const { model, effort, profile_version, provider = memberMap[id].provider, ...profile } = patch;
@@ -221,9 +221,9 @@ export function App() {
     const { name, ...profile } = draft;
     const key = JSON.stringify(draft);
     if (memberRequest.current?.key !== key) memberRequest.current = { key, id: crypto.randomUUID() };
-    const ok = await mutate(() => api('/agents', 'POST', { id: memberRequest.current.id, name, profile }), '仲間を迎えました');
+    const ok = await mutate(() => api('/agents', 'POST', { id: memberRequest.current.id, name, profile }), 'Botを迎えました');
     if (ok) memberRequest.current = null;
-    return ok ? null : '仲間を作成できませんでした。人数上限・接続状態を確認してください。';
+    return ok ? null : 'Botを迎えられませんでした。人数の上限と接続を確かめてください。';
   }
   async function openArtifact(id) {
     try { const value = await api(`/artifacts/${id}`); setModal({ type: 'artifact', artifact: { ...artifacts.find(item => item.id === id), ...value } }); } catch (error) { notify(error.message); }
@@ -289,13 +289,13 @@ export function App() {
 
   return <div className={`app-shell page-${page} ${mobileDetail ? 'mobile-detail' : ''}`} >
     <a className="skip-link" href="#main-content">メインコンテンツへ</a>
-    <aside className="sidebar" aria-label="ナビゲーションとスレッド">
+    <aside className="sidebar" aria-label="ナビゲーションと会話">
       <a href="#today" className="wordmark" aria-label="Niwa きょうへ">Niwa</a>
       <nav className="main-nav" aria-label="メインナビゲーション">{navItems.filter(item => item.id !== 'settings').map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={`nav-link ${page === id ? 'active' : ''}`} aria-current={page === id ? 'page' : undefined}><Icon size={25} /><span>{label}</span>{id === 'today' && waitingOnYou ? <span className="nav-notice" title="あなたの番があります" /> : null}</a>)}</nav>
       <div className="thread-navigation">
-        <div className="sidebar-section-heading"><h2>スレッド</h2><IconButton label="新しいスレッド" onClick={() => setModal({ type: 'new-thread' })}><PlusIcon size={22} /></IconButton></div>
-        <div className="search-field"><SearchIcon size={20} /><input type="search" aria-label="スレッドを検索" placeholder="スレッドを検索" value={search} maxLength={200} onChange={e => setSearch(e.target.value)} />{search ? <IconButton label="検索をクリア" onClick={() => setSearch('')}><CloseIcon size={16} /></IconButton> : null}</div>
-        <Segmented label="スレッドの公開範囲" options={[{ value: 'all', label: 'すべて' }, { value: 'shared', label: '共有' }, { value: 'private', label: '個別' }, { value: 'archived', label: '保管' }]} value={scope} onChange={setScope} />
+        <div className="sidebar-section-heading"><h2>会話</h2><IconButton label="新しい会話" onClick={() => setModal({ type: 'new-thread' })}><PlusIcon size={22} /></IconButton></div>
+        <div className="search-field"><SearchIcon size={20} /><input type="search" aria-label="会話を検索" placeholder="会話を検索" value={search} maxLength={200} onChange={e => setSearch(e.target.value)} />{search ? <IconButton label="検索をクリア" onClick={() => setSearch('')}><CloseIcon size={16} /></IconButton> : null}</div>
+        <Segmented label="会話の公開範囲" options={[{ value: 'all', label: 'すべて' }, { value: 'shared', label: '共有' }, { value: 'private', label: '個別' }, { value: 'archived', label: '保管' }]} value={scope} onChange={setScope} />
         {roomSearch.loading ? <p role="status">検索中…</p> : roomSearch.error ? <p role="alert">会話の検索に失敗しました。{roomSearch.error}</p> : null}<div className="thread-list">{visibleThreads.length ? visibleThreads.map(item => <div key={item.id} className="thread-row"><button type="button" className={`thread-item ${selectedThread === item.id && page === 'conversation' ? 'selected' : ''}`} aria-current={selectedThread === item.id && page === 'conversation' ? 'true' : undefined} onClick={() => openThread(item.id)}>
           <span className="thread-item-top"><strong>{item.pinned ? <PinIcon size={13} aria-label="ピン留め" /> : null}{item.title}{item.scope === 'private' ? <LockIcon size={15} /> : null}</strong><time>{item.time}</time></span>
           <span className="thread-item-bottom"><span>{item.scope === 'private' ? '個別' : '共有'} · {item.members.slice(0, 3).map(id => memberMap[id]?.name).join(' / ')}</span>{unreadCounts.get(item.id) > 0 ? <span className="unread-count" aria-label={`${unreadCounts.get(item.id)}件の未読`}>{unreadCounts.get(item.id)}</span> : <span className="reply-count">{Math.max(0, item.message_count - 1)}</span>}</span>
@@ -307,7 +307,7 @@ export function App() {
     {page === 'conversation' && !thread ? <main className="conversation" id="main-content">{setupNotice ? <EmptyState title={setupNotice.title} action={<button className="button primary" onClick={openModelSettings}>モデルをつなぐ</button>}>{setupNotice.body}</EmptyState> : <EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState>}</main> : null}
     {page === 'conversation' && thread ? <Conversation notice={threadNotice ? <SetupNotice notice={threadNotice} onConnect={openModelSettings} /> : null} onThreadAction={organizeThread} drafts={Object.values(live.drafts).filter(draft => draft.room_id === thread.id)} thread={thread} artifacts={artifacts} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => navigate({ page: 'conversation' })} onArtifact={openArtifact} /> : null}
     {page === 'bots' ? <Members onOpenThread={openThread} onDormant={(id, dormant) => mutate(() => api(`/agents/${id}/dormancy`, 'PATCH', { dormant }), dormant ? '休ませました。記憶と会話はそのままです。' : '呼び戻しました。')} onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), 'Botを削除しました。会話と成果物は残っています。')} onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={route.id} tab={route.tab} onSelect={id => navigate({ page: 'bots', id, tab: route.tab })} onTab={tab => navigate({ page: 'bots', id: shownBot, tab })} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
-    {page === 'records' ? <Activity taskId={route.task} onOpenTask={openTask} onCloseTask={closeTask} onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '予定を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} onScheduleToken={async id => { let issued = null; await mutate(async () => { issued = await api(`/schedules/${id}/token`, 'POST', {}); }, '受付用の鍵を発行しました'); return issued; }} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={route.tab || recordTab} onFilter={tab => navigate({ page: 'records', tab })} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(async () => { await api(`/approvals/${id}`, 'POST', { approved, version }); closeTask(); }, approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
+    {page === 'records' ? <Activity taskId={route.task} onOpenTask={openTask} onCloseTask={closeTask} onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '定期実行を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '定期実行を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '定期実行を再開しました' : '定期実行を一時停止しました')} onScheduleToken={async id => { let issued = null; await mutate(async () => { issued = await api(`/schedules/${id}/token`, 'POST', {}); }, '受付用の鍵を発行しました'); return issued; }} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={route.tab || recordTab} onFilter={tab => navigate({ page: 'records', tab })} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(async () => { await api(`/approvals/${id}`, 'POST', { approved, version }); closeTask(); }, approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
     {page === 'settings' ? <Settings tab={route.tab} onTab={tab => navigate({ page: 'settings', tab })} onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} /> : null}
     <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined}><Icon size={23} /><span>{label}</span>{id === 'today' && waitingOnYou ? <span className="nav-notice" /> : null}</a>)}</nav>
     {modal?.type === 'appearance' ? <Modal title={`${memberMap[modal.member].name}のアイコン`} onClose={() => setModal(null)} className="appearance-modal"><AppearanceEditor member={memberMap[modal.member]} onCancel={() => setModal(null)} onSave={async patch => { if (await updateMember(modal.member, patch)) setModal(null); }} /></Modal> : null}
@@ -321,10 +321,10 @@ export function App() {
 
 /** Only a search can hide threads; an empty scope or a first start says how to begin instead of asking to change the search. */
 function ThreadListEmpty({ search, scope, onClear, onShowAll, onCreate }) {
-  if (search.trim()) return <EmptyState icon={SearchIcon} title="スレッドが見つかりません" action={<button className="text-button" onClick={onClear}>条件をクリア</button>}>言葉や公開範囲を変えてみてください。</EmptyState>;
-  if (scope === 'archived') return <EmptyState icon={InfoIcon} title="保管したスレッドはありません">スレッドを保管すると、ここに並びます。</EmptyState>;
-  if (scope !== 'all') return <EmptyState icon={ChatIcon} title={`${scope === 'shared' ? '共有' : '個別'}のスレッドはまだありません`} action={<button className="text-button" onClick={onShowAll}>すべてを表示</button>} />;
-  return <EmptyState icon={ChatIcon} title="まだスレッドがありません" action={<button className="text-button" onClick={onCreate}>新しいスレッドを作る</button>}>Botと話す場所です。<br />＋からも作れます。</EmptyState>;
+  if (search.trim()) return <EmptyState icon={SearchIcon} title="会話が見つかりません" action={<button className="text-button" onClick={onClear}>条件をクリア</button>}>言葉や公開範囲を変えてみてください。</EmptyState>;
+  if (scope === 'archived') return <EmptyState icon={InfoIcon} title="保管した会話はありません">会話を保管すると、ここに並びます。</EmptyState>;
+  if (scope !== 'all') return <EmptyState icon={ChatIcon} title={`${scope === 'shared' ? '共有' : '個別'}の会話はまだありません`} action={<button className="text-button" onClick={onShowAll}>すべてを表示</button>} />;
+  return <EmptyState icon={ChatIcon} title="まだ会話がありません" action={<button className="text-button" onClick={onCreate}>新しい会話を始める</button>}>Botと話す場所です。<br />＋からも作れます。</EmptyState>;
 }
 
 function NewThreadModal({ members, initialScope = 'shared', initialMember, onCreate, onClose }) {
@@ -333,12 +333,12 @@ function NewThreadModal({ members, initialScope = 'shared', initialMember, onCre
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  return <Modal title="新しいスレッド" onClose={onClose}><form onSubmit={async e => { e.preventDefault(); if (busy || !title.trim() || !text.trim()) return; setBusy(true); try { await onCreate({ title: title.trim(), text: text.trim(), scope, member }); } finally { setBusy(false); } }}>
-    <div className="modal-body form-stack"><Segmented label="新しいスレッドの公開範囲" options={[{ value: 'shared', label: 'みんなと共有' }, { value: 'private', label: '個別に話す' }]} value={scope} onChange={setScope} />
+  return <Modal title="新しい会話" onClose={onClose}><form onSubmit={async e => { e.preventDefault(); if (busy || !title.trim() || !text.trim()) return; setBusy(true); try { await onCreate({ title: title.trim(), text: text.trim(), scope, member }); } finally { setBusy(false); } }}>
+    <div className="modal-body form-stack"><Segmented label="新しい会話の公開範囲" options={[{ value: 'shared', label: 'みんなと共有' }, { value: 'private', label: '個別に話す' }]} value={scope} onChange={setScope} />
       {scope === 'private' ? <label className="field"><span>話す相手</span><select value={member} onChange={e => setMember(e.target.value)}>{members.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
-      <p className="scope-note">{scope === 'private' ? <LockIcon size={16} /> : <UsersIcon size={16} />}{scope === 'private' ? 'あなたと選んだBotだけが参加する会話です。' : 'メンバー全員が読んで、自由に参加できます。'}</p>
+      <p className="scope-note">{scope === 'private' ? <LockIcon size={16} /> : <UsersIcon size={16} />}{scope === 'private' ? 'あなたと選んだBotだけが参加する会話です。' : 'すべてのBotが読んで、自由に参加できます。'}</p>
       <label className="field"><span>話題</span><input autoFocus placeholder="何について話しますか？" maxLength={80} value={title} onChange={e => setTitle(e.target.value)} required /></label>
       <label className="field"><span>最初のメッセージ</span><textarea rows={4} placeholder="気になること、試してみたいことなど…" value={text} onChange={e => setText(e.target.value)} required /></label>
-    </div><div className="form-actions"><button type="button" className="button subtle" onClick={onClose}>キャンセル</button><button className="button primary" disabled={busy || !title.trim() || !text.trim()}>スレッドを作成</button></div>
+    </div><div className="form-actions"><button type="button" className="button subtle" onClick={onClose}>やめる</button><button className="button primary" disabled={busy || !title.trim() || !text.trim()}>会話を始める</button></div>
   </form></Modal>;
 }

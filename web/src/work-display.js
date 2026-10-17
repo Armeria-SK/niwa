@@ -1,5 +1,5 @@
 export const shortWork = text => {const line=String(text||'名称未設定の仕事').split(/\n/)[0];return line.length>64?line.slice(0,64)+'…':line;};
-export const workLabel=(task,paused=false)=>paused&&!['completed','cancelled','failed'].includes(task.state)?'停止中':task.progress?.label||({running:'作業中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_user:'対応待ち（理由未確認）',waiting_provider:'理由未確認の待機',completed:'完了',cancelled:'中止',failed:'失敗'})[task.state]||'状態未確認';
+export const workLabel=(task,paused=false)=>paused&&!['completed','cancelled','failed'].includes(task.state)?'一時停止中':task.progress?.label||({running:'作業中',queued:'順番待ち',waiting_child:'ほかのBotの結果待ち',waiting_user:'対応待ち（理由未確認）',waiting_provider:'理由未確認の待機',completed:'完了',cancelled:'中止',failed:'失敗'})[task.state]||'状態未確認';
 export function memberWork(jobs,paused=false,sleeping=false) {
  const updated=task=>task.progress?.last_activity_at??task.updated_at??task.created_at??0;
  const open=jobs.filter(t=>!['completed','cancelled','failed'].includes(t.state)).sort((a,b)=>updated(b)-updated(a));
@@ -10,14 +10,14 @@ export function memberWork(jobs,paused=false,sleeping=false) {
  return {jobs:[...running,...waiting,...stopped],kind:sleeping?'sleeping':running.length?'running':waiting.length?'waiting':stopped.length||paused?'paused':'idle',activity:sleeping?'休眠中':current?workLabel(current,paused||sleeping)+(open.length>1?`・ほか${open.length-1}件`:''):'返答待機'};
 }
 export function presenceCounts(members) {
- const labels={running:'実行中',waiting:'待機',paused:'停止',idle:'返答待機',sleeping:'休眠'};
- return Object.entries(labels).map(([kind,label])=>{const count=members.filter(m=>m.workKind===kind).length;return count?`${label}${count}人`:'';}).filter(Boolean).join('・');
+ const labels={running:'実行中',waiting:'待機',paused:'一時停止',idle:'返答待機',sleeping:'休眠'};
+ return Object.entries(labels).map(([kind,label])=>{const count=members.filter(m=>m.workKind===kind).length;return count?`${label}${count}体`:'';}).filter(Boolean).join('・');
 }
 
 export function workCounts(tasks,paused=false) {
  const counts={running:0,waiting:0,paused:0,ended:0};
  for(const task of tasks){const terminal=['completed','cancelled','failed'].includes(task.state)||['done','canceled','failed'].includes(task.status);const kind=terminal?'ended':paused||task.paused||task.status==='paused'?'paused':task.state==='running'?'running':'waiting';counts[kind]++;}
- return Object.entries({running:'実行中',waiting:'待機',paused:'停止',ended:'終了'}).filter(([key])=>counts[key]).map(([key,label])=>`${label}${counts[key]}作業`).join('・');
+ return Object.entries({running:'実行中',waiting:'待機',paused:'一時停止',ended:'終了'}).filter(([key])=>counts[key]).map(([key,label])=>`${label}${counts[key]}作業`).join('・');
 }
 /** モデルに送った回数と量。接続先が報告した数を使い、報告のない回の入力は送る前の見積もりで数える。 */
 export function usageSummary(runs) {

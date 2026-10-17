@@ -66,7 +66,7 @@ export function FallbackConnection({ savedUrl }) {
       <button type="button" className="button subtle" disabled={busy || !settings?.fallbackModel} onClick={() => save(null)}>自動切替を解除</button>
     </div>
     <p className="field-hint">{provider === 'local_llm' ? '保存時にツール対応を確認します。' : 'ツール呼び出しに対応したモデルを選んでください。'}サブスクの利用上限に達した場合だけ切り替え、回復確認の成功後、応答の区切りで元のモデルに戻ります。</p>
-    <p className="field-hint">利用上限・接続設定の確認で待機した仕事は、1分ごとに再確認します。<br />活動画面から手動でも再開できます。</p>
+    <p className="field-hint">利用上限・接続設定の確認で待機した仕事は、1分ごとに再確認します。<br />「記録」の画面から手で再開することもできます。</p>
     {error ? <p className="field-error" role="alert">{error}</p> : null}
     <p className="saved-inline" role="status">{busy ? '接続先を確認しています…' : message}</p>
   </>;

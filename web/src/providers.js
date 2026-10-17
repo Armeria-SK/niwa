@@ -13,5 +13,5 @@ export function modelSetupNotice(ready, agent) {
   if (!ready.length) return { title: 'まずモデルをつなぎましょう', body: 'Botが考えて返事をするには、AIモデルへの接続が1つ以上必要です。ChatGPT・Claude（Anthropic API）・OpenAI互換API・Local LLMから選べます。つなぐまで、自分から動く活動も始まりません。' };
   if (!agent?.provider || ready.includes(agent.provider)) return null;
   const who = agent.authority === 'leader' ? 'リーダー' : agent.name;
-  return { title: `${who}のモデル（${providerLabel(agent.provider)}）がつながっていません`, body: `その接続を保存するか、メンバーのプロフィールで${who}のモデルを、つながっている接続先のものに変えてください。` };
+  return { title: `${who}のモデル（${providerLabel(agent.provider)}）がつながっていません`, body: `その接続を保存するか、Botのプロフィールで${who}のモデルを、つながっている接続先のものに変えてください。` };
 }

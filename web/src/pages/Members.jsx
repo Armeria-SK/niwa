@@ -137,12 +137,12 @@ function MemoryEditModal({ memory, member, onSave, onClose }) {
   const impact = useMemoryImpact(member.id, memory.id);
   return <Modal title="記憶を訂正" onClose={onClose}><form onSubmit={e => { e.preventDefault(); if (text.trim()) onSave(text.trim(), keep); }}><div className="modal-body form-stack"><p className="muted">{member.name}の記憶に、あなたによる訂正として記録します。</p><label className="field"><span>記憶の内容</span><textarea rows={6} value={text} onChange={e => setText(e.target.value)} autoFocus required /></label>
     <label className="keep-previous"><input type="checkbox" checked={keep} onChange={e => setKeep(e.target.checked)} /><span>直す前の文を、訂正の履歴に残す<small>私的な内容を消すための訂正なら、外してください。</small></span></label>
-    <MemoryImpactNote impact={impact} name={member.name} /></div><div className="form-actions"><button type="button" className="button subtle" onClick={onClose}>キャンセル</button><button className="button primary" disabled={!text.trim()}>訂正を保存</button></div></form></Modal>;
+    <MemoryImpactNote impact={impact} name={member.name} /></div><div className="form-actions"><button type="button" className="button subtle" onClick={onClose}>やめる</button><button className="button primary" disabled={!text.trim()}>訂正を保存</button></div></form></Modal>;
 }
 
 function MemoryDeleteModal({ memory, member, onDelete, onClose }) {
   const impact = useMemoryImpact(member.id, memory.id);
-  return <Modal title="この記憶を削除しますか？" onClose={onClose}><div className="modal-body"><p className="muted">{member.name}の記憶から、この内容を取り除きます。</p><blockquote className="delete-preview">{memory.text}</blockquote><MemoryImpactNote impact={impact} name={member.name} deleting /></div><div className="form-actions"><button className="button subtle" onClick={onClose}>キャンセル</button><button className="button danger" onClick={onDelete}>記憶を削除</button></div></Modal>;
+  return <Modal title="この記憶を削除しますか？" onClose={onClose}><div className="modal-body"><p className="muted">{member.name}の記憶から、この内容を取り除きます。</p><blockquote className="delete-preview">{memory.text}</blockquote><MemoryImpactNote impact={impact} name={member.name} deleting /></div><div className="form-actions"><button className="button subtle" onClick={onClose}>やめる</button><button className="button danger" onClick={onDelete}>記憶を削除</button></div></Modal>;
 }
 
 
@@ -151,17 +151,17 @@ function AddMemberModal({ onClose, onAdd, atLimit, maxMembers }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const change = (key, value) => { setDraft(current => ({ ...current, [key]: value })); setError(''); };
-  return <Modal title="メンバーを追加" onClose={() => { if (!busy) onClose(); }}><form onSubmit={async e => { e.preventDefault(); if (busy || atLimit || !draft.name.trim()) return; setBusy(true); try { setError(await onAdd({ ...draft, name: draft.name.trim(), persona: draft.persona.trim() }) || ''); } finally { setBusy(false); } }}>
+  return <Modal title="Botを迎える" onClose={() => { if (!busy) onClose(); }}><form onSubmit={async e => { e.preventDefault(); if (busy || atLimit || !draft.name.trim()) return; setBusy(true); try { setError(await onAdd({ ...draft, name: draft.name.trim(), persona: draft.persona.trim() }) || ''); } finally { setBusy(false); } }}>
     <fieldset className="modal-body form-stack" disabled={busy} style={{ border: 0, margin: 0 }}>
-      <p className="field-hint">指定した内容で仲間を追加します。<br />追加後はこのメンバー一覧で確認できます。</p>
-      {atLimit ? <p className="field-error" role="alert">生成メンバーの上限（{maxMembers}体）に達しています。休眠中も数に含みます。設定の「活動と人数」を確認してください。</p> : null}
-      <div className="field-pair"><label className="field"><span>名前</span><input autoFocus required maxLength={20} value={draft.name} onChange={e => change('name', e.target.value)} placeholder="新しい仲間の名前" /></label><label className="field"><span>役割</span><input maxLength={40} value={draft.role} onChange={e => change('role', e.target.value)} placeholder="例：調べる・まとめる" /></label></div>
-      <label className="field"><span>性格と話し方</span><textarea rows={3} maxLength={2000} value={draft.persona} onChange={e => change('persona', e.target.value)} placeholder="どんな仲間にしたいですか？" /></label>
+      <p className="field-hint">指定した内容でBotを迎えます。<br />迎えたあとは、この一覧で確かめられます。</p>
+      {atLimit ? <p className="field-error" role="alert">迎えられるBotの上限（{maxMembers}体）に達しています。<br />休ませているBotも数に入ります。<br />設定の「活動と人数」で上限を変えられます。</p> : null}
+      <div className="field-pair"><label className="field"><span>名前</span><input autoFocus required maxLength={20} value={draft.name} onChange={e => change('name', e.target.value)} placeholder="新しいBotの名前" /></label><label className="field"><span>役割</span><input maxLength={40} value={draft.role} onChange={e => change('role', e.target.value)} placeholder="例：調べる・まとめる" /></label></div>
+      <label className="field"><span>性格と話し方</span><textarea rows={3} maxLength={2000} value={draft.persona} onChange={e => change('persona', e.target.value)} placeholder="どんなBotにしたいですか？" /></label>
       <div className="new-member-appearance"><Avatar shape={draft.shape} color={draft.color} motion={draft.motion} size={54} /><label className="field"><span>かたち</span><select value={draft.shape} onChange={e => change('shape', e.target.value)}>{SHAPES.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>カラー</span><input type="color" value={draft.color} onChange={e => change('color', e.target.value)} /></label></div>
       <fieldset><legend>動き</legend><MotionPicker value={draft.motion} onChange={value => change('motion', value)} /></fieldset>
       <p className="field-hint">モデルは「新しいBotの標準モデル」を使用します。<br />見た目やプロフィールは追加後も変更できます。</p>
       {error ? <p className="field-error" role="alert">{error}</p> : null}
     </fieldset>
-    <div className="form-actions"><button type="button" className="button subtle" disabled={busy} onClick={onClose}>キャンセル</button><button className="button primary" disabled={busy || atLimit || !draft.name.trim()}>{busy ? '追加中…' : '追加する'}</button></div>
+    <div className="form-actions"><button type="button" className="button subtle" disabled={busy} onClick={onClose}>やめる</button><button className="button primary" disabled={busy || atLimit || !draft.name.trim()}>{busy ? '迎えています…' : '迎える'}</button></div>
   </form></Modal>;
 }

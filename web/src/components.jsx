@@ -82,7 +82,7 @@ export function AppearanceEditor({ member, onSave, onCancel }) {
     } finally { working.current = false; setSaving(false); }
   }}>
     <AppearanceFields draft={draft} onChange={(key, value) => setDraft(current => ({ ...current, [key]: value }))} />
-    <div className="form-actions">{onCancel ? <button type="button" className="button subtle" onClick={onCancel}>キャンセル</button> : null}<button type="button" className="button subtle" onClick={() => setDraft(member)}>最新の内容を読み込む</button><button className="button primary" disabled={!valid || saving}>{saving ? '保存しています…' : '保存'}</button></div>
+    <div className="form-actions">{onCancel ? <button type="button" className="button subtle" onClick={onCancel}>やめる</button> : null}<button type="button" className="button subtle" onClick={() => setDraft(member)}>最新の内容を読み込む</button><button className="button primary" disabled={!valid || saving}>{saving ? '保存しています…' : '保存'}</button></div>
   </form>;
 }
 

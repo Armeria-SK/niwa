@@ -8,7 +8,7 @@ test('artifact categories preserve Japanese names, unite aliases and group unkno
  const rows=kinds.map((kind,i)=>({id:String(i),room_id:'room',series_id:String(i),kind,version:1,created_at:i,name:'同名'})),saved=JSON.stringify(rows);assert.equal(artifactGroups(rows).length,8);assert.equal(JSON.stringify(rows),saved);
 });
 test('work counts distinguish assignments from purposes and never call paused work running',async()=>{
- const {workCounts}=await ui('work-display.js');const tasks=[{state:'running'},{state:'running',paused:1},{state:'queued'},{state:'waiting_child'},{state:'completed'},{state:'cancelled'}];assert.equal(workCounts(tasks),'実行中1作業・待機2作業・停止1作業・終了2作業');assert.equal(workCounts(tasks,true),'停止4作業・終了2作業');
+ const {workCounts}=await ui('work-display.js');const tasks=[{state:'running'},{state:'running',paused:1},{state:'queued'},{state:'waiting_child'},{state:'completed'},{state:'cancelled'}];assert.equal(workCounts(tasks),'実行中1作業・待機2作業・一時停止1作業・終了2作業');assert.equal(workCounts(tasks,true),'一時停止4作業・終了2作業');
 });
 test('model setup notice appears only when no saved connection can answer the Bot in question',async()=>{
  const {modelSetupNotice}=await ui('providers.js');

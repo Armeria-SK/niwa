@@ -21,13 +21,13 @@ export function Conversation({ notice, thread, tasks, artifacts = [], drafts = [
   const presenceProps = { members: scopedMembers, paused, onPause, onAppearance, onMember, isPrivate: thread.scope === 'private' };
   return <>
     <main className="conversation" id="main-content" tabIndex={-1} aria-label={thread.title}>
-      <div className="conversation-mobile-tools"><button className="text-button" onClick={onBack}><BackIcon size={20} />スレッド</button><IconButton label="メンバーの様子" onClick={() => setShowPresence(true)}><UsersIcon size={22} /></IconButton></div>
+      <div className="conversation-mobile-tools"><button className="text-button" onClick={onBack}><BackIcon size={20} />会話の一覧</button><IconButton label="Botの様子" onClick={() => setShowPresence(true)}><UsersIcon size={22} /></IconButton></div>
       {notice ? <div className="conversation-notice">{notice}</div> : null}
       <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} artifacts={artifacts} drafts={drafts} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
     </main>
     {showWork ? <CoordinationBoard roomId={thread.id} members={memberMap} onClose={() => setShowWork(false)} onArtifact={onArtifact}/> : null}
-    <aside className="presence-rail" aria-label="メンバーの様子"><Presence {...presenceProps} /></aside>
-    {showPresence ? <Modal title="メンバーの様子" onClose={() => setShowPresence(false)} className="presence-modal"><Presence {...presenceProps} noHeading onMember={id => { setShowPresence(false); onMember(id); }} onAppearance={id => { setShowPresence(false); onAppearance(id); }} /></Modal> : null}
+    <aside className="presence-rail" aria-label="Botの様子"><Presence {...presenceProps} /></aside>
+    {showPresence ? <Modal title="Botの様子" onClose={() => setShowPresence(false)} className="presence-modal"><Presence {...presenceProps} noHeading onMember={id => { setShowPresence(false); onMember(id); }} onAppearance={id => { setShowPresence(false); onAppearance(id); }} /></Modal> : null}
   </>;
 }
 
@@ -83,7 +83,7 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
   }
   return <>
     <header className="message-scroll conversation-header" aria-label="会話のヘッダー">
-      <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" onClick={onShowWork}>共同作業</button><button className="text-button" disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={15} />新規セッション</button><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : 'アーカイブ'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
+      <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" onClick={onShowWork}>共同作業</button><button className="text-button" disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={15} />新しい会話</button><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : '保管する'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
     </header>
     <div className="message-scroll conversation-replies" ref={listRef} onScroll={()=>{const node=listRef.current;followBottom.current=node.scrollHeight-node.scrollTop-node.clientHeight<80;}}>
       <Message acknowledgments={thread.acknowledgments} message={history.first} isRoot title={thread.title} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
@@ -94,7 +94,7 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
       <div className="replies">{history.items.map(message=><Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message=>{setReplyTo(message);inputRef.current?.focus();}} onArtifact={onArtifact}/>)}{liveDrafts.map(item => <DraftMessage key={item.task_id} draft={item} member={memberMap[item.agent_id]} />)}</div>
       {thread.message_count === 1 && !tasks.some(task => !['done', 'canceled'].includes(task.status)) ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
     </div>
-    <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。<br />返信するには「保管から戻す」を選んでください。</p> : null}
+    <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中の会話です。<br />返信するには「保管から戻す」を選んでください。</p> : null}
       {deletedConversation ? <p className="archive-note" role="status">相手のBotは削除されています。<br />この会話は履歴として読むことができます。</p> : null}
       {paused && !readOnly ? <div className="pause-notice"><PauseIcon size={14} />Botの活動は一時停止中です。<br />返信は残せます。</div> : null}
       {replyTo ? <div className="reply-preview"><ReplyIcon size={16} /><div><strong>{memberMap[replyTo.author]?.name || 'あなた'}に返信</strong><span>{replyTo.text}</span></div><IconButton label="返信先を解除" onClick={() => setReplyTo(null)}><CloseIcon size={16} /></IconButton></div> : null}
@@ -102,7 +102,7 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
       {attachments.length ? <div className="attachment-previews">{attachments.map(file => <span key={file.id}><PaperclipIcon size={15} />{file.name}<small>{formatSize(file.size)}</small><IconButton label={`${file.name}を外す`} onClick={() => setAttachments(current => current.filter(item => item.id !== file.id))}><CloseIcon size={13} /></IconButton></span>)}</div> : null}
       {recipients.length ? <div className="reply-preview mention-recipients">{recipients.map(recipient => <span key={recipient.id}>依頼先：{recipient.name}<IconButton label={`${recipient.name}の指定を解除`} onClick={() => setRecipients(current => current.filter(item => item.id !== recipient.id))}><CloseIcon size={14} /></IconButton></span>)}</div> : null}
       {candidates.length ? <div id={mentionListId} className="mention-picker" role="listbox" aria-label="依頼するBot">{candidates.map((member, index) => <button type="button" role="option" id={`${mentionListId}-${member.id}`} tabIndex={-1} aria-selected={index === activeMentionIndex} key={member.id} onMouseDown={e => e.preventDefault()} onMouseEnter={() => setMentionIndex(index)} onClick={() => chooseRecipient(member)}>{member.name}<span className="muted">{member.role}</span></button>)}</div> : null}
-      <form className="composer" onSubmit={submit}><textarea disabled={readOnly || sending} ref={inputRef} aria-controls={candidates.length ? mentionListId : undefined} aria-activedescendant={activeMentionId} aria-describedby={candidates.length ? `${mentionListId}-hint` : undefined} onBlur={() => setCaret(0)} aria-label="このスレッドに返信" placeholder="このスレッドに返信…（@でBotを指定）" value={draft} rows={1} onChange={e => { setDraft(e.target.value); setCaret(e.target.selectionStart); setMentionIndex(0); setRecipients(current => current.filter(item => e.target.value.includes(`@${item.name}`))); }} onKeyDown={e => {
+      <form className="composer" onSubmit={submit}><textarea disabled={readOnly || sending} ref={inputRef} aria-controls={candidates.length ? mentionListId : undefined} aria-activedescendant={activeMentionId} aria-describedby={candidates.length ? `${mentionListId}-hint` : undefined} onBlur={() => setCaret(0)} aria-label="この会話に返信" placeholder="この会話に返信…（@でBotを指定）" value={draft} rows={1} onChange={e => { setDraft(e.target.value); setCaret(e.target.selectionStart); setMentionIndex(0); setRecipients(current => current.filter(item => e.target.value.includes(`@${item.name}`))); }} onKeyDown={e => {
         if (e.nativeEvent.isComposing) return;
         if (candidates.length && ['ArrowDown', 'ArrowUp', 'Tab', 'Enter', 'Escape'].includes(e.key) && !e.ctrlKey && !e.metaKey) {
           e.preventDefault(); if (e.key === 'Escape') setCaret(0); else if (e.key === 'Enter') chooseRecipient(candidates[activeMentionIndex]);
@@ -115,7 +115,7 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
       </form>
       {candidates.length ? <span className="composer-hint" id={`${mentionListId}-hint`}>Tab / ↑↓ で候補を移動 · Enter で選択 · Esc で閉じる</span> : null}
       {openFile ? <AttachmentPreview file={openFile} onClose={() => setOpenFile(null)} /> : null}
-      <span className="composer-hint">{thread.scope === 'private' ? 'この会話は、あなたと相手のBotだけに表示されます。' : 'メンバー全員が読んで参加できるスレッドです。'}<span>Ctrl / ⌘ + Enter で送信</span></span>
+      <span className="composer-hint">{thread.scope === 'private' ? 'この会話は、あなたと相手のBotだけに表示されます。' : 'すべてのBotが読んで参加できる会話です。'}<span>Ctrl / ⌘ + Enter で送信</span></span>
     </div>
   </>;
 }
@@ -177,7 +177,7 @@ function Presence({ members, paused, onPause, onAppearance, onMember, isPrivate,
   const [openJobs,setOpenJobs]=useState({});
 
   return <div className="presence-content">
-    {!noHeading ? <h2>メンバーの様子</h2> : null}
+    {!noHeading ? <h2>Botの様子</h2> : null}
     <div className="presence-summary"><span>{paused ? '活動を一時停止中' : presenceCounts(members)}</span><IconButton label={paused ? '全体の活動を再開' : '全体の活動を一時停止'} className={paused ? 'resume-button' : ''} onClick={onPause}>{paused ? <PlayIcon size={19} weight="fill" /> : <PauseIcon size={19} weight="fill" />}</IconButton></div>
     {isPrivate ? <p className="presence-scope"><LockIcon size={14} />あなたとの個別の会話</p> : null}
     <div className="presence-members">{members.map(member => <div key={member.id} className={`presence-member ${member.status === 'sleeping' ? 'sleeping' : ''}`}>

@@ -61,6 +61,6 @@ export function ModelDefaults() {
   if (!data) return <p className="field-hint" role={error ? 'alert' : 'status'}>{error || 'モデル設定を読み込んでいます…'}</p>;
   return <>
     {data.leader ? <ModelChoice initial={data.leader} endpoint={`/agents/${data.leader.id}/model`} title="リーダーのモデル" hint="保存するとリーダーのモデルを変更します。人格と記憶は引き継ぎます。" /> : null}
-    <ModelChoice initial={data.generated} endpoint="/model-settings/generated" title="新しいBotの標準モデル" hint="保存後に生成するBotへ適用します。既存Botは、メンバーのプロフィールから変更できます。" />
+    <ModelChoice initial={data.generated} endpoint="/model-settings/generated" title="新しいBotの標準モデル" hint="保存後に生成するBotへ適用します。既存Botは、Botのプロフィールから変更できます。" />
   </>;
 }
