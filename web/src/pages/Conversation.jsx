@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useId, useRef, useState } from 'react';
 import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
 import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon, DownloadIcon, CompareIcon } from '../icons.jsx';
 import { SecondOpinion } from '../SecondOpinion.jsx';
-import { ATTACHMENT_LIMITS, formatSize, readTextAttachments } from '../attachments.js';
+import { ATTACHMENT_LIMITS, formatSize, readAttachments, unseenNotice } from '../attachments.js';
 import { documentName } from '../artifact-display.js';
 import { Markdown } from '../Markdown.jsx';
 import { useConversationMessages } from '../useConversationMessages.js';
@@ -112,8 +112,8 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
         }
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
       }} />
-        <input className="visually-hidden" ref={fileRef} type="file" multiple aria-label="添付ファイル（テキストのみ）" onChange={async e => { const files = Array.from(e.target.files || []); e.target.value = ''; const { accepted, errors } = await readTextAttachments(files, attachments.length); setAttachments(current => [...current, ...accepted].slice(0, ATTACHMENT_LIMITS.count)); setAttachmentErrors(errors); }} />
-        <IconButton label="テキストファイルを添付（5件・各256KBまで）" disabled={readOnly || sending || attachments.length >= ATTACHMENT_LIMITS.count} className="attach-button" onClick={() => fileRef.current?.click()}><PlusIcon size={23} /></IconButton><button className="button primary send-button" disabled={readOnly || sending || (!draft.trim() && !attachments.length)}>送信</button>
+        <input className="visually-hidden" ref={fileRef} type="file" multiple aria-label="添付ファイル（テキスト・画像・PDF）" onChange={async e => { const files = Array.from(e.target.files || []); e.target.value = ''; const { accepted, errors } = await readAttachments(files, attachments.length, attachments.reduce((sum, file) => sum + file.size, 0)); setAttachments(current => [...current, ...accepted].slice(0, ATTACHMENT_LIMITS.count)); setAttachmentErrors(errors); }} />
+        <IconButton label="ファイルを添付（テキスト・画像・PDF、5件まで）" disabled={readOnly || sending || attachments.length >= ATTACHMENT_LIMITS.count} className="attach-button" onClick={() => fileRef.current?.click()}><PlusIcon size={23} /></IconButton><button className="button primary send-button" disabled={readOnly || sending || (!draft.trim() && !attachments.length)}>送信</button>
       </form>
       {candidates.length ? <span className="composer-hint" id={`${mentionListId}-hint`}>Tab / ↑↓ で候補を移動 · Enter で選択 · Esc で閉じる</span> : null}
       {openFile ? <AttachmentPreview file={openFile} onClose={() => setOpenFile(null)} /> : null}
@@ -137,7 +137,10 @@ function Message({ acknowledgments = [], message, isRoot = false, title, memberM
       {message.replyTo ? <blockquote><span>{memberMap[message.replyTo.author]?.name || 'あなた'}</span>{message.replyTo.text}</blockquote> : null}
       {message.text ? <Markdown text={message.text} members={memberMap} /> : null}
       {message.artifact ? <ArtifactLink artifact={message.artifact} artifacts={artifacts} onArtifact={onArtifact} /> : null}
-      {message.attachments?.length ? <div className="message-attachments">{message.attachments.map(file => <button type="button" className="file-link message-attachment" key={file.id} aria-label={`添付ファイル ${file.name}（${formatSize(file.size)}）を開く`} onClick={() => onAttachment(file)}><PaperclipIcon size={17} />{file.name}<small>{formatSize(file.size)}</small></button>)}</div> : null}
+      {message.attachments?.length ? <div className="message-attachments">{message.attachments.map(file => file.media_type?.startsWith('image/')
+        ? <figure className="message-image" key={file.id}><button type="button" aria-label={`添付画像 ${file.name}（${formatSize(file.size)}）を開く`} onClick={() => onAttachment(file)}><img src={`/api/attachments/${file.id}?view=1`} alt={file.name} loading="lazy" /></button>
+          {file.unseen_by?.length ? <figcaption role="note">{unseenNotice(file.unseen_by.map(id => memberMap[id]?.name || '削除したBot'))}</figcaption> : null}</figure>
+        : <button type="button" className="file-link message-attachment" key={file.id} aria-label={`添付ファイル ${file.name}（${formatSize(file.size)}）を開く`} onClick={() => onAttachment(file)}>{file.media_type === 'application/pdf' ? <FileIcon size={17} /> : <PaperclipIcon size={17} />}{file.name}<small>{file.media_type === 'application/pdf' ? 'PDF・' : ''}{formatSize(file.size)}</small></button>)}</div> : null}
       </div> : null}
       {acknowledgments.some(item => item.message_id === message.id) ? <p className="message-acknowledgments">受領済み：{acknowledgments.filter(item => item.message_id === message.id).map(item => memberMap[item.agent_id]?.name || '削除したBot').join('・')}</p> : null}
     </div>
@@ -151,20 +154,25 @@ function ArtifactLink({ artifact, artifacts, onArtifact }) {
   return <button className="file-link" onClick={() => onArtifact(id)}><FileIcon size={19} />{name ? documentName(name) : '成果物'}</button>;
 }
 
+/** 添付を開く。画像はそのまま見せ、PDFは取り出した文字を、テキストは本文を見せる。どれもダウンロードできる。 */
 function AttachmentPreview({ file, onClose }) {
   const [state, setState] = useState({ loading: true, text: '', error: '' });
-  const href = `/api/attachments/${file.id}`;
+  const href = `/api/attachments/${file.id}`, image = file.media_type?.startsWith('image/'), pdf = file.media_type === 'application/pdf';
   useEffect(() => {
+    if (image) return undefined;
     let active = true;
-    fetch(href, { credentials: 'same-origin', cache: 'no-store' }).then(async response => {
+    fetch(pdf ? `${href}?text=1` : href, { credentials: 'same-origin', cache: 'no-store' }).then(async response => {
       if (!response.ok) throw new Error(response.status === 404 ? 'この添付ファイルは削除されたか、見つかりません。' : '添付ファイルを読み込めませんでした。');
       const text = await response.text(); if (active) setState({ loading: false, text, error: '' });
     }).catch(error => { if (active) setState({ loading: false, text: '', error: error.message }); });
     return () => { active = false; };
-  }, [href]);
+  }, [href, image, pdf]);
   return <Modal title={file.name} onClose={onClose} className="artifact-modal"><div className="modal-body">
-    <p className="muted">添付ファイル · {formatSize(file.size)} · テキストとして表示しています</p>
-    {state.loading ? <p role="status">読み込み中…</p> : state.error ? <p role="alert">{state.error}</p> : <pre className="artifact-document attachment-document">{state.text}</pre>}
+    <p className="muted">{image ? '添付画像' : pdf ? '添付PDF' : '添付ファイル'} · {formatSize(file.size)}{image ? '' : pdf ? ' · PDFから取り出した文字を表示しています' : ' · テキストとして表示しています'}</p>
+    {image ? <img className="attachment-image" src={`${href}?view=1`} alt={file.name} />
+      : state.loading ? <p role="status">読み込み中…</p> : state.error ? <p role="alert">{state.error}</p>
+      : pdf && !state.text ? <p className="field-hint">このPDFからは文字を取り出せませんでした。<br />画像だけのPDFや、暗号化されたPDFかもしれません。<br />Botには「文字を取り出せなかった」と伝わります。</p>
+      : <pre className="artifact-document attachment-document">{state.text}</pre>}
   </div><div className="form-actions"><a className="button primary" href={href} download={file.name}><DownloadIcon size={17} />ダウンロード</a></div></Modal>;
 }
 

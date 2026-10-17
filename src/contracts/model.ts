@@ -25,10 +25,27 @@ export const modelToolCallSchema = Type.Object(
 );
 export type ModelToolCall = Static<typeof modelToolCallSchema>;
 
-export const userModelMessageSchema = Type.Object(
-  { role: Type.Literal('user'), content: Type.String() },
+export const modelImageSchema = Type.Object(
+  {
+    media_type: Type.Union([Type.Literal('image/png'), Type.Literal('image/jpeg'), Type.Literal('image/gif'), Type.Literal('image/webp')]),
+    /** Base64 of the image bytes. */
+    data: Type.String({ minLength: 1, maxLength: 8 * 1024 * 1024 }),
+  },
   { additionalProperties: false },
 );
+export type ModelImage = Static<typeof modelImageSchema>;
+
+/** Images ride on a user message and go only to an adapter whose capabilities say it can see them. */
+export const userModelMessageSchema = Type.Object(
+  { role: Type.Literal('user'), content: Type.String(), images: Type.Optional(Type.Array(modelImageSchema, { minItems: 1, maxItems: 5 })) },
+  { additionalProperties: false },
+);
+/** The request with image bytes left out, for size and shape checks; images are bounded separately by their schema. */
+export function withoutImageData(request: ModelRequest): ModelRequest {
+  if (!request.messages.some(message => message.role === 'user' && message.images)) return request;
+  return { ...request, messages: request.messages.map(message => message.role === 'user' && message.images ? { ...message, images: message.images.map(image => ({ ...image, data: '' })) } : message) };
+}
+export const hasImages = (request: ModelRequest) => request.messages.some(message => message.role === 'user' && !!message.images?.length);
 
 export const assistantModelMessageSchema = Type.Object(
   {

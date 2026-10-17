@@ -416,7 +416,7 @@ test('upgrading a schema51 database widens the provider and fallback constraints
     runtime = new Runtime(root); admin = runtime.administrator();
     const after = new DatabaseSync(join(root, 'control.db'));
     try {
-      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 59);
+      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 60);
       assert.equal(JSON.stringify(after.prepare('SELECT * FROM agents ORDER BY id').all()), before);
       assert.equal(after.prepare('SELECT count(*) AS count FROM agent_autonomy').get()!.count, autonomy);
       assert.match(String(after.prepare("SELECT sql FROM sqlite_schema WHERE name='agents'").get()!.sql), /'openai_compatible','anthropic'/);
@@ -433,4 +433,23 @@ test('upgrading a schema51 database widens the provider and fallback constraints
       assert.throws(() => check.prepare('UPDATE model_settings SET anthropic_parallel=9').run(), /CHECK/);
     } finally { check.close(); }
   } finally { runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Claude receives attached images as image blocks before the text; a model listed without image input refuses them', async () => {
+  const fake = await server((_req, _body, res) => sse(res, [{ type: 'text', text: '見ました' }], 'end_turn'));
+  try {
+    const image = { media_type: 'image/png' as const, data: Buffer.from('artificial-png').toString('base64') };
+    const asked: ModelRequest = { ...local, messages: [{ role: 'user', content: 'この写真は？', images: [image] }] };
+    const adapter = new AnthropicAdapter({ apiKey: KEY, fetch: fake.transport }, opus);
+    assert.equal(adapter.capabilities.supports_image_input, true);
+    const events = await collectModelEvents(adapter.run(asked, { timeout_ms: 5000 }));
+    assert.equal(events.at(-1)?.type, 'completed');
+    const content = (fake.messages()[0]!.body!.messages as { content: unknown[] }[])[0]!.content;
+    assert.deepEqual(content.slice(0, 2), [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: image.data } }, { type: 'text', text: 'この写真は？' }]);
+    const blind = new AnthropicAdapter({ apiKey: KEY, fetch: fake.transport }, anthropicModelProfile({ ...MODELS[1]!, capabilities: { ...MODELS[1]!.capabilities, image_input: { supported: false } } }));
+    assert.equal(blind.capabilities.supports_image_input, false);
+    const refused = await collectModelEvents(blind.run(asked, { timeout_ms: 5000 }));
+    assert.equal(refused[0]?.type === 'failed' && refused[0].error.code, 'CAPABILITY_MISMATCH');
+    assert.equal(fake.messages().length, 1);
+  } finally { await fake.close(); }
 });

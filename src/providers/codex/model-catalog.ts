@@ -227,6 +227,7 @@ function parseEntry(value: unknown): ProviderModelCatalogEntry {
     supported_in_api: entry['supported_in_api'],
     context_window: entry['context_window'],
     max_context_window: entry['max_context_window'],
+    input_modalities: entry['input_modalities'],
   });
 }
 

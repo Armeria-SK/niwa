@@ -34,6 +34,8 @@ export const modelAdapterCapabilitiesSchema = Type.Object(
     supports_session_resume: Type.Boolean(),
     supports_parallel_sessions: Type.Boolean(),
     supports_usage_reporting: Type.Boolean(),
+    /** Whether the model can look at images in a user message. Absent means it cannot; such a model gets a note instead of the image. */
+    supports_image_input: Type.Optional(Type.Boolean()),
   },
   { $id: 'ModelAdapterCapabilities', additionalProperties: false },
 );

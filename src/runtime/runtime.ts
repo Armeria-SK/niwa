@@ -1,6 +1,6 @@
 import {agentAutonomySchema} from '../storage/agent-autonomy-schema.ts';
 import {attachmentSchema} from '../storage/attachment-schema.ts';
-import {decodeAttachments,excerptBudget,type AttachmentInfo} from '../domain/attachments.ts';
+import {decodeAttachments,excerptBudget,isImage,type AttachmentInfo,type MediaType} from '../domain/attachments.ts';
 import {responseProgressSchema} from '../storage/response-progress-schema.ts';
 import {isStatusInquiry,type SubmissionContext} from './conversation-work.ts';
 import {activitySchema} from '../storage/activity-schema.ts';
@@ -59,6 +59,7 @@ import { secondOpinionSchema } from '../storage/second-opinion-schema.ts';
 import { Watch } from './watch.ts';
 import { trustSchema } from '../storage/trust-schema.ts';
 import { Trust, type ApprovalKind } from './trust.ts';
+import { mediaAttachmentSchema } from '../storage/media-attachment-schema.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -121,7 +122,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema, mediaAttachmentSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -888,28 +889,47 @@ export class Runtime {
       return {...withFiles(message),replyTo:target?{id:target.id,author:target.author_id==='administrator'?'you':target.author_id,text:String(target.body).slice(0,240)}:null};
     }), next: rows.length > 50 ? rows[49]!.sequence : null };
   }
-  /** Names and sizes only; text is read separately with the same room check. */
+  /** Names, sizes and kinds only; contents are read separately with the same room check. The administrator also sees which Bots could not see an image. */
   messageAttachments(actor: Actor, roomId: string, messageIds?: string[]): AttachmentInfo[] {
-    this.#room(actor, roomId);
-    return this.#db.prepare(`SELECT a.id,a.message_id,a.name,a.size FROM message_attachments a JOIN messages m ON m.id=a.message_id
+    const principal = this.#room(actor, roomId) && this.#principal(actor);
+    return this.#db.prepare(`SELECT a.id,a.message_id,a.name,a.size,a.media_type,(SELECT json_group_array(v.agent_id) FROM attachment_views v WHERE v.attachment_id=a.id AND v.seen=0) AS unseen
+      FROM message_attachments a JOIN messages m ON m.id=a.message_id
       WHERE m.room_id=? AND (? IS NULL OR a.message_id IN (SELECT value FROM json_each(?))) ORDER BY m.rowid,a.position`)
-      .all(roomId, messageIds ? 1 : null, JSON.stringify(messageIds ?? [])) as unknown as AttachmentInfo[];
+      .all(roomId, messageIds ? 1 : null, JSON.stringify(messageIds ?? [])).map(row => {
+        const unseen = principal.kind === 'admin' ? JSON.parse(String(row.unseen ?? '[]')) as string[] : [];
+        return { id: String(row.id), message_id: String(row.message_id), name: String(row.name), size: Number(row.size), media_type: String(row.media_type) as MediaType, ...(unseen.length ? { unseen_by: unseen } : {}) };
+      });
   }
-  attachment(actor: Actor, id: string): AttachmentInfo & { room_id: string; sha256: string; body: string } {
-    const row = this.#db.prepare('SELECT a.id,a.message_id,a.name,a.size,a.sha256,a.body,m.room_id FROM message_attachments a JOIN messages m ON m.id=a.message_id WHERE a.id=?')
-      .get(text(id, 100)) as (AttachmentInfo & { room_id: string; sha256: string; body: string }) | undefined;
+  attachment(actor: Actor, id: string): AttachmentInfo & { room_id: string; sha256: string; body: string; media_type: MediaType; data: Uint8Array | null } {
+    const row = this.#db.prepare('SELECT a.id,a.message_id,a.name,a.size,a.sha256,a.body,a.media_type,a.data,m.room_id FROM message_attachments a JOIN messages m ON m.id=a.message_id WHERE a.id=?')
+      .get(text(id, 100)) as (AttachmentInfo & { room_id: string; sha256: string; body: string; media_type: MediaType; data: Uint8Array | null }) | undefined;
     check(row, 'not_found', 'Attachment not found'); this.#room(actor, row.room_id);
     return row;
   }
   /** Files on administrator messages that started or changed this task, inline within one bounded budget. */
   taskAttachments(actor: Actor, lease: TaskLease) {
     check(this.#bot(actor).id === lease.task.agent_id, 'forbidden', 'Task belongs to another agent'); this.#room(actor, lease.task.room_id);
-    const rows = this.#db.prepare(`SELECT a.id,a.message_id,a.name,a.size,a.body FROM message_attachments a JOIN messages m ON m.id=a.message_id
+    const rows = this.#db.prepare(`SELECT a.id,a.message_id,a.name,a.size,a.body,a.media_type FROM message_attachments a JOIN messages m ON m.id=a.message_id
       JOIN task_message_links l ON l.message_id=m.id WHERE l.task_id=? AND m.room_id=? AND m.author_id='administrator' ORDER BY m.rowid DESC,a.position LIMIT 25`)
-      .all(lease.task.id, lease.task.room_id) as unknown as (AttachmentInfo & { body: string })[];
+      .all(lease.task.id, lease.task.room_id) as unknown as (AttachmentInfo & { body: string; media_type: MediaType })[];
     const shares = excerptBudget(rows.map(row => row.body.length));
-    return rows.map((row, index) => ({ attachment_id: row.id, message_id: row.message_id, name: row.name, size_bytes: row.size, characters: row.body.length,
-      text: row.body.slice(0, shares[index]), truncated: shares[index]! < row.body.length, untrusted: true }));
+    // An image carries no text; whether its pixels are shown depends on the model (see TurnRunner). A PDF is its extracted text.
+    return rows.map((row, index) => ({ attachment_id: row.id, message_id: row.message_id, name: row.name, size_bytes: row.size, kind: isImage(row.media_type) ? 'image' as const : row.media_type === 'application/pdf' ? 'pdf' as const : 'text' as const,
+      characters: row.body.length, text: row.body.slice(0, shares[index]), truncated: shares[index]! < row.body.length, untrusted: true,
+      ...(row.media_type === 'application/pdf' && !row.body ? { note: 'このPDFからは文字を取り出せませんでした（画像だけのPDFや、暗号化されたPDFかもしれません）。' } : {}) }));
+  }
+  /** The bytes of images attached to the messages that started or changed this task, for a model that can see them. */
+  taskImages(actor: Actor, lease: TaskLease): { attachment_id: string; name: string; media_type: Extract<MediaType, `image/${string}`>; data: string }[] {
+    check(this.#bot(actor).id === lease.task.agent_id, 'forbidden', 'Task belongs to another agent'); this.#room(actor, lease.task.room_id);
+    return this.#db.prepare(`SELECT a.id,a.name,a.media_type,a.data FROM message_attachments a JOIN messages m ON m.id=a.message_id
+      JOIN task_message_links l ON l.message_id=m.id WHERE l.task_id=? AND m.room_id=? AND m.author_id='administrator' AND a.media_type LIKE 'image/%' AND a.data IS NOT NULL ORDER BY m.rowid DESC,a.position LIMIT 5`)
+      .all(lease.task.id, lease.task.room_id).map(row => ({ attachment_id: String(row.id), name: String(row.name), media_type: String(row.media_type) as Extract<MediaType, `image/${string}`>, data: Buffer.from(row.data as Uint8Array).toString('base64') }));
+  }
+  /** Whether this Bot's model was shown the attached images. An image it could not see is noted on the message for the administrator. */
+  recordAttachmentViews(actor: Actor, lease: TaskLease, attachmentIds: string[], seen: boolean, model: string): void {
+    check(this.#bot(actor).id === lease.task.agent_id, 'forbidden', 'Task belongs to another agent');
+    for (const id of attachmentIds) this.#db.prepare(`INSERT INTO attachment_views(attachment_id,agent_id,seen,model,created_at) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM message_attachments WHERE id=?)
+      ON CONFLICT(attachment_id,agent_id) DO UPDATE SET seen=excluded.seen,model=excluded.model,created_at=excluded.created_at`).run(id, lease.task.agent_id, Number(seen), model.slice(0, 300), Date.now(), id);
   }
   searchRoomMessages(actor: Actor, query: string): string[] {
     check(typeof query === 'string' && query.length <= 200, 'invalid', 'Invalid conversation query');
@@ -1018,7 +1038,8 @@ export class Runtime {
       check(!this.roomPreferences(actor, roomId).archived, 'conflict', 'Restore the archived room before replying');
       if (replyTo !== undefined) check(typeof replyTo === 'string' && !!this.#db.prepare('SELECT 1 FROM messages WHERE id=? AND room_id=?').get(replyTo, roomId), 'not_found', 'Reply target is no longer available in this conversation');
       const message = this.post(actor, roomId, body);
-      files.forEach((file, position) => this.#db.prepare('INSERT INTO message_attachments VALUES (?,?,?,?,?,?,?)').run(randomUUID(), message.id, position, file.name, file.size, file.sha256, file.body));
+      files.forEach((file, position) => this.#db.prepare('INSERT INTO message_attachments(id,message_id,position,name,size,sha256,body,media_type,data) VALUES (?,?,?,?,?,?,?,?,?)')
+        .run(randomUUID(), message.id, position, file.name, file.size, file.sha256, file.body, file.media_type, file.data));
       if (replyTo !== undefined) {
         this.#db.prepare('UPDATE messages SET reply_to=? WHERE id=?').run(replyTo, message.id);
         message.reply_to = replyTo;
@@ -1394,8 +1415,12 @@ export class Runtime {
       ? this.#memory(actor, principal.id).prepare('SELECT source_room_id AS room_id,body,revision FROM memories WHERE id=?').get(sourceId)
       : this.#db.prepare(queries[kind]!).get(sourceId)) as { room_id: string; body: string; revision?: number } | undefined;
     // Attached text is part of the message source, so it pages and versions with the message.
-    if (kind === 'message' && record) for (const file of this.#db.prepare('SELECT name,size,body FROM message_attachments WHERE message_id=? ORDER BY position').all(sourceId))
-      record.body += `\n\n[添付ファイル: ${String(file.name)} (${Number(file.size)} bytes)・利用者が提供した資料]\n${String(file.body)}`;
+    if (kind === 'message' && record) for (const file of this.#db.prepare('SELECT name,size,body,media_type FROM message_attachments WHERE message_id=? ORDER BY position').all(sourceId)) {
+      const type = String(file.media_type), label = `${String(file.name)} (${Number(file.size)} bytes)`;
+      record.body += type === 'application/pdf' ? `\n\n[添付PDF: ${label}・利用者が提供した資料。PDFから取り出した文字]\n${String(file.body) || '（文字を取り出せませんでした）'}`
+        : isImage(type) ? `\n\n[添付画像: ${label}・文字としては読めません]`
+        : `\n\n[添付ファイル: ${label}・利用者が提供した資料]\n${String(file.body)}`;
+    }
     const allowed = this.rooms(actor).some(room => room.id === record?.room_id && (room.visibility === 'shared' || room.id === roomId));
     check(record && allowed, 'not_found', 'Source unavailable in this conversation');
     const current = createHash('sha256').update(JSON.stringify([kind, sourceId, record.room_id, record.body, record.revision ?? null])).digest('hex');

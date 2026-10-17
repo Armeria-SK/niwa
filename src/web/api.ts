@@ -232,8 +232,8 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/coordination$/, run: m => ({tasks:runtime.coordination(admin,m[1]!).map(task=>({...task,progress:runtime.tasks.progress(admin,String(task.id))})),digest:runtime.coordinationDigest(admin,m[1]!)}) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages\/page$/, run: (m, _b, url) => runtime.messagePage(admin, m[1]!, Number(url.searchParams.get('before') ?? Number.MAX_SAFE_INTEGER)) },
     { method: 'GET', path: /^\/api\/rooms\/search$/, run: (_m, _b, url) => runtime.searchRoomMessages(admin, url.searchParams.get('q') ?? '') },
-    // Up to five base64 text files of 256 KiB each; the runtime decodes and validates every file again.
-    { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, limit: 2_097_152, schema: object({ id, body: Type.String({ maxLength: 20_000 }), attachments: Type.Optional(Type.Array(object({ name: Type.String({ minLength: 1, maxLength: 1000 }), content: Type.String({ maxLength: Math.ceil(ATTACHMENT_LIMITS.bytes / 3) * 4 }) }), { maxItems: ATTACHMENT_LIMITS.count })), reply_to: Type.Optional(id), request_context:Type.Optional(object({kind:Type.Union(['status','new','amend','cancel'].map(value=>Type.Literal(value))),task_id:Type.Optional(id),expected_revision:Type.Optional(Type.Integer({minimum:0}))})), agent_id: Type.Optional(id), agent_ids: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
+    // Up to five base64 files (text 256 KiB, image 3 MiB, PDF 4 MiB, 8 MiB together); the runtime decodes and validates every file again.
+    { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, limit: 12 * 1024 * 1024, schema: object({ id, body: Type.String({ maxLength: 20_000 }), attachments: Type.Optional(Type.Array(object({ name: Type.String({ minLength: 1, maxLength: 1000 }), content: Type.String({ maxLength: Math.ceil(ATTACHMENT_LIMITS.pdfBytes / 3) * 4 }) }), { maxItems: ATTACHMENT_LIMITS.count })), reply_to: Type.Optional(id), request_context:Type.Optional(object({kind:Type.Union(['status','new','amend','cancel'].map(value=>Type.Literal(value))),task_id:Type.Optional(id),expected_revision:Type.Optional(Type.Integer({minimum:0}))})), agent_id: Type.Optional(id), agent_ids: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
       run: (m, b) => {
         if (b.agent_id && b.agent_ids) throw new DomainError('invalid', 'Specify one recipient field');
         return runtime.submit(admin, b.id as string, m[1]!, b.body as string, (b.agent_ids ?? b.agent_id) as string | string[] | undefined, b.reply_to as string | undefined,b.request_context as SubmissionContext | undefined,b.attachments); } },
@@ -335,9 +335,11 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       }
       const attached=/^\/api\/attachments\/([0-9a-f-]{36})$/.exec(url.pathname);
       if(req.method==='GET'&&attached){
-        // Stored text is served as an inert download, never rendered as HTML or script on this origin.
-        const file=runtime.attachment(admin,attached[1]!),data=Buffer.from(file.body,'utf8');
-        res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8','Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(file.name).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase())}`,'Content-Length':data.length,
+        // Stored files are served as inert downloads, never rendered as HTML or script on this origin. Only a raster image may be shown inline (view=1),
+        // and text=1 returns a PDF's extracted text. SVG is never accepted as an image, so nothing served here can run.
+        const file=runtime.attachment(admin,attached[1]!),binary=file.data!==null&&file.media_type!=='text/plain'&&url.searchParams.get('text')!=='1';
+        const data=binary?Buffer.from(file.data!):Buffer.from(file.body,'utf8'),inline=binary&&file.media_type.startsWith('image/')&&url.searchParams.get('view')==='1';
+        res.writeHead(200,{'Content-Type':binary?file.media_type:'text/plain; charset=utf-8','Content-Disposition':`${inline?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase())}`,'Content-Length':data.length,
           'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"});res.end(data);return;
       }
       if (req.method === 'POST' && url.pathname === '/api/logout') { auth.logout(req, res); send(res, 200, { ok: true }); return; }

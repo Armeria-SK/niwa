@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Value } from '@sinclair/typebox/value';
 import type { ModelAdapterCapabilities, ModelRequest, ModelEvent, JsonObject } from '../../contracts/index.ts';
-import { isPlainJsonValue, modelRequestSchema } from '../../contracts/index.ts';
+import { hasImages, isPlainJsonValue, modelRequestSchema, withoutImageData } from '../../contracts/index.ts';
 import type { ModelAdapter, ModelRunOptions } from '../shared/adapter.ts';
 import { sanitizeModelRequestTextFields, containsSensitiveJsonKey } from '../shared/input-safety.ts';
 import { httpJson, HttpError } from '../../shared/http-json.ts';
@@ -16,6 +16,8 @@ export interface LocalLlmModel {
   id: string;
   tools: boolean;
   thinking: boolean;
+  /** Ollama lists 'vision' for models that take images. */
+  vision?: boolean;
 }
 const record = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError('invalid');
@@ -35,7 +37,7 @@ export async function inspectLocalLlmModel(baseUrl: string, model: string, fetch
   if (!Array.isArray(data.capabilities) || data.capabilities.some(value => typeof value !== 'string')) throw new HttpError('invalid');
   if (!data.capabilities.includes('completion')) throw new Error('This Local LLM model cannot chat');
   if (data.remote_host || data.remote_model) throw new Error('Niwa requires a local model, not a remote one');
-  return { id: model, tools: data.capabilities.includes('tools'), thinking: data.capabilities.includes('thinking') };
+  return { id: model, tools: data.capabilities.includes('tools'), thinking: data.capabilities.includes('thinking'), ...(data.capabilities.includes('vision') ? { vision: true } : {}) };
 }
 /** Acquires a request slot for one endpoint; the returned function releases it. */
 export type LocalLlmSlot = (signal: AbortSignal) => Promise<() => void>;
@@ -55,21 +57,23 @@ export class LocalLlmAdapter implements ModelAdapter {
       execution_mode: 'model_api', auth_mode: 'none', billing_mode: 'none', owns_agent_loop: false,
       supports_niwa_tool_loop: model.tools, supports_tool_calls: model.tools, supports_structured_output: false,
       supports_streaming: false, supports_session_resume: false, supports_parallel_sessions: true, supports_usage_reporting: true,
+      supports_image_input: model.vision === true,
     });
   }
   async *run(request: ModelRequest, options: ModelRunOptions): AsyncIterable<ModelEvent> {
     let sent = false;
     try {
-      if (!Value.Check(modelRequestSchema, request) || !isPlainJsonValue(request, { max_depth: 32, max_nodes: 10_000, max_bytes: 4 * 1024 * 1024 })) throw new HttpError('invalid');
+      if (!Value.Check(modelRequestSchema, request) || !isPlainJsonValue(withoutImageData(request), { max_depth: 32, max_nodes: 10_000, max_bytes: 4 * 1024 * 1024 })) throw new HttpError('invalid');
       // Codex efforts are never forwarded to local models. Use the model's native thinking defaults.
-      if (request.reasoning_effort !== undefined || request.response_contract.type !== 'text' || (request.tools.length && !this.#model.tools)) {
+      if (request.reasoning_effort !== undefined || request.response_contract.type !== 'text' || (request.tools.length && !this.#model.tools) || (hasImages(request) && !this.#model.vision)) {
         yield { type: 'failed', error: { code: 'CAPABILITY_MISMATCH', message: 'The selected Local LLM model cannot use these settings or tools.', retryable: false } };
         return;
       }
       const safe = sanitizeModelRequestTextFields(request).request;
       const messages = safe.messages.map(message => {
         if (message.role === 'tool') return { role: 'tool', content: message.content, tool_name: message.name };
-        if (message.role === 'user') return message;
+        // Ollama takes images as plain base64 strings beside the text.
+        if (message.role === 'user') return { role: 'user', content: message.content, ...(message.images ? { images: message.images.map(image => image.data) } : {}) };
         return { role: 'assistant', content: message.content ?? '', ...(message.tool_calls ? {
           tool_calls: message.tool_calls.map(call => ({ function: { name: call.name, arguments: call.arguments } })),
         } : {}) };

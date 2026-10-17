@@ -128,3 +128,12 @@ test('trust suggestions name the Bot, the kind and the run of approvals, and com
  assert.deepEqual(trustAttention([item]).map((i:{kind:string;id:string;member:string})=>[i.kind,i.id,i.member]),[['trust','a1:mcp:mcp_notes_append_note','a1']]);
  assert.deepEqual(trustAttention(undefined),[]);
 });
+test('attachments are sorted into text, images and PDFs by their bytes, and an image a Bot could not see says so',async()=>{
+ const {attachmentKind,unseenNotice,formatSize}=await ui('attachments.js');
+ const png=new Uint8Array(24);png.set([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]);png.set([...'IHDR'].map(c=>c.charCodeAt(0)),12);
+ assert.equal(attachmentKind(png),'image');assert.equal(attachmentKind(new Uint8Array([0xff,0xd8,0xff,0xe0])),'image');
+ assert.equal(attachmentKind(new TextEncoder().encode('%PDF-1.7\n')),'pdf');assert.equal(attachmentKind(new TextEncoder().encode('<svg/>')),'text');
+ assert.equal(attachmentKind(new Uint8Array([0x00,0x01,0x02])),null);assert.equal(attachmentKind(new Uint8Array([0x89,0x50,0x4e,0x47])),null);
+ assert.equal(unseenNotice(['リーダー','カナデ']),'リーダー・カナデのモデルは画像を見られないため、この画像を認識できませんでした。');assert.equal(unseenNotice([]),'');
+ assert.deepEqual([formatSize(512),formatSize(2048),formatSize(3*1024*1024)],['512 B','2.0 KB','3.0 MB']);
+});
