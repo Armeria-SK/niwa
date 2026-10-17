@@ -31,3 +31,12 @@ test('usage sums reported tokens and falls back to the estimate only for unrepor
  assert.deepEqual(usageSummary([{input_tokens:1200,output_tokens:80,estimated_input_tokens:1500},{input_tokens:null,output_tokens:null,estimated_input_tokens:900}]),{calls:2,input:2100,output:80,estimated:1});
  assert.deepEqual(usageSummary(undefined),{calls:0,input:0,output:0,estimated:0});
 });
+test('unread counts start from what exists, grow with new messages and clear when the conversation is shown',async()=>{
+ const {startSeen,unreadOf,markSeen}=await ui('unread.js');
+ const rooms=[{id:'a',message_count:5},{id:'b',message_count:2}];
+ const seen=startSeen(rooms,null);assert.equal(unreadOf(rooms[0],seen),0);
+ const later={id:'a',message_count:8},fresh={id:'c',message_count:3};
+ assert.equal(unreadOf(later,seen),3);assert.equal(unreadOf(fresh,seen),3);
+ const after=markSeen(seen,later);assert.equal(unreadOf(later,after),0);assert.equal(markSeen(after,later),after);
+ assert.equal(startSeen(rooms,after),after);assert.equal(unreadOf(later,null),0);
+});

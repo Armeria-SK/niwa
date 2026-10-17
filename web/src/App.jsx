@@ -5,6 +5,7 @@ import { api } from './api.js';
 import { Login } from './Login.jsx';
 import { AppearanceEditor, IconButton, Modal, Segmented, EmptyState, SetupNotice } from './components.jsx';
 import { modelSetupNotice } from './providers.js';
+import { markSeen, readSeen, startSeen, unreadOf, writeSeen } from './unread.js';
 import { ChatIcon, UsersIcon, ActivityIcon, SettingsIcon, SearchIcon, PlusIcon, LockIcon, CloseIcon, InfoIcon, CheckCircleIcon, PinIcon } from './icons.jsx';
 import { Conversation } from './pages/Conversation.jsx';
 import { Members } from './pages/Members.jsx';
@@ -63,6 +64,15 @@ export function App() {
   const [toast, setToast] = useState('');
   const toastTimer = useRef(null);
   const thread = threads.find(item => item.id === selectedThread) || threads[0];
+  const [seenMessages, setSeenMessages] = useState(readSeen);
+  // The open conversation is read as messages arrive; on a phone only while it is actually shown, not behind the list.
+  useEffect(() => {
+    if (!ready) return;
+    let next = startSeen(threads, seenMessages);
+    const showing = page === 'conversation' && thread && document.visibilityState === 'visible' && (mobileDetail || window.matchMedia('(min-width: 701px)').matches);
+    if (showing) next = markSeen(next, thread);
+    if (next !== seenMessages) { setSeenMessages(next); writeSeen(next); }
+  }, [ready, threads, page, thread, mobileDetail, seenMessages]);
   const animatedMembers = members.map(member => ({ ...member, runtimeMotion: member.status === 'sleeping' || paused ? 'none' : celebrating[member.id] ? 'celebrate' : member.runtimeMotion, activity: paused ? '一時停止中' : member.activity }));
   const memberMap = Object.fromEntries([...deletedMembers, ...animatedMembers].map(item => [item.id, item]));
   const pendingCount = activities.filter(item => item.status === 'approval').length;
@@ -119,7 +129,7 @@ export function App() {
       setMembers(state.agents.map(agent => ({ ...agent, authority: agent.role, role: agent.profile.role || (agent.role === 'leader' ? 'リーダー' : '仲間'),
         shape: 'pebble', color: '#61B8A5', persona: '', interests: [], ...agent.profile, effort: agent.reasoning,
         runtimeMotion: memberWork(state.tasks.filter(task=>task.agent_id===agent.id),state.settings.paused,agent.status==='dormant').kind==='running'?'sway':'none', status: agent.status === 'dormant' ? 'sleeping' : 'active', activity:memberWork(state.tasks.filter(task=>task.agent_id===agent.id),state.settings.paused,agent.status==='dormant').activity })));
-      setThreads(state.rooms.map(room => ({ ...room, scope: room.visibility, members: room.participants, unread: 0,
+      setThreads(state.rooms.map(room => ({ ...room, scope: room.visibility, members: room.participants,
         lastActivity: Date.parse(room.last_at) || 0, time: room.last_at ? time(room.last_at) : '',
         day: room.first_at ? new Date(room.first_at).toLocaleDateString('ja-JP') : '' })));
       const approvals = new Map((state.approvals || []).map(item => [item.task_id, item]));
@@ -152,7 +162,7 @@ export function App() {
   function notify(text) { clearTimeout(toastTimer.current); setToast(text); toastTimer.current = setTimeout(() => setToast(''), 4500); }
   function navigate(next) { setPage(next); window.location.hash = next; }
   function openModelSettings() { setPage('settings'); window.location.hash = 'settings/models'; }
-  function openThread(id) { setScope(threads.find(item => item.id === id)?.archived ? 'archived' : 'all'); setSearch(''); setSelectedThread(id); setThreads(current => current.map(item => item.id === id ? { ...item, unread: 0 } : item)); setMobileDetail(true); navigate('conversation'); }
+  function openThread(id) { setScope(threads.find(item => item.id === id)?.archived ? 'archived' : 'all'); setSearch(''); setSelectedThread(id); setMobileDetail(true); navigate('conversation'); }
   function organizeThread(id, field) {
     const value = !threads.find(item => item.id === id)[field];
     return mutate(() => api(`/rooms/${id}/organization`, 'PATCH', { [field]: value }), field === 'pinned' ? (value ? 'スレッドをピン留めしました' : 'ピン留めを解除しました') : (value ? 'アーカイブしました。会話は残っています。' : 'スレッドを戻しました'));
@@ -244,7 +254,7 @@ export function App() {
         <Segmented label="スレッドの公開範囲" options={[{ value: 'all', label: 'すべて' }, { value: 'shared', label: '共有' }, { value: 'private', label: '個別' }, { value: 'archived', label: '保管' }]} value={scope} onChange={setScope} />
         {roomSearch.loading ? <p role="status">検索中…</p> : roomSearch.error ? <p role="alert">会話の検索に失敗しました。{roomSearch.error}</p> : null}<div className="thread-list">{visibleThreads.length ? visibleThreads.map(item => <div key={item.id} className="thread-row"><button type="button" className={`thread-item ${selectedThread === item.id && page === 'conversation' ? 'selected' : ''}`} aria-current={selectedThread === item.id && page === 'conversation' ? 'true' : undefined} onClick={() => openThread(item.id)}>
           <span className="thread-item-top"><strong>{item.pinned ? <PinIcon size={13} aria-label="ピン留め" /> : null}{item.title}{item.scope === 'private' ? <LockIcon size={15} /> : null}</strong><time>{item.time}</time></span>
-          <span className="thread-item-bottom"><span>{item.scope === 'private' ? '個別' : '共有'} · {item.members.slice(0, 3).map(id => memberMap[id]?.name).join(' / ')}</span>{item.unread > 0 ? <span className="unread-count" aria-label={`${item.unread}件の未読`}>{item.unread}</span> : <span className="reply-count">{Math.max(0, item.message_count - 1)}</span>}</span>
+          <span className="thread-item-bottom"><span>{item.scope === 'private' ? '個別' : '共有'} · {item.members.slice(0, 3).map(id => memberMap[id]?.name).join(' / ')}</span>{unreadOf(item, seenMessages) > 0 ? <span className="unread-count" aria-label={`${unreadOf(item, seenMessages)}件の未読`}>{unreadOf(item, seenMessages)}</span> : <span className="reply-count">{Math.max(0, item.message_count - 1)}</span>}</span>
         </button><div className="thread-quick-actions"><IconButton label={item.pinned ? `${item.title}のピン留めを解除` : `${item.title}をピン留め`} onClick={() => organizeThread(item.id, 'pinned')}><PinIcon size={16} /></IconButton><IconButton label={`${item.title}を削除`} onClick={() => setModal({ type: 'delete-content', kind: 'room', id: item.id, title: item.title })}><TrashIcon size={16} /></IconButton></div></div>) : roomSearch.loading || roomSearch.error ? null : <ThreadListEmpty search={search} scope={scope} onClear={() => { setSearch(''); setScope('all'); }} onShowAll={() => setScope('all')} onCreate={() => setModal({ type: 'new-thread' })} />}</div>
       </div>
       <div className="sidebar-bottom"><a href="#settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}><SettingsIcon size={23} /><span>設定</span></a><button className="preview-label" onClick={async () => { await api('/logout', 'POST', {}); setAuthenticated(false); setReady(false); }}><span className="preview-dot" />ログアウト<InfoIcon size={13} /></button></div>
