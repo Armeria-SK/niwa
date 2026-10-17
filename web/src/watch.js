@@ -11,6 +11,14 @@ export function toolLabel(tool) {
   return mcp ? `MCPの操作（${mcp[1]}：${mcp[2]}）` : `そのほかの操作（${tool || '不明'}）`;
 }
 
+/** いまの仕事を「動いている」と「待っている」に分ける。
+ * 動いているのは、実行中で一時停止していない仕事だけ。順番待ち・入力や承認の判断待ち・一時停止中は、待っている側に入れる。 */
+export function splitWork(items) {
+  const moving = [], waiting = [];
+  for (const item of items || []) (item.state === 'running' && !item.paused ? moving : waiting).push(item);
+  return { moving, waiting };
+}
+
 /** 「記録あり／結果不明」。記録ありは、実行の結果が返ってきたことの記録で、相手側で意図どおりになった証明ではない。 */
 export const outcomeLabel = item => item.outcome === 'recorded' ? (item.failed ? '記録あり（失敗の記録）' : '記録あり') : '結果不明';
 

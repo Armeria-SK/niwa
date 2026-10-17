@@ -119,6 +119,14 @@ test('the watch tab has its own URL and reads tools, outcomes, times and limits 
  assert.equal(nightLine({decision:'skipped'}),'今夜は休ませると決めています。');
  assert.match(nightLine({decision:null,preview:true}),/まだ決めていません/);assert.match(nightLine({decision:null,preview:false}),/下見はオフ/);
 });
+test('the watch tab lists moving work apart from work waiting for input, approval, its turn or a pause',async()=>{
+ const {splitWork}=await ui('watch.js');
+ const items=[{id:'a',state:'running',paused:false},{id:'b',state:'waiting_user',paused:false,progress:{kind:'user_input'}},{id:'c',state:'waiting_user',paused:false,progress:{kind:'approval'}},
+  {id:'d',state:'running',paused:true},{id:'e',state:'queued',paused:false},{id:'f',state:'waiting_child',paused:false},{id:'g',state:'waiting_provider',paused:false},{id:'h',state:'running',paused:false}];
+ const {moving,waiting}=splitWork(items);
+ assert.deepEqual(moving.map((item:{id:string})=>item.id),['a','h']);assert.deepEqual(waiting.map((item:{id:string})=>item.id),['b','c','d','e','f','g']);
+ assert.deepEqual(splitWork(undefined),{moving:[],waiting:[]});assert.deepEqual(splitWork([]),{moving:[],waiting:[]});
+});
 test('trust suggestions name the Bot, the kind and the run of approvals, and come after urgent items',async()=>{
  const {kindLabel,suggestionText,trustAttention}=await ui('trust.js');
  assert.equal(kindLabel('mcp:mcp_notes_append_note'),'MCPの書き込み（notes：append_note）');

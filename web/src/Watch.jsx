@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api } from './api.js';
 import { Sentences } from './components.jsx';
-import { agoLabel, limitLabel, nightLine, outcomeLabel, toolLabel } from './watch.js';
+import { agoLabel, limitLabel, nightLine, outcomeLabel, splitWork, toolLabel } from './watch.js';
 
-/** 記録の「見張り」。いま走っている仕事・外とのやりとり・承認待ち・今日の使用量を読むだけの画面。全体の一時停止は、ページの見出しのボタンで行う。 */
+/** 記録の「見張り」。動いている仕事と待っている仕事・外とのやりとり・承認待ち・今日の使用量を読むだけの画面。全体の一時停止は、ページの見出しのボタンで行う。 */
 export function Watch({ paused }) {
   const [state, setState] = useState(null), [error, setError] = useState('');
   useEffect(() => {
@@ -20,14 +20,16 @@ export function Watch({ paused }) {
     void load();
     return () => { active = false; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibility); };
   }, [paused]);
-  const now = state?.checked_at ?? Date.now();
+  const now = state?.checked_at ?? Date.now(), work = splitWork(state?.running);
   return <section className="watch-view" aria-labelledby="watch-heading">
     <div className="section-toolbar"><div><h2 id="watch-heading">見張り</h2><p className="muted"><Sentences>{`いま動いていることと、外に出たことを、読むだけで確かめる画面です。${state ? `${new Date(state.checked_at).toLocaleTimeString('ja-JP')}の時点で、5秒ごとに読み直します。` : ''}`}</Sentences></p></div></div>
     {error ? <p role="alert">{error}</p> : null}
     {!state ? <p role="status">読み込んでいます…</p> : <div className="watch-grid">
-      <section className="today-card" aria-labelledby="watch-running"><h3 id="watch-running">いま走っている仕事（{state.running.length}件）</h3>
-        {state.running.length ? <ul className="watch-list">{state.running.map(item => <li key={item.id}><div><strong>{item.name}</strong><span className="muted">{item.room_title}</span></div><p>{item.title || '（中身を消した仕事）'}</p><p className="watch-meta"><span className={`attention-chip ${item.state === 'running' && !item.paused ? 'ok' : 'info'}`}>{item.paused ? '一時停止中' : item.progress.label}</span>{item.autonomous ? <span>自分から動く活動</span> : null}<span>更新：{agoLabel(item.updated_at, now)}</span></p></li>)}</ul>
-          : <p className="today-empty">いま進めている仕事はありません。</p>}
+      <section className="today-card" aria-labelledby="watch-work"><h3 id="watch-work">いまの仕事</h3>
+        <h4 className="small-heading">動いている仕事（{work.moving.length}件）</h4>
+        {work.moving.length ? <WorkList items={work.moving} now={now} /> : <p className="today-empty">いま動いている仕事はありません。</p>}
+        <h4 className="small-heading">待っている仕事（{work.waiting.length}件）</h4>
+        {work.waiting.length ? <WorkList items={work.waiting} now={now} /> : <p className="today-empty">待っている仕事はありません。</p>}
       </section>
       <section className="today-card" aria-labelledby="watch-outside"><h3 id="watch-outside">直近の外とのやりとり</h3>
         {state.outside.length ? <ul className="watch-list">{state.outside.map((item, index) => <li key={`${item.task_id}-${item.at}-${index}`}><div><strong>{toolLabel(item.tool)}</strong><span className="muted">{item.name} · {agoLabel(item.at, now) || new Date(item.at).toLocaleString('ja-JP')}</span></div>{item.address ? <p className="watch-address">{item.address}</p> : null}<p className="watch-meta"><span className={`attention-chip ${item.outcome === 'recorded' ? (item.failed ? 'danger' : 'ok') : 'warn'}`}>{outcomeLabel(item)}</span></p></li>)}</ul>
@@ -48,4 +50,8 @@ export function Watch({ paused }) {
       </section>
     </div>}
   </section>;
+}
+
+function WorkList({ items, now }) {
+  return <ul className="watch-list">{items.map(item => <li key={item.id}><div><strong>{item.name}</strong><span className="muted">{item.room_title}</span></div><p>{item.title || '（中身を消した仕事）'}</p><p className="watch-meta"><span className={`attention-chip ${item.state === 'running' && !item.paused ? 'ok' : 'info'}`}>{item.paused ? '一時停止中' : item.progress.label}</span>{item.autonomous ? <span>自分から動く活動</span> : null}<span>更新：{agoLabel(item.updated_at, now)}</span></p></li>)}</ul>;
 }
