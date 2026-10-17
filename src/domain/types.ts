@@ -39,6 +39,7 @@ export interface Settings {
   backupDays: number;
   backupTime: string;
   backupEnabled: boolean;
+  theme: string | null;
 }
 export class DomainError extends Error {
   code: 'forbidden' | 'invalid' | 'not_found' | 'conflict' | 'limit';

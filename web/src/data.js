@@ -22,6 +22,7 @@ export const SHAPES = [
 ];
 
 export const THEMES = [
+  { id: 'auto', name: '自動', description: '端末の明るさに合わせる（ガーデン／ミッドナイト）', colors: ['#fafaf7', '#18242e', '#46684e'] },
   { id: 'garden', name: 'ガーデン', description: 'やわらかな白とセージ', colors: ['#fafaf7', '#ebefe5', '#46684e'] },
   { id: 'sand', name: 'サンド', description: '砂色とテラコッタ', colors: ['#f5eee4', '#ead8c6', '#96583c'] },
   { id: 'mist', name: 'ミスト', description: '澄んだ青とスレート', colors: ['#edf3f6', '#d4e3ec', '#3f6e87'] },
@@ -39,7 +40,7 @@ export const PALETTE = [
 ];
 
 export const initialSettings = {
-  theme: 'garden',
+  theme: 'auto',
   rules: 'それぞれの関心を大切にしながら、自由に調べ、話し、作ってください。\n他のBotの個別記憶は読みません。共有したいことは会話や成果物を通して伝えます。\n購入・契約・アカウント作成・メール送信・SNS以外の外部公開は、事前にユーザーへ相談してください。',
   localLlmUrl: 'http://localhost:11434', maxParallel: 1, fallback: '', autoReturn: true,
   leaderModel: 'Astra', leaderEffort: 'low', generatedModel: 'Luna', generatedEffort: 'max',

@@ -3,7 +3,7 @@ import { api } from './api.js';
 
 export function Login({ onLogin, loading }) {
   const [key, setKey] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-  return <main className="login-page" data-theme="garden"><form className="form-stack" onSubmit={async e => {
+  return <main className="login-page"><form className="form-stack" onSubmit={async e => {
     e.preventDefault(); setBusy(true); setError('');
     try { await api('/login', 'POST', { key }); setKey(''); onLogin(); } catch (error) { setError(error.message); } finally { setBusy(false); }
   }}><h1>おかえりなさい</h1>

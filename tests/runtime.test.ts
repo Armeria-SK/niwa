@@ -275,3 +275,12 @@ test('the common-rules default migrations upgrade only untouched earlier default
     expectAfterRewind(currentDefault, 1, currentDefault);
   } finally { rmSync(path, { recursive: true, force: true }); }
 });
+
+test('the color theme is saved once for every browser and only known themes are accepted', t => {
+  const f = fixture(t);
+  assert.equal(f.runtime.settings(f.admin).theme, null);
+  assert.equal(f.runtime.updateSettings(f.admin, { theme: 'night' }).theme, 'night');
+  assert.equal(f.runtime.settings(f.admin).theme, 'night');
+  assert.throws(() => f.runtime.updateSettings(f.admin, { theme: 'neon' }), /Unknown theme/);
+  assert.equal(f.runtime.updateSettings(f.admin, { theme: 'auto' }).theme, 'auto');
+});

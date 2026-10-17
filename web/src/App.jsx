@@ -49,11 +49,24 @@ export function App() {
   const [celebrating, setCelebrating] = useState({});
   const conversationRequest = useRef(null);
   const [settings, setSettings] = useState(() => {
-    try { const theme = localStorage.getItem('niwa-theme'); return { ...initialSettings, theme: THEMES.some(item => item.id === theme) ? theme : 'garden' }; }
+    try { const theme = localStorage.getItem('niwa-theme'); return { ...initialSettings, theme: THEMES.some(item => item.id === theme) ? theme : 'auto' }; }
     catch { return initialSettings; }
   });
-  useEffect(() => { try { localStorage.setItem('niwa-theme', settings.theme || 'garden'); } catch { /* Storage can be disabled by the browser. */ } }, [settings.theme]);
+  useEffect(() => { try { localStorage.setItem('niwa-theme', settings.theme || 'auto'); } catch { /* Storage can be disabled by the browser. */ } }, [settings.theme]);
   const [previewTheme, setPreviewTheme] = useState(null);
+  const [prefersDark, setPrefersDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
+  useEffect(() => {
+    const query = window.matchMedia?.('(prefers-color-scheme: dark)'); if (!query) return undefined;
+    const follow = event => setPrefersDark(event.matches); query.addEventListener('change', follow);
+    return () => query.removeEventListener('change', follow);
+  }, []);
+  // The theme sits on the document so dialogs, the login page and the browser bar all use the same colors.
+  const chosenTheme = (page === 'settings' ? previewTheme : null) || settings.theme || 'auto';
+  const resolvedTheme = chosenTheme === 'auto' ? (prefersDark ? 'night' : 'garden') : chosenTheme;
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolvedTheme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--canvas').trim() || '#fafaf7');
+  }, [resolvedTheme]);
   const [selectedThread, setSelectedThread] = useState(() => { try { return sessionStorage.getItem('niwa-thread') || ''; } catch { return ''; } });
   const [selectedMember, setSelectedMember] = useState('');
   const [mobileDetail, setMobileDetail] = useState(false);
@@ -143,6 +156,7 @@ export function App() {
       setQuestions(savedUpdates.filter(item => item.kind === 'question').map(item => ({ ...item, member: item.author_id, thread: item.room_id, activity: item.task_id })));
       setArtifacts(savedArtifacts.map(item => ({ ...item, member: item.author_id, thread: item.room_id, scope: state.rooms.find(room => room.id === item.room_id)?.visibility, updated: new Date(item.created_at).toLocaleString('ja-JP') })));
       setPaused(state.settings.paused);
+      if (THEMES.some(item => item.id === state.settings.theme)) setSettings(current => current.theme === state.settings.theme ? current : { ...current, theme: state.settings.theme });
       setSchedules(savedSchedules);
       api('/model-ready').then(result => { if (version === refreshVersion.current) setReadyProviders(result.providers); }).catch(() => {});
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
@@ -234,7 +248,8 @@ export function App() {
     if (touched.has('rules') && next.rules !== settings.rules) await api('/common-rules', 'PUT', { revision: next.rulesRevision, body: next.rules });
     const patch = { ...(touched.has('maxMembers') ? { generatedLimit: Number(next.maxMembers) } : {}), ...(touched.has('unlimited') || touched.has('concurrent') ? { concurrencyLimit: next.unlimited ? null : Number(next.concurrent) } : {}),
       ...(touched.has('backupDays') ? { backupDays: Number(next.backupDays) } : {}), ...(touched.has('backupTime') ? { backupTime: next.backupTime } : {}),
-      ...(touched.has('backupEnabled') ? { backupEnabled: next.backupEnabled } : {}), ...(touched.has('autonomous') ? { autonomous: next.autonomous } : {}) };
+      ...(touched.has('backupEnabled') ? { backupEnabled: next.backupEnabled } : {}), ...(touched.has('autonomous') ? { autonomous: next.autonomous } : {}),
+      ...(touched.has('theme') ? { theme: next.theme } : {}) };
     if (Object.keys(patch).length) await api('/settings', 'PATCH', patch);
     const model = { ...(touched.has('localLlmUrl') ? { localLlmUrl: next.localLlmUrl || null } : {}), ...(touched.has('maxParallel') ? { maxParallel: Number(next.maxParallel) } : {}) };
     if (Object.keys(model).length) await api('/model-settings', 'PATCH', model);
@@ -249,7 +264,7 @@ export function App() {
   if (!authenticated) return <Login loading={authenticated === null} onLogin={() => setAuthenticated(true)} />;
   if (!ready) return <main className="login-page">{loadError ? <div><p role="alert">{loadError}</p><button className="button secondary" onClick={() => { setLoadError(''); void refresh(); }}>再試行</button></div> : <p role="status">庭を読み込んでいます…</p>}</main>;
 
-  return <div className={`app-shell page-${page} ${mobileDetail ? 'mobile-detail' : ''}`} data-theme={(page === 'settings' ? previewTheme : null) || settings.theme || 'garden'}>
+  return <div className={`app-shell page-${page} ${mobileDetail ? 'mobile-detail' : ''}`} >
     <a className="skip-link" href="#main-content">メインコンテンツへ</a>
     <aside className="sidebar" aria-label="ナビゲーションとスレッド">
       <a href="#conversation" className="wordmark" onClick={() => { setMobileDetail(false); navigate('conversation'); }} aria-label="Niwa 会話へ">Niwa</a>
