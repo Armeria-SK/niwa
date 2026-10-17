@@ -402,6 +402,7 @@
   .watch-list p { overflow-wrap: anywhere; line-height: 1.7; }
   .watch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: var(--fs-1); color: var(--muted); }
   .watch-address { font-size: var(--fs-1); color: var(--muted); }
+  .watch-list + .small-heading, .watch-grid .today-empty + .small-heading { margin-top: 18px; }
   .watch-night { font-size: var(--fs-2); margin: 12px 0; }
   .watch-meters { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; font-size: var(--fs-1); }
   .watch-meters li { display: grid; grid-template-columns: minmax(0, 8em) minmax(0, 1fr) auto; align-items: center; gap: 10px; }

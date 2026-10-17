@@ -148,7 +148,7 @@ test('attachment API validates uploads and serves files only to Niwa\'s own page
   let site = 'cross-site';
   const call = (path: string, method = 'GET', body?: unknown) => new Promise<{ status: number; headers: Record<string, unknown>; text: string }>((resolve, reject) => {
     const data = body === undefined ? undefined : JSON.stringify(body);
-    const outgoing = request(`http://127.0.0.1:${port}${path}`, { method, headers: { host: 'niwa.test', origin, 'sec-fetch-site': site, 'content-type': 'application/json', ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } }, incoming => {
+    const outgoing = request(`http://127.0.0.1:${port}${path}`, { method, headers: { host: 'niwa.test', 'tailscale-user-login': 'owner@example.com', origin, 'sec-fetch-site': site, 'content-type': 'application/json', ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } }, incoming => {
       const chunks: Buffer[] = []; incoming.on('data', chunk => chunks.push(Buffer.from(chunk)));
       incoming.on('end', () => resolve({ status: incoming.statusCode!, headers: incoming.headers, text: Buffer.concat(chunks).toString('utf8') })); incoming.on('error', reject);
     });

@@ -119,6 +119,14 @@ test('the watch tab has its own URL and reads tools, outcomes, times and limits 
  assert.equal(nightLine({decision:'skipped'}),'今夜は休ませると決めています。');
  assert.match(nightLine({decision:null,preview:true}),/まだ決めていません/);assert.match(nightLine({decision:null,preview:false}),/下見はオフ/);
 });
+test('the watch tab lists moving work apart from work waiting for input, approval, its turn or a pause',async()=>{
+ const {splitWork}=await ui('watch.js');
+ const items=[{id:'a',state:'running',paused:false},{id:'b',state:'waiting_user',paused:false,progress:{kind:'user_input'}},{id:'c',state:'waiting_user',paused:false,progress:{kind:'approval'}},
+  {id:'d',state:'running',paused:true},{id:'e',state:'queued',paused:false},{id:'f',state:'waiting_child',paused:false},{id:'g',state:'waiting_provider',paused:false},{id:'h',state:'running',paused:false}];
+ const {moving,waiting}=splitWork(items);
+ assert.deepEqual(moving.map((item:{id:string})=>item.id),['a','h']);assert.deepEqual(waiting.map((item:{id:string})=>item.id),['b','c','d','e','f','g']);
+ assert.deepEqual(splitWork(undefined),{moving:[],waiting:[]});assert.deepEqual(splitWork([]),{moving:[],waiting:[]});
+});
 test('trust suggestions name the Bot, the kind and the run of approvals, and come after urgent items',async()=>{
  const {kindLabel,suggestionText,trustAttention}=await ui('trust.js');
  assert.equal(kindLabel('mcp:mcp_notes_append_note'),'MCPの書き込み（notes：append_note）');
@@ -150,6 +158,14 @@ test('a task replay has its own URL and reads each kind of record in plain words
  assert.deepEqual(replayItemView({type:'outside',name:'browser_form_submit',outcome:'unknown'}),{label:'外部への操作 browser_form_submit',detail:'結果不明',tone:'warn'});
  assert.equal(replayItemView({type:'message',link:'response',author:'リーダー',text:'答え'}).label,'返答（リーダー）');
  assert.equal(replayItemView({type:'approval',decision:'auto'}).detail,'任せた範囲で自動');
+});
+test('replay times follow the browser clock like the other screens, not a fixed Japan time',async()=>{
+ const {replayTime}=await ui('replay.js');const at=Date.UTC(2026,9,17,3,4,5),zone=process.env.TZ;
+ try{
+  process.env.TZ='UTC';assert.equal(replayTime(at),'3:04:05');
+  process.env.TZ='America/New_York';assert.equal(replayTime(at),'23:04:05');
+  process.env.TZ='Asia/Tokyo';assert.equal(replayTime(at),'12:04:05');
+ }finally{if(zone===undefined)delete process.env.TZ;else process.env.TZ=zone;}
 });
 test('the Bot export has its own URL and says what goes in and what cannot',async()=>{
  const {parseRoute,routeHash}=await ui('route.js');

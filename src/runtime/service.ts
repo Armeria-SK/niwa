@@ -48,7 +48,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
   try {
     const config = readInstallation(root);
     mcpSettings=await McpSettings.open(root,servers=>{config.mcpServers=servers;});
-    const auth = new WebAuth(config.origin);
+    const auth = new WebAuth(config.origin, config.tailscaleLogins);
     runtime = new Runtime(paths.state);
     const admin = runtime.administrator(); runtime.bootstrap(admin); runtime.tasks.recover(admin); runtime.tasks.recoverProviderWaits(admin,true);
     subscription = new Subscription(new FileCredentialStore(join(paths.secrets, 'codex.json')), () => runtime!.invalidateProvider(admin, 'openai_subscription'), {}, config.reasoningSummary===true);
