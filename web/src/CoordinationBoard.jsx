@@ -24,7 +24,7 @@ export function CoordinationBoard({roomId,members,onClose,onArtifact}) {
   {data?.digest ? <section className="coordination-task" aria-label="進捗ダイジェスト"><strong>直近24時間の実績と現在の待ち状況</strong>
    <p>保存した版（改訂含む）{data.digest.artifact_count}件 · 承認待ち {data.digest.approvals}件 · ブロッカー {data.digest.blockers}件 · 期限超過 {data.digest.overdue}件</p>
    {data.digest.artifacts.map(item=><div key={item.id}><button className="text-button" onClick={()=>onArtifact(item.id)}>{item.name}（第{item.version}版）</button> · {name(item.author_id)}</div>)}
-   <p>売上・入金・顧客接点：未確認</p>
+   <p>成果の実績：保存記録で確認できるものだけを数えます</p>
    {data.digest.operations.length ? data.digest.operations.map(item=><p key={item.tool_name}>{({browser_form_submit:'フォーム送信',browser_request_submit:'ページ通信'})[item.tool_name]}：結果記録 {item.recorded}件 / 結果不明 {item.unknown}件</p>) : <p>この期間の分類済み送信記録はありません。</p>}
    <p className="muted">{data.digest.operation_note}</p>
   </section> : null}
