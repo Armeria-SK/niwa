@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, statSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
+import { editSchema } from '../src/storage/database.ts';
 import { OpenAICompatibleAdapter, listCompatibleModels } from '../src/providers/openai-compatible/adapter.ts';
 import { normalizeCompatibleUrl } from '../src/providers/openai-compatible/url.ts';
 import { collectModelEvents } from '../src/providers/shared/adapter.ts';
@@ -74,9 +75,12 @@ test('upgrading a schema49 database widens the provider constraint in place and 
     const db = new DatabaseSync(join(root, 'control.db'));
     const sql = String(db.prepare("SELECT sql FROM sqlite_schema WHERE name='agents'").get()!.sql);
     const version = Number(db.prepare('PRAGMA schema_version').get()!.schema_version);
-    db.exec('BEGIN; PRAGMA writable_schema=ON;');
-    db.prepare("UPDATE sqlite_schema SET sql=? WHERE name='agents'").run(sql.replace(",'openai_compatible','anthropic'", '').replace("'local_llm'", "'ollama'"));
-    db.exec(`PRAGMA schema_version=${version + 1}; PRAGMA writable_schema=OFF; COMMIT;`);
+    db.exec('BEGIN;');
+    editSchema(db, () => {
+      db.prepare("UPDATE sqlite_schema SET sql=? WHERE name='agents'").run(sql.replace(",'openai_compatible','anthropic'", '').replace("'local_llm'", "'ollama'"));
+      db.exec(`PRAGMA schema_version=${version + 1}`);
+    });
+    db.exec('COMMIT;');
     db.exec('ALTER TABLE model_settings RENAME COLUMN local_llm_url TO ollama_url; ALTER TABLE model_settings DROP COLUMN compatible_url; ALTER TABLE model_settings DROP COLUMN compatible_parallel; ALTER TABLE model_settings DROP COLUMN fallback_provider; ALTER TABLE model_settings DROP COLUMN anthropic_parallel; DROP TRIGGER clear_schedule_sources; DROP TABLE schedule_sources; PRAGMA user_version=49;');
     const before = JSON.stringify(db.prepare('SELECT * FROM agents ORDER BY id').all());
     const autonomy = db.prepare('SELECT count(*) AS count FROM agent_autonomy').get()!.count;

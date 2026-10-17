@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { editSchema } from './database.ts';
 
 // The local-model provider id was stored as 'ollama' before it became Niwa's own name 'local_llm'.
 const LEGACY = 'ollama';
@@ -24,11 +25,10 @@ export function localLlmSchema(db: DatabaseSync): void {
   }).filter(edit => edit !== undefined);
   if (edits.length) {
     const version = Number(db.prepare('PRAGMA schema_version').get()!.schema_version);
-    db.exec('PRAGMA writable_schema=ON');
-    try {
+    editSchema(db, () => {
       for (const edit of edits) db.prepare("UPDATE sqlite_schema SET sql=? WHERE type='table' AND name=?").run(edit.sql, edit.table);
       db.exec(`PRAGMA schema_version=${version + 1}`);
-    } finally { db.exec('PRAGMA writable_schema=OFF'); }
+    });
   }
   // Every column that stores a provider id. Routes and the new-Bot default have no CHECK but are compared with agents.provider when read.
   for (const [table, column] of [['agents', 'provider'], ['model_settings', 'fallback_provider'], ['generated_model', 'provider'], ['model_routes', 'provider']] as const)

@@ -26,6 +26,16 @@ export function openDatabase(path: string, schema: string | readonly Migration[]
   }
 }
 
+/** Runs SQLite's documented in-place schema edit (writable_schema and a schema_version bump). Node 24.20 and later open databases
+ * in defensive mode, which refuses both, so the flag is lifted only for the edit; Node versions without the switch never set it. */
+export function editSchema(db: DatabaseSync, edit: () => void): void {
+  const defensive = typeof db.enableDefensive === 'function' ? (active: boolean) => db.enableDefensive(active) : undefined;
+  defensive?.(false);
+  db.exec('PRAGMA writable_schema=ON');
+  try { edit(); }
+  finally { db.exec('PRAGMA writable_schema=OFF'); defensive?.(true); }
+}
+
 export function transaction<T>(db: DatabaseSync, work: () => T): T {
   const nested = db.isTransaction;
   db.exec(nested ? 'SAVEPOINT niwa_nested' : 'BEGIN IMMEDIATE');
