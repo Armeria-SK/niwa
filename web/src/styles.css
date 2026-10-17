@@ -775,7 +775,7 @@
   }
 }
 
-/* Animate existing raster masks without changing layout or avatar scale. */
+/* Animate the avatar masks without changing layout or avatar scale. */
 .bot-avatar[data-motion='float'] { animation: avatar-float 3.2s ease-in-out infinite; }
 .bot-avatar[data-motion='sway'] { animation: avatar-sway 3.6s ease-in-out infinite; }
 .bot-avatar[data-motion='pulse'] { animation: avatar-pulse 2.8s ease-in-out infinite; }

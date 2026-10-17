@@ -8,7 +8,7 @@ export function Avatar({ member, shape, color, motion, size = 48, className = ''
   const preference = motion ?? member?.motion ?? 'auto';
   const stopped = motion === undefined && (member?.status === 'sleeping' || member?.activity === '一時停止中');
   const animation = stopped ? 'none' : preference === 'auto' ? (motion !== undefined ? 'sway' : member?.runtimeMotion || 'none') : preference;
-  return <span className={`bot-avatar ${className}`} data-motion={animation} aria-hidden="true" style={{ width: size, height: size, backgroundColor: color || member?.color, maskImage: `url(/assets/avatar-${shape || member?.shape || 'pebble'}.png)` }} />;
+  return <span className={`bot-avatar ${className}`} data-motion={animation} aria-hidden="true" style={{ width: size, height: size, backgroundColor: color || member?.color, maskImage: `url(/assets/avatar-${shape || member?.shape || 'pebble'}.svg)` }} />;
 }
 
 export function IconButton({ label, children, className = '', ...props }) {
