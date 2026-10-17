@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Runtime } from '../src/runtime/runtime.ts';
 import { DomainError } from '../src/domain/types.ts';
 import { DatabaseSync } from 'node:sqlite';
-import { currentDefault, previousDefault } from '../src/storage/common-rules-default-schema.ts';
+import { businessDefault, currentDefault, firstDefault } from '../src/storage/common-rules-default-schema.ts';
 
 function fixture(t: { after: (fn: () => void) => void }) {
   const path = mkdtempSync(join(tmpdir(), 'niwa-test-'));
@@ -247,15 +247,21 @@ test('structured replies retain clean message text and reject cross-room targets
   assert.equal(r.tasks.list(f.admin).length, 1);
 });
 
-test('the common-rules default migration upgrades only an untouched first default', () => {
+test('the common-rules default migrations upgrade only untouched earlier defaults', () => {
   const path = mkdtempSync(join(tmpdir(), 'niwa-rules-'));
   try {
     const open = () => new DatabaseSync(join(path, 'control.db'));
     const body = () => { const db = open(); try { return { ...db.prepare('SELECT body, revision FROM common_rules').get() as { body: string; revision: number } }; } finally { db.close(); } };
+    // Rewinds to just before the first default-moving migration; later table-creating migrations are undone so they can re-run.
     const rewind = (text: string, revision: number) => { const db = open(); try { db.prepare('UPDATE common_rules SET body = ?, revision = ?').run(text, revision); db.exec('DROP TRIGGER clear_schedule_sources; DROP TABLE schedule_sources; DROP TABLE message_attachments; ALTER TABLE model_settings DROP COLUMN max_parallel; PRAGMA user_version = 46'); } finally { db.close(); } };
+    const expectAfterRewind = (text: string, revision: number, expected: string) => { rewind(text, revision); new Runtime(path).close(); assert.deepEqual(body(), { body: expected, revision }); };
     new Runtime(path).close(); assert.deepEqual(body(), { body: currentDefault, revision: 1 });
-    rewind(previousDefault, 1); new Runtime(path).close(); assert.deepEqual(body(), { body: currentDefault, revision: 1 });
-    rewind(previousDefault, 2); new Runtime(path).close(); assert.deepEqual(body(), { body: previousDefault, revision: 2 });
-    rewind('人工の編集', 1); new Runtime(path).close(); assert.deepEqual(body(), { body: '人工の編集', revision: 1 });
+    assert.doesNotMatch(currentDefault, /事業方針|短期の売上/);
+    expectAfterRewind(firstDefault, 1, currentDefault);
+    expectAfterRewind(businessDefault, 1, currentDefault);
+    expectAfterRewind(firstDefault, 2, firstDefault);
+    expectAfterRewind(businessDefault, 2, businessDefault);
+    expectAfterRewind('人工の編集', 1, '人工の編集');
+    expectAfterRewind(currentDefault, 1, currentDefault);
   } finally { rmSync(path, { recursive: true, force: true }); }
 });

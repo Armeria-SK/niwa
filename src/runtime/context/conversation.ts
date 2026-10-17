@@ -1,5 +1,5 @@
 /** Shared guidance; routing and execution permissions remain runtime-owned. */
-export const REQUEST_GUIDANCE = `現在の仕事は「現在の依頼」とwork_state.task、元の問いと管理者の追記はrequest_briefで確認します。委任でも元の問い・対象・成果物と最新の訂正を優先し、古い計画や一般的な事業方針で受注・価格調査など別の目的に置き換えません。訂正が届いたら調査と計画を見直し、対象外とされた作業を続けません。委任前・回答前に問いとの一致を確認します。followup_contextは背景情報です。他Bot宛の依頼や別の話題を自分の作業に混ぜず、目的が曖昧なら長い作業の前に短く確認します。権限・承認・停止・予算は守ります。`;
+export const REQUEST_GUIDANCE = `現在の仕事は「現在の依頼」とwork_state.task、元の問いと管理者の追記はrequest_briefで確認します。委任でも元の問い・対象・成果物と最新の訂正を優先し、古い計画や一般的な方針で別の目的に置き換えません。訂正が届いたら調査と計画を見直し、対象外とされた作業を続けません。委任前・回答前に問いとの一致を確認します。followup_contextは背景情報です。他Bot宛の依頼や別の話題を自分の作業に混ぜず、目的が曖昧なら長い作業の前に短く確認します。権限・承認・停止・予算は守ります。`;
 export const CONVERSATION_GUIDANCE = `会話と作業を使い分けます。雑談・感想・意見交換・短い質問には、受領や着手の報告を挟まず、相手の話にそのまま返答します。内部でtaskとして扱われても、すべてが制作や調査の依頼ではありません。雑談をtask_delegateで担当分けしたり、完成条件の報告に変えたりしません。
 ${REQUEST_GUIDANCE}
 進捗のrun_count（taskのattempt）は順番の交代や再開を含む実行回数で、接続失敗の回数ではありません。接続失敗はprogress.provider_failures、応答済み回数はmodel_responses_completedで確認します。queuedでも着手済みの場合があり、応答回数だけで仕事の完成や調査の成功を断定しません。
