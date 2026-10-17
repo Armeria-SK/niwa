@@ -19,7 +19,7 @@ export function CoordinationBoard({roomId,members,onClose,onArtifact}) {
  const tasks=data?.tasks || [],byId=new Map(tasks.map(task=>[task.id,task]));
  const name=id=>id==='administrator'?'管理者':members[id]?.name || '未指定';
  const visible=tasks.filter(task=>!task.acknowledgment_only && (showDone || !['completed','cancelled'].includes(task.state)));
- return <Modal title="この会話の共同作業" onClose={onClose} className="coordination-modal"><div className="modal-body form-stack">
+ return <Modal drawer title="この会話の共同作業" onClose={onClose} className="coordination-modal"><div className="modal-body form-stack">
   <p>この会話に属する依頼と受け渡しの状況です。<br />直近・進行中の最大100件を表示します。</p>
   {data?.digest ? <section className="coordination-task" aria-label="進捗ダイジェスト"><strong>直近24時間の実績と現在の待ち状況</strong>
    <p>保存した版（改訂含む）{data.digest.artifact_count}件 · 承認待ち {data.digest.approvals}件 · ブロッカー {data.digest.blockers}件 · 期限超過 {data.digest.overdue}件</p>
@@ -45,7 +45,7 @@ export function CoordinationBoard({roomId,members,onClose,onArtifact}) {
      {!['completed','failed','cancelled'].includes(task.state) && task.deadline_at<8_640_000_000_000_000 ? <><dt>残り時間</dt><dd>{task.deadline_at>Date.now()?`${Math.ceil((task.deadline_at-Date.now())/60000)}分`:'期限超過'}</dd></> : null}<dt>成果物の記録</dt><dd>{task.artifact_id ? <button className="text-button" onClick={()=>onArtifact(task.artifact_id)}>最新の成果物を見る（{date(task.last_artifact_at)}）</button> : 'この依頼に紐づく成果物はまだありません'}</dd>
      <dt>外部操作</dt><dd>{task.external_operations}件の実行記録（成功とは限りません）</dd>
     </dl>
-    {task.approval_pending ? <p>外部操作の承認は「活動」の「承認待ち」で内容を確認してください。</p> : (task.paused || ['waiting_user','waiting_provider'].includes(task.state)) ? <form className="form-stack" onSubmit={e=>{e.preventDefault();void resume(task);}}><label className="field"><span>対応内容・追加指示</span><textarea rows={2} maxLength={2000} value={answers[task.id] || ''} onChange={e=>setAnswers(current=>({...current,[task.id]:e.target.value}))}/></label><button className="button secondary" disabled={busy}>対応して再開</button></form> : null}
+    {task.approval_pending ? <p>外部操作の承認は「記録」の「承認待ち」で内容を確認してください。</p> : (task.paused || ['waiting_user','waiting_provider'].includes(task.state)) ? <form className="form-stack" onSubmit={e=>{e.preventDefault();void resume(task);}}><label className="field"><span>対応内容・追加指示</span><textarea rows={2} maxLength={2000} value={answers[task.id] || ''} onChange={e=>setAnswers(current=>({...current,[task.id]:e.target.value}))}/></label><button className="button secondary" disabled={busy}>対応して再開</button></form> : null}
    </article>;
   })}
  </div></Modal>;

@@ -1,4 +1,4 @@
-.coordination-modal { width: min(780px, calc(100vw - 32px)); }
+.coordination-modal.drawer { width: min(780px, 100vw); }
 .coordination-task { border-top: 1px solid var(--border); padding-top: 16px; font-size: var(--fs-2); overflow-wrap: anywhere; }
 .coordination-meta { display: flex; gap: 16px; align-items: baseline; }
 .coordination-task > p { white-space: pre-wrap; }

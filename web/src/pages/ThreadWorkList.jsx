@@ -19,7 +19,7 @@ export function ThreadWorkList({groups,members,paused,onOpen,onThread,suspended=
   <span className="work-card-state">{workCounts(g.purposes.flatMap(p=>p.tasks),paused)}</span>
   <span className="work-card-meta">{g.purposes.length}目的 · {g.members.map(id=>members[id]?.name||'削除したBot').join('・')}</span>
  </button>)}</div>
- {selected&&!suspended?<Modal title={group?.title||'仕事が見つかりません'} onClose={close} className="thread-work-modal"><div ref={content}>
+ {selected&&!suspended?<Modal drawer title={group?.title||'仕事が見つかりません'} onClose={close} className="thread-work-modal"><div ref={content}>
   {group?<><p className="muted">{group.purposes.length}目的 · {workCounts(group.purposes.flatMap(p=>p.tasks),paused)}</p><button className="text-button" onClick={()=>{close();onThread(group.id);}}>会話を見る</button>{group.active.map(purpose)}{group.history.length>0&&<details className="work-history"><summary>終了した仕事（{group.history.length}目的）</summary>{group.history.map(purpose)}</details>}</>:<p>対象の仕事は削除されたか、表示対象ではなくなりました。</p>}
  </div></Modal>:null}</>;
 }

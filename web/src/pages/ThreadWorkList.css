@@ -8,8 +8,7 @@
 .work-card-purpose { font-size:var(--fs-1); line-height:1.8; overflow-wrap:anywhere; }
 .work-card-state { font-size:var(--fs-1); }
 .work-card-meta { font-size:var(--fs-1); color:var(--muted); overflow-wrap:anywhere; }
-.thread-work-modal { width:min(720px,calc(100vw - 36px)); }
-.thread-work-modal .modal-top,.task-modal .modal-top { position:sticky; top:-25px; z-index:1; background:var(--paper); padding-block:10px; }
+.thread-work-modal.drawer { width:min(720px,100vw); }
 .thread-work-modal .modal-top h2,.task-modal .modal-top h2 { overflow-wrap:anywhere; min-width:0; }
 .work-purpose { border-top:1px solid var(--border); margin-top:18px; padding-top:16px; }
 .work-purpose h3 { font-size:var(--fs-2); font-weight:500; margin:0; overflow-wrap:anywhere; }
@@ -21,4 +20,4 @@
 .work-assignment details,.work-history { margin-top:10px; font-size:var(--fs-1); color:var(--muted); }
 .work-history > summary,.work-assignment summary { cursor:pointer; padding:5px 0; }
 .work-count { font-size:var(--fs-1); margin:12px 0; }
-@media(max-width:600px) { .work-thread { padding:15px; }.work-assignment { align-items:flex-start; flex-direction:column; }.thread-work-modal .modal-top,.task-modal .modal-top { top:-20px; } }
+@media(max-width:600px) { .work-thread { padding:15px; }.work-assignment { align-items:flex-start; flex-direction:column; } }

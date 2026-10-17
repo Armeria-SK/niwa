@@ -6,7 +6,10 @@ import { Login } from './Login.jsx';
 import { AppearanceEditor, IconButton, Modal, Segmented, EmptyState, SetupNotice, Sentences } from './components.jsx';
 import { modelSetupNotice } from './providers.js';
 import { markSeen, readSeen, startSeen, unreadOf, writeSeen } from './unread.js';
-import { ChatIcon, UsersIcon, ActivityIcon, SettingsIcon, SearchIcon, PlusIcon, LockIcon, CloseIcon, InfoIcon, CheckCircleIcon, PinIcon } from './icons.jsx';
+import { ChatIcon, UsersIcon, SettingsIcon, SearchIcon, PlusIcon, LockIcon, CloseIcon, InfoIcon, CheckCircleIcon, PinIcon, TodayIcon, RecordsIcon } from './icons.jsx';
+import { attentionItems } from './attention.js';
+import { parseRoute, routeHash } from './route.js';
+import { Today } from './pages/Today.jsx';
 import { Conversation } from './pages/Conversation.jsx';
 import { Members } from './pages/Members.jsx';
 import { Activity } from './pages/Activity.jsx';
@@ -18,15 +21,17 @@ import { useRoomSearch } from './useRoomSearch.js';
 import { useLiveStream } from './useLiveStream.js';
 
 const navItems = [
+  { id: 'today', label: 'きょう', icon: TodayIcon },
   { id: 'conversation', label: '会話', icon: ChatIcon },
-  { id: 'members', label: 'メンバー', icon: UsersIcon },
-  { id: 'activity', label: '活動', icon: ActivityIcon },
+  { id: 'bots', label: 'Bot', icon: UsersIcon },
+  { id: 'records', label: '記録', icon: RecordsIcon },
   { id: 'settings', label: '設定', icon: SettingsIcon },
 ];
-function readPage() { const id = window.location.hash.slice(1).split('/')[0]; return navItems.some(item => item.id === id) ? id : 'conversation'; }
 
 export function App() {
-  const [page, setPage] = useState(readPage);
+  // 今いる画面はURL（#のあと）で決まる。戻る・進むや、URLの共有でも同じ画面が開く。
+  const [route, setRoute] = useState(() => parseRoute(window.location.hash));
+  const page = route.page;
   const [members, setMembers] = useState([]);
   const [deletedMembers, setDeletedMembers] = useState([]);
   const [threads, setThreads] = useState([]);
@@ -35,7 +40,8 @@ export function App() {
   const [questions, setQuestions] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
   const [schedules, setSchedules] = useState([]);
-  const [activityFilter, setActivityFilter] = useState('recap');
+  const [recordTab, setRecordTab] = useState('recap');
+  const taskReturn = useRef(null);
   const seen = Object.fromEntries(updates.filter(item => item.seen).map(item => [item.id, true]));
   const [authenticated, setAuthenticated] = useState(null);
   const [ready, setReady] = useState(false);
@@ -68,8 +74,8 @@ export function App() {
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--canvas').trim() || '#fafaf7');
   }, [resolvedTheme]);
   const [selectedThread, setSelectedThread] = useState(() => { try { return sessionStorage.getItem('niwa-thread') || ''; } catch { return ''; } });
-  const [selectedMember, setSelectedMember] = useState('');
-  const [mobileDetail, setMobileDetail] = useState(false);
+  // スマートフォンでは、URLに会話のIDがあるときだけ一覧ではなく会話そのものを出す。
+  const mobileDetail = page === 'conversation' && !!route.id;
   const [scope, setScope] = useState('all');
   const [search, setSearch] = useState('');
   const roomSearch = useRoomSearch(search, threads);
@@ -77,7 +83,8 @@ export function App() {
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState('');
   const toastTimer = useRef(null);
-  const thread = threads.find(item => item.id === selectedThread) || threads[0];
+  const threadId = mobileDetail ? route.id : selectedThread;
+  const thread = threads.find(item => item.id === threadId) || threads[0];
   const [seenMessages, setSeenMessages] = useState(readSeen);
   // The open conversation is read as messages arrive; on a phone only while it is actually shown, not behind the list.
   useEffect(() => {
@@ -89,10 +96,18 @@ export function App() {
   }, [ready, threads, page, thread, mobileDetail, seenMessages]);
   const animatedMembers = members.map(member => ({ ...member, runtimeMotion: member.status === 'sleeping' || paused ? 'none' : celebrating[member.id] ? 'celebrate' : member.runtimeMotion, activity: paused ? '一時停止中' : member.activity }));
   const memberMap = Object.fromEntries([...deletedMembers, ...animatedMembers].map(item => [item.id, item]));
-  const pendingCount = activities.filter(item => item.status === 'approval').length;
+  const attention = attentionItems({ activities, questions, decisions: updates });
+  const waitingOnYou = attention.some(item => item.kind !== 'decisions');
 
-  useEffect(() => { const onHash = () => setPage(readPage()); window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash); }, []);
-  useEffect(() => { document.title = `Niwa · ${navItems.find(item => item.id === page)?.label || '会話'}`; }, [page]);
+  useEffect(() => { const onHash = () => setRoute(parseRoute(window.location.hash)); window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash); }, []);
+  // 前の名前（#activity など）や読めない部分は、今の形のURLに置き換える（履歴は増やさない）。
+  const currentHash = routeHash(route);
+  useEffect(() => { if (window.location.hash !== currentHash) history.replaceState(null, '', currentHash); }, [currentHash]);
+  // 戻る・進むで画面が変わったら、前の画面で開いていた窓（成果物など）は閉じる。
+  useEffect(() => { setModal(null); }, [currentHash]);
+  useEffect(() => { if (route.page === 'conversation' && route.id) setSelectedThread(route.id); }, [route.page, route.id]);
+  useEffect(() => { if (route.page === 'records' && route.tab) setRecordTab(route.tab); }, [route.page, route.tab]);
+  useEffect(() => { document.title = `Niwa · ${navItems.find(item => item.id === page)?.label || 'きょう'}`; }, [page]);
   useEffect(() => () => { clearTimeout(toastTimer.current); for (const timer of celebrationTimers.current.values()) clearTimeout(timer); }, []);
   useEffect(() => { try { sessionStorage.setItem('niwa-thread', selectedThread); } catch { /* Optional browser state. */ } }, [selectedThread]);
   useEffect(() => { api('/session').then(result => setAuthenticated(result.authenticated)).catch(() => setAuthenticated(false)); }, []);
@@ -176,9 +191,17 @@ export function App() {
   }
 
   function notify(text) { clearTimeout(toastTimer.current); setToast(text); toastTimer.current = setTimeout(() => setToast(''), 4500); }
-  function navigate(next) { setPage(next); window.location.hash = next; }
-  function openModelSettings() { setPage('settings'); window.location.hash = 'settings/models'; }
-  function openThread(id) { setScope(threads.find(item => item.id === id)?.archived ? 'archived' : 'all'); setSearch(''); setSelectedThread(id); setMobileDetail(true); navigate('conversation'); }
+  function navigate(next) { const hash = routeHash(next); setRoute(parseRoute(hash)); if (window.location.hash !== hash) window.location.hash = hash; }
+  function openModelSettings() { navigate({ page: 'settings', tab: 'models' }); }
+  function openThread(id) { setScope(threads.find(item => item.id === id)?.archived ? 'archived' : 'all'); setSearch(''); setSelectedThread(id); navigate({ page: 'conversation', id }); }
+  // 仕事の詳細は記録の上に脇の欄で出す。ほかの画面から開いたときは、閉じるとその画面へ戻る。
+  function openTask(id) { taskReturn.current = page === 'records' ? null : route; navigate({ page: 'records', task: id }); }
+  function closeTask() {
+    // 承認のあとは決めた側と窓の側の両方から呼ばれる。もう仕事を開いていなければ何もしない。
+    if (!parseRoute(window.location.hash).task) return;
+    const back = taskReturn.current; taskReturn.current = null; navigate(back || { page: 'records', tab: recordTab });
+  }
+  const shownBot = (members.find(item => item.id === route.id) || members[0])?.id;
   function organizeThread(id, field) {
     const value = !threads.find(item => item.id === id)[field];
     return mutate(() => api(`/rooms/${id}/organization`, 'PATCH', { [field]: value }), field === 'pinned' ? (value ? 'スレッドをピン留めしました' : 'ピン留めを解除しました') : (value ? 'アーカイブしました。会話は残っています。' : 'スレッドを戻しました'));
@@ -209,7 +232,7 @@ export function App() {
   function readUpdates(ids) { return mutate(async () => {
     for (let offset = 0; offset < ids.length; offset += 1000) await api('/updates/read', 'POST', { ids: ids.slice(offset, offset + 1000) });
   }, '確認済みにしました'); }
-  function openMember(id) { if (memberMap[id]?.deleted) { notify('このBotは削除されています。会話と成果物は引き続き確認できます。'); return; } setSelectedMember(id); navigate('members'); }
+  function openMember(id) { if (memberMap[id]?.deleted) { notify('このBotは削除されています。会話と成果物は引き続き確認できます。'); return; } navigate({ page: 'bots', id }); }
   function togglePause() { return mutate(() => api('/settings', 'PATCH', { paused: !paused }), paused ? '活動を再開しました' : '活動を一時停止しました'); }
   async function sendMessage(text, attachments = [], replyTo, selectedRecipients = [], requestContext) {
     if (selectedRecipients.some(id => memberMap[id]?.deleted)) { notify('指定したBotは削除されています。依頼先を選び直してください。'); return false; }
@@ -230,7 +253,7 @@ export function App() {
     return mutate(async () => {
       const { room } = await api('/conversations', 'POST', { id: conversationRequest.current.id, ...body });
       conversationRequest.current = null;
-      setSelectedThread(room.id); setScope('all'); setSearch(''); setModal(null); setMobileDetail(true); navigate('conversation');
+      setSelectedThread(room.id); setScope('all'); setSearch(''); setModal(null); navigate({ page: 'conversation', id: room.id });
     }, '会話を作成しました');
   }
   function openDM(id) {
@@ -267,8 +290,8 @@ export function App() {
   return <div className={`app-shell page-${page} ${mobileDetail ? 'mobile-detail' : ''}`} >
     <a className="skip-link" href="#main-content">メインコンテンツへ</a>
     <aside className="sidebar" aria-label="ナビゲーションとスレッド">
-      <a href="#conversation" className="wordmark" onClick={() => { setMobileDetail(false); navigate('conversation'); }} aria-label="Niwa 会話へ">Niwa</a>
-      <nav className="main-nav" aria-label="メインナビゲーション">{navItems.filter(item => item.id !== 'settings').map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={`nav-link ${page === id ? 'active' : ''}`} aria-current={page === id ? 'page' : undefined} onClick={() => { setPage(id); if (id === 'conversation') setMobileDetail(false); }}><Icon size={25} /><span>{label}</span>{id === 'activity' && pendingCount ? <span className="nav-notice" title={`${pendingCount}件の承認待ち`} /> : null}</a>)}</nav>
+      <a href="#today" className="wordmark" aria-label="Niwa きょうへ">Niwa</a>
+      <nav className="main-nav" aria-label="メインナビゲーション">{navItems.filter(item => item.id !== 'settings').map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={`nav-link ${page === id ? 'active' : ''}`} aria-current={page === id ? 'page' : undefined}><Icon size={25} /><span>{label}</span>{id === 'today' && waitingOnYou ? <span className="nav-notice" title="あなたの番があります" /> : null}</a>)}</nav>
       <div className="thread-navigation">
         <div className="sidebar-section-heading"><h2>スレッド</h2><IconButton label="新しいスレッド" onClick={() => setModal({ type: 'new-thread' })}><PlusIcon size={22} /></IconButton></div>
         <div className="search-field"><SearchIcon size={20} /><input type="search" aria-label="スレッドを検索" placeholder="スレッドを検索" value={search} maxLength={200} onChange={e => setSearch(e.target.value)} />{search ? <IconButton label="検索をクリア" onClick={() => setSearch('')}><CloseIcon size={16} /></IconButton> : null}</div>
@@ -278,14 +301,15 @@ export function App() {
           <span className="thread-item-bottom"><span>{item.scope === 'private' ? '個別' : '共有'} · {item.members.slice(0, 3).map(id => memberMap[id]?.name).join(' / ')}</span>{unreadCounts.get(item.id) > 0 ? <span className="unread-count" aria-label={`${unreadCounts.get(item.id)}件の未読`}>{unreadCounts.get(item.id)}</span> : <span className="reply-count">{Math.max(0, item.message_count - 1)}</span>}</span>
         </button><div className="thread-quick-actions"><IconButton label={item.pinned ? `${item.title}のピン留めを解除` : `${item.title}をピン留め`} onClick={() => organizeThread(item.id, 'pinned')}><PinIcon size={16} /></IconButton><IconButton label={`${item.title}を削除`} onClick={() => setModal({ type: 'delete-content', kind: 'room', id: item.id, title: item.title })}><TrashIcon size={16} /></IconButton></div></div>) : roomSearch.loading || roomSearch.error ? null : <ThreadListEmpty search={search} scope={scope} onClear={() => { setSearch(''); setScope('all'); }} onShowAll={() => setScope('all')} onCreate={() => setModal({ type: 'new-thread' })} />}</div>
       </div>
-      <div className="sidebar-bottom"><a href="#settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}><SettingsIcon size={23} /><span>設定</span></a><button className="preview-label" onClick={async () => { await api('/logout', 'POST', {}); setAuthenticated(false); setReady(false); }}><span className="preview-dot" />ログアウト<InfoIcon size={13} /></button></div>
+      <div className="sidebar-bottom"><a href="#settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined}><SettingsIcon size={23} /><span>設定</span></a><button className="preview-label" onClick={async () => { await api('/logout', 'POST', {}); setAuthenticated(false); setReady(false); }}><span className="preview-dot" />ログアウト<InfoIcon size={13} /></button></div>
     </aside>
+    {page === 'today' ? <Today notice={setupNotice ? <SetupNotice notice={setupNotice} onConnect={openModelSettings} /> : null} paused={paused} onPause={togglePause} attention={attention} members={animatedMembers} memberMap={memberMap} activities={activities} artifacts={artifacts} decisions={updates} threads={threads} onOpenTask={openTask} onThread={openThread} onRead={readUpdates} onRecap={() => navigate({ page: 'records', tab: 'recap' })} onArtifact={openArtifact} onMember={openMember} onNewThread={() => setModal({ type: 'new-thread' })} /> : null}
     {page === 'conversation' && !thread ? <main className="conversation" id="main-content">{setupNotice ? <EmptyState title={setupNotice.title} action={<button className="button primary" onClick={openModelSettings}>モデルをつなぐ</button>}>{setupNotice.body}</EmptyState> : <EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState>}</main> : null}
-    {page === 'conversation' && thread ? <Conversation notice={threadNotice ? <SetupNotice notice={threadNotice} onConnect={openModelSettings} /> : null} onThreadAction={organizeThread} drafts={Object.values(live.drafts).filter(draft => draft.room_id === thread.id)} thread={thread} artifacts={artifacts} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => setMobileDetail(false)} onArtifact={openArtifact} /> : null}
-    {page === 'members' ? <Members onOpenThread={openThread} onDormant={(id, dormant) => mutate(() => api(`/agents/${id}/dormancy`, 'PATCH', { dormant }), dormant ? '休ませました。記憶と会話はそのままです。' : '呼び戻しました。')} onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), 'Botを削除しました。会話と成果物は残っています。')} onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={selectedMember} onSelect={setSelectedMember} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
-    {page === 'activity' ? <Activity questions={questions} notice={setupNotice ? <SetupNotice notice={setupNotice} onConnect={openModelSettings} /> : null} onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '予定を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} onScheduleToken={async id => { let issued = null; await mutate(async () => { issued = await api(`/schedules/${id}/token`, 'POST', {}); }, '受付用の鍵を発行しました'); return issued; }} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={activityFilter} onFilter={setActivityFilter} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(() => api(`/approvals/${id}`, 'POST', { approved, version }), approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
-    {page === 'settings' ? <Settings onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} /> : null}
-    <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined} onClick={() => { setPage(id); if (id === 'conversation') setMobileDetail(false); }}><Icon size={23} /><span>{label}</span>{id === 'activity' && pendingCount ? <span className="nav-notice" /> : null}</a>)}</nav>
+    {page === 'conversation' && thread ? <Conversation notice={threadNotice ? <SetupNotice notice={threadNotice} onConnect={openModelSettings} /> : null} onThreadAction={organizeThread} drafts={Object.values(live.drafts).filter(draft => draft.room_id === thread.id)} thread={thread} artifacts={artifacts} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => navigate({ page: 'conversation' })} onArtifact={openArtifact} /> : null}
+    {page === 'bots' ? <Members onOpenThread={openThread} onDormant={(id, dormant) => mutate(() => api(`/agents/${id}/dormancy`, 'PATCH', { dormant }), dormant ? '休ませました。記憶と会話はそのままです。' : '呼び戻しました。')} onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), 'Botを削除しました。会話と成果物は残っています。')} onAdd={addMember} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={route.id} tab={route.tab} onSelect={id => navigate({ page: 'bots', id, tab: route.tab })} onTab={tab => navigate({ page: 'bots', id: shownBot, tab })} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
+    {page === 'records' ? <Activity taskId={route.task} onOpenTask={openTask} onCloseTask={closeTask} onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '予定を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '予定を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '予定を再開しました' : '予定を停止しました')} onScheduleToken={async id => { let issued = null; await mutate(async () => { issued = await api(`/schedules/${id}/token`, 'POST', {}); }, '受付用の鍵を発行しました'); return issued; }} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={route.tab || recordTab} onFilter={tab => navigate({ page: 'records', tab })} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(async () => { await api(`/approvals/${id}`, 'POST', { approved, version }); closeTask(); }, approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
+    {page === 'settings' ? <Settings tab={route.tab} onTab={tab => navigate({ page: 'settings', tab })} onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} /> : null}
+    <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined}><Icon size={23} /><span>{label}</span>{id === 'today' && waitingOnYou ? <span className="nav-notice" /> : null}</a>)}</nav>
     {modal?.type === 'appearance' ? <Modal title={`${memberMap[modal.member].name}のアイコン`} onClose={() => setModal(null)} className="appearance-modal"><AppearanceEditor member={memberMap[modal.member]} onCancel={() => setModal(null)} onSave={async patch => { if (await updateMember(modal.member, patch)) setModal(null); }} /></Modal> : null}
     {modal?.type === 'delete-content' ? <DeleteContentDialog item={modal} onClose={() => setModal(null)} onDelete={item => mutate(() => api(`/${item.kind === 'room' ? 'rooms' : 'artifacts'}/${item.id}`, 'DELETE', {}), '削除しました')} /> : null}
     {modal?.type === 'artifact' ? <ArtifactPreview key={modal.artifact.id} onOpen={openArtifact} onDelete={() => setModal({ type: 'delete-content', kind: 'artifact', id: modal.artifact.id, title: modal.artifact.name })} artifact={modal.artifact} members={memberMap} onClose={() => setModal(null)} onThread={openThread} /> : null}

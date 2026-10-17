@@ -12,10 +12,8 @@ import { ModelRoutes } from '../ModelRoutes.jsx';
 import { McpConnections } from '../McpConnections.jsx';
 import { CheckIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 
-const SETTINGS_TABS = ['theme', 'rules', 'models', 'mcp', 'activity', 'backup'];
-
-export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, members }) {
-  const [tab, setTab] = useState(() => { const linked = window.location.hash.split('/')[1]; return SETTINGS_TABS.includes(linked) ? linked : 'theme'; }); // The OAuth return page and setup notices link here.
+/** 開いている欄はURL（#settings/欄）で決まる。MCPの認証から戻るページと、モデル接続の案内がここへつなぐ。 */
+export function Settings({ tab = 'theme', onTab, onPreviewTheme, settings, onSave, paused, onPause, members }) {
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
   const [touched, setTouched] = useState(() => new Set());
@@ -29,7 +27,7 @@ export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, me
   async function submit(e) { e.preventDefault(); const ok = await onSave(draft, touched); if (ok) setTouched(new Set()); setSaved(ok); }
   return <main className="work-area settings-page" id="main-content" tabIndex={-1}>
     <div className="page-heading"><div><span className="eyebrow">心地よく、一緒に過ごすために。</span><h1>設定</h1><p>みんなのルールと、活動の仕方を整えます。</p></div></div>
-    <Segmented label="設定のカテゴリ" className="settings-tabs" options={[{ value: 'theme', label: 'テーマ' }, { value: 'rules', label: '共通ルール' }, { value: 'models', label: 'モデルと接続' }, { value: 'mcp', label: 'MCP接続' }, { value: 'activity', label: '活動と人数' }, { value: 'backup', label: 'バックアップ' }]} value={tab} onChange={value => { setTab(value); setSaved(false); }} />
+    <Segmented label="設定のカテゴリ" className="settings-tabs" options={[{ value: 'theme', label: 'テーマ' }, { value: 'rules', label: '共通ルール' }, { value: 'models', label: 'モデルと接続' }, { value: 'mcp', label: 'MCP接続' }, { value: 'activity', label: '活動と人数' }, { value: 'backup', label: 'バックアップ' }]} value={tab} onChange={value => { onTab(value); setSaved(false); }} />
     <div className="settings-scroll" key={tab}>
     {tab==='mcp'?<McpConnections/>:<form className="settings-form" onSubmit={submit}>
       {tab === 'theme' ? <section className="settings-section"><h2>Niwaの色を選ぶ</h2><p>気分に合う配色で、心地よい場所に。</p><div className="theme-picker" role="group" aria-label="配色テーマ">{THEMES.map(theme => <button type="button" key={theme.id} className={`theme-option ${draft.theme === theme.id ? 'selected' : ''}`} aria-pressed={draft.theme === theme.id} onClick={() => change('theme', theme.id)}><span className="theme-colors" aria-hidden="true">{theme.colors.map(color => <span key={color} style={{ backgroundColor: color }} />)}</span><strong>{theme.name}</strong><small>{theme.description}</small>{draft.theme === theme.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">選ぶとすぐに全画面でプレビューできます。<br />「設定を保存」で、このNiwaを開くすべての端末でこの配色を使います。<br />保存せずに設定画面を離れると元に戻ります。</p></section> : null}

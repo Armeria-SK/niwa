@@ -66,3 +66,24 @@ test('sentences split after each full stop, but not inside brackets or at the ve
  assert.deepEqual(splitSentences('「設定」→「保存。」を押します。続けます'),['「設定」→「保存。」を押します。','続けます']);
  assert.deepEqual(splitSentences('句点のない文'),['句点のない文']);assert.deepEqual(splitSentences('（途中。）まで。 次へ。'),['（途中。）まで。','次へ。']);
 });
+test('screen addresses read old names, drop what cannot be read and write back the same address',async()=>{
+ const {parseRoute,routeHash}=await ui('route.js');
+ assert.deepEqual(parseRoute(''),{page:'today'});assert.deepEqual(parseRoute('#unknown/x'),{page:'today'});
+ assert.deepEqual(parseRoute('#members'),{page:'bots'});assert.deepEqual(parseRoute('#activity'),{page:'records'});
+ assert.deepEqual(parseRoute('#settings/mcp'),{page:'settings',tab:'mcp'});assert.deepEqual(parseRoute('#settings/nope'),{page:'settings'});
+ assert.deepEqual(parseRoute('#conversation/room-1'),{page:'conversation',id:'room-1'});assert.deepEqual(parseRoute('#conversation/<script>'),{page:'conversation'});
+ assert.deepEqual(parseRoute('#bots/a1/memory'),{page:'bots',id:'a1',tab:'memory'});assert.deepEqual(parseRoute('#bots/a1/secret'),{page:'bots',id:'a1'});
+ assert.deepEqual(parseRoute('#records/task/t9'),{page:'records',task:'t9'});assert.deepEqual(parseRoute('#records/artifacts'),{page:'records',tab:'artifacts'});
+ assert.deepEqual(parseRoute('#records/%E0%A4'),{page:'records'});
+ for(const hash of ['#today','#conversation/room-1','#bots/a1/procedures','#bots/a1','#records/task/t9','#records/schedules','#settings/models'])assert.equal(routeHash(parseRoute(hash)),hash);
+ assert.equal(routeHash({page:'bots',tab:'memory'}),'#bots');
+});
+test('today counts what is waiting on you, who is working and what was made in the last day',async()=>{
+ const {todayDigest,DAY}=await ui('today.js');const now=Date.UTC(2026,9,17,12);
+ const artifacts=[{id:'a1',room_id:'r',series_id:'s',version:1,created_at:now-2*DAY,name:'案内'},{id:'a2',room_id:'r',series_id:'s',version:2,created_at:now-1000,name:'案内'},{id:'a3',room_id:'r',series_id:'old',version:1,created_at:now-3*DAY,name:'古い'}];
+ const activities=[{state:'running',member:'k'},{state:'running',member:'k'},{state:'running',member:'r',paused:1},{state:'completed',member:'r'}];
+ const digest=todayDigest({now,attention:[{kind:'approval'}],activities,artifacts,decisions:[{id:'d1',created_at:new Date(now-60_000).toISOString()},{id:'d0',created_at:now-2*DAY}]});
+ assert.deepEqual(digest.made.map((item:{id:string})=>item.id),['a2']);assert.deepEqual(digest.decided.map((item:{id:string})=>item.id),['d1']);assert.equal(digest.working,1);
+ assert.equal(digest.summary,'あなたの番が1件あります。いま1体のBotが仕事を進めています。直近24時間で、決まったことが1件、できたものが1件あります。');
+ assert.equal(todayDigest({now,paused:true,activities}).summary,'あなたの判断を待っているものはありません。Botの活動は一時停止しています。');
+});

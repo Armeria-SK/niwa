@@ -28,3 +28,5 @@ export function usageSummary(runs) {
  }
  return {calls:list.length,input,output,estimated};
 }
+/** 使用量を1行で読む。回数がなければ空。 */
+export const usageLine=usage=>usage?.calls?`モデル呼び出し ${usage.calls.toLocaleString('ja-JP')}回 ・ 入力 ${usage.input.toLocaleString('ja-JP')} ・ 出力 ${usage.output.toLocaleString('ja-JP')}（トークン）`:'';

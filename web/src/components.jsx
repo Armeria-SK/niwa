@@ -15,7 +15,8 @@ export function IconButton({ label, children, className = '', ...props }) {
   return <button type="button" className={`icon-button ${className}`} aria-label={label} title={label} {...props}>{children}</button>;
 }
 
-export function Modal({ title, children, onClose, className = '' }) {
+/** 重ねて出す窓。drawer は画面の右から出る脇の欄（スマートフォンでは全面）で、後ろの画面を見失わずに詳しく読むためのもの。 */
+export function Modal({ title, children, onClose, className = '', drawer = false }) {
   const ref = useRef(null);
   const titleId = useId();
   useEffect(() => {
@@ -24,7 +25,7 @@ export function Modal({ title, children, onClose, className = '' }) {
     dialog.showModal();
     return () => { dialog.close(); previous?.focus?.(); };
   }, []);
-  return <dialog ref={ref} className={`modal ${className}`} aria-labelledby={titleId} onCancel={e => { e.preventDefault(); onClose(); }} onClick={e => { if (e.target === e.currentTarget) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) onClose(); } }}>
+  return <dialog ref={ref} className={`modal ${drawer ? 'drawer' : ''} ${className}`} aria-labelledby={titleId} onCancel={e => { e.preventDefault(); onClose(); }} onClick={e => { if (e.target === e.currentTarget) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) onClose(); } }}>
     <div className="modal-top"><h2 id={titleId}>{title}</h2><IconButton label="閉じる" onClick={onClose}><CloseIcon size={21} /></IconButton></div>
     {children}
   </dialog>;
