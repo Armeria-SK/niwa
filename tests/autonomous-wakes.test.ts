@@ -172,3 +172,12 @@ test('a candidate whose task cannot be created is deferred and reported instead 
  assert.equal(r.tasks.list(admin).length,0);const deferred=r.autonomousWakes.list(admin).find(w=>w.agent_id===leader.id)!;assert.equal(deferred.reason,'起動に失敗したため待機中');assert.ok(Number(deferred.next_at)>=now+60000+14*60000);
  r.autonomousWakes.dispatch(admin,now+120001);assert.equal(r.tasks.list(admin).filter(x=>x.agent_id===other.id).length,1);
 });
+test('a Bot whose model has no saved connection gets no wake or room and says why until one is saved',t=>{
+ const {r,admin,leader}=fixture(t),now=Date.now(),none=new Set<string>();
+ r.autonomousWakes.dispatch(admin,now,none);r.autonomousWakes.dispatch(admin,now+60000,none);
+ assert.equal(r.tasks.list(admin).length,0);assert.equal(r.rooms(admin).length,0);
+ const state=r.autonomousWakes.list(admin,none)[0]!;assert.equal(state.reason,'モデルの接続がありません');assert.equal(state.next_at,null);
+ const provider=new Set([r.agents(admin).find(agent=>agent.id===leader.id)!.provider]);
+ r.autonomousWakes.dispatch(admin,now+120000,provider);assert.equal(r.tasks.list(admin).length,1);
+ assert.notEqual(r.autonomousWakes.list(admin,provider)[0]!.reason,'モデルの接続がありません');
+});

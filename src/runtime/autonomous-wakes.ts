@@ -31,7 +31,8 @@ export class AutonomousWakes {
       .filter(task=>!blocked.has(String(task.id))).map(task=>String(task.agent_id)));
   }
 
-  list(actor: Actor) {
+  /** `ready` lists providers with a saved connection; omitted, connections are not checked. */
+  list(actor: Actor, ready?: ReadonlySet<string>) {
     this.admin(actor);
     const busy=this.busyAgents(this.tasks.autonomyBlocked(actor));
     const settings = this.db.prepare('SELECT paused,autonomous FROM settings WHERE id=1').get()!;
@@ -40,13 +41,13 @@ export class AutonomousWakes {
     const roomBlocked = !shared && !!this.db.prepare("SELECT 1 FROM rooms WHERE visibility='shared' LIMIT 1").get();
     const gate = Number(this.db.prepare('SELECT coalesce(max(last_started_at),0)+? AS due FROM autonomous_wakes').get(MINUTE)!.due);
     const ongoing=this.initiatives.enabled()?this.initiatives.list(actor):[];
-    return this.db.prepare(`SELECT a.id AS agent_id,a.name,a.status,coalesce((SELECT enabled FROM agent_autonomy WHERE agent_id=a.id),1) AS enabled,w.next_at,w.reason,w.model_calls,w.budget_reset_at,w.task_id,t.state,t.provider_retry_at
+    return this.db.prepare(`SELECT a.id AS agent_id,a.name,a.status,coalesce((SELECT enabled FROM agent_autonomy WHERE agent_id=a.id),1) AS enabled,a.provider,w.next_at,w.reason,w.model_calls,w.budget_reset_at,w.task_id,t.state,t.provider_retry_at
       FROM agents a LEFT JOIN autonomous_wakes w ON w.agent_id=a.id LEFT JOIN tasks t ON t.id=w.task_id
       WHERE a.id NOT IN (SELECT id FROM deleted_agents) ORDER BY a.rowid`).all().map(row => {const budgetWait=Number(row.model_calls)>=24&&Number(row.budget_reset_at)>Date.now();const blocked=roomBlocked&&!ongoing.some(i=>i.owner_id===row.agent_id&&i.state==='active'&&!this.db.prepare('SELECT 1 FROM room_preferences WHERE room_id=? AND archived=1').get(i.room_id));return ({
         enabled: row.enabled === 1, agent_id: row.agent_id, name: row.name, task_id: row.task_id, model_calls: row.model_calls ?? 0, budget_reset_at: row.budget_reset_at,
-        reason: settings.paused ? '全体停止中' : !settings.autonomous ? '自発活動オフ' : !row.enabled ? 'このBotの自発活動オフ' : row.status !== 'active' ? '休眠中'
+        reason: settings.paused ? '全体停止中' : !settings.autonomous ? '自発活動オフ' : !row.enabled ? 'このBotの自発活動オフ' : row.status !== 'active' ? '休眠中' : ready && !ready.has(String(row.provider)) ? 'モデルの接続がありません'
           : blocked ? '利用できる共有会話がありません' : busy.has(String(row.agent_id)) ? (row.task_id ? '前回の活動を継続・待機中' : '既存の仕事を優先') : budgetWait ? '自発活動の利用枠待ち' : row.reason ?? '起動判定の準備中',
-        next_at: settings.paused || !settings.autonomous || !row.enabled || row.status !== 'active' || blocked ? null
+        next_at: settings.paused || !settings.autonomous || !row.enabled || row.status !== 'active' || (ready && !ready.has(String(row.provider))) || blocked ? null
           : busy.has(String(row.agent_id)) ? (row.state === 'waiting_provider' ? row.provider_retry_at : null) : Math.max(Number(row.next_at ?? Date.now()+MINUTE),gate,budgetWait?Number(row.budget_reset_at):0),
       });});
   }
@@ -61,7 +62,8 @@ export class AutonomousWakes {
     return createHash('sha256').update(JSON.stringify([...new Set([...content,...sources])].sort())).digest('hex');
   }
 
-  dispatch(actor: Actor, now = Date.now()): void {
+  /** `ready` lists providers with a saved connection; a Bot whose model has none gets no wake, so nothing waits on a missing login. */
+  dispatch(actor: Actor, now = Date.now(), ready?: ReadonlySet<string>): void {
     this.admin(actor);
     let failure: unknown;
     transaction(this.db, () => {
@@ -90,11 +92,11 @@ export class AutonomousWakes {
       for(const item of this.initiatives.due(actor,now)) this.db.prepare('UPDATE autonomous_wakes SET next_at=min(next_at,?) WHERE agent_id=? AND last_started_at+900000<=?').run(now,item.owner_id,now);
       const last = Number(this.db.prepare('SELECT coalesce(max(last_started_at),0) AS last FROM autonomous_wakes').get()!.last);
       if (now < last+MINUTE) return;
-      const candidates = this.db.prepare(`SELECT w.agent_id,w.stagnant FROM autonomous_wakes w JOIN agents a ON a.id=w.agent_id
+      const candidates = this.db.prepare(`SELECT w.agent_id,w.stagnant,a.provider FROM autonomous_wakes w JOIN agents a ON a.id=w.agent_id
         WHERE coalesce((SELECT enabled FROM agent_autonomy WHERE agent_id=a.id),1)=1 AND w.task_id IS NULL AND w.next_at<=? AND a.status='active' AND a.id NOT IN (SELECT id FROM deleted_agents)
         AND NOT (w.model_calls>=24 AND w.budget_reset_at>?)
         ORDER BY w.last_started_at,w.next_at,a.rowid`).all(now,now);
-      const candidate=candidates.filter(c=>!busy.has(String(c.agent_id))).find(c=>!this.initiatives.enabled()||this.initiatives.candidate(actor,String(c.agent_id),now)||!this.initiatives.list(actor).some(i=>i.owner_id===c.agent_id&&i.state==='resting'));
+      const candidate=candidates.filter(c=>!busy.has(String(c.agent_id))&&(!ready||ready.has(String(c.provider)))).find(c=>!this.initiatives.enabled()||this.initiatives.candidate(actor,String(c.agent_id),now)||!this.initiatives.list(actor).some(i=>i.owner_id===c.agent_id&&i.state==='resting'));
       if (!candidate) return;
       // A candidate that cannot start (e.g. an oversized prompt) is rolled back and deferred so it cannot block the others or crash the tick.
       try { transaction(this.db, () => {

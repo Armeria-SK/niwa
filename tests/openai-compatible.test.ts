@@ -327,3 +327,18 @@ test('the per-endpoint limit serializes OpenAI-compatible requests', async () =>
     assert.equal(peak, 3);
   } finally { runtime.close(); await fake.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test('ready providers list only saved connections, so autonomous wakes never wait on a missing login', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'niwa-ready-providers-')); const runtime = new Runtime(root);
+  const credentials = new MemoryCredentialStore();
+  const subscription = new Subscription(credentials, () => {}, { fetch: async () => { throw new Error('No network in this test'); } });
+  const gateway = new ModelGateway(runtime, fetch, subscription, new MemoryApiKeyStore());
+  try {
+    const admin = runtime.administrator();
+    assert.deepEqual([...await gateway.readyProviders()], []);
+    await gateway.configureCompatible({ url: 'http://127.0.0.1:1234/v1' });
+    runtime.configureLocalLlm(admin, 'http://127.0.0.1:11434');
+    await credentials.write(credential);
+    assert.deepEqual([...await gateway.readyProviders()].sort(), ['local_llm', 'openai_compatible', 'openai_subscription']);
+  } finally { await subscription.close(); runtime.close(); rmSync(root, { recursive: true, force: true }); }
+});
