@@ -1,5 +1,5 @@
 import {WorkFacts} from '../WorkFacts.jsx';
-import {shortWork,workLabel} from '../work-display.js';
+import {shortWork,usageSummary,workLabel} from '../work-display.js';
 import {artifactGroups} from '../artifact-display.js';
 import {groupThreadWork} from '../work-groups.js';
 import {ThreadWorkList} from './ThreadWorkList.jsx';
@@ -52,17 +52,19 @@ function TaskDetail({ task, member, paused, onClose, onControl, onThread, onBack
     try { return await onControl(task.id, action, body); }
     finally { pending.current = false; setBusy(false); }
   }
-  const [history, setHistory] = useState([]); const [historyError, setHistoryError] = useState('');
+  const [history, setHistory] = useState([]); const [historyError, setHistoryError] = useState(''); const [usage, setUsage] = useState(null);
   useEffect(() => {
     let active = true;
     api(`/tasks/${task.id}/history`).then(items => { if (active) { setHistory(items); setHistoryError(''); } })
       .catch(error => { if (active) setHistoryError(error.message); });
+    api(`/tasks/${task.id}/prompt-runs`).then(runs => { if (active) setUsage(usageSummary(runs)); }).catch(() => { if (active) setUsage(null); });
     return () => { active = false; };
   }, [task.id, task.updated_at, task.instructions?.length]);
   const canAct = !member?.deleted && openStatuses.includes(task.status);
   return <Modal title={shortWork(task.title)} onClose={onClose} className="task-modal"><div className="modal-body form-stack">{onBack?<button className="text-button" onClick={onBack}>スレッドの仕事へ戻る</button>:null}<div className="activity-detail-owner"><Avatar member={member} size={40} /><span>{member?.name}</span><span role="status">{workLabel(task,paused)}</span></div><WorkFacts task={task}/><details><summary>依頼全文・説明</summary><p>{task.prompt||task.title}</p><p>{task.detail}</p></details><div><h3 className="small-heading">これまでの進み具合</h3><ol className="task-steps">{task.steps.map((step, i) => <li key={`${i}-${step}`}>{step}</li>)}</ol></div>
     {task.instructions?.length ? <div><h3 className="small-heading">追加した指示</h3><ul className="task-instructions">{task.instructions.map(item => <li key={item.id}><time>{item.time}</time><p>{item.text}</p></li>)}</ul></div> : null}
     {canAct ? <form className="form-stack" onSubmit={async e => { e.preventDefault(); if (instruction.trim() && await control('instruct', instruction.trim())) setInstruction(''); }}><label className="field"><span>この仕事への追加指示</span><textarea disabled={busy} rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="進め方や、優先してほしいことなど" /></label><button className="button secondary" disabled={busy || !instruction.trim()}>指示を追加</button></form> : null}
+    {usage?.calls ? <div><h3 className="small-heading">モデルの使用量</h3><p className="task-usage">モデル呼び出し {usage.calls.toLocaleString('ja-JP')}回 ・ 入力 {usage.input.toLocaleString('ja-JP')} ・ 出力 {usage.output.toLocaleString('ja-JP')}（トークン）</p>{usage.estimated ? <p className="field-hint">うち{usage.estimated}回は接続先から量の報告がなく、入力は送る前の見積もりで数えています。</p> : null}</div> : null}
     {historyError ? <p role="alert">履歴を取得できませんでした。{historyError}</p> : null}
     {history.length ? <div><h3 className="small-heading">操作の履歴（直近100件）</h3><ul className="task-log">{history.map(item => <li key={item.sequence}><time dateTime={new Date(item.created_at).toISOString()}>{new Date(item.created_at).toLocaleString('ja-JP')}</time> {eventLabels[item.kind] || '状態を更新'}</li>)}</ul></div> : null}
     </div><div className="form-actions task-controls">{task.thread ? <button className="button subtle" onClick={() => { onClose(); onThread(task.thread); }}>関連する会話</button> : null}

@@ -19,3 +19,12 @@ export function workCounts(tasks,paused=false) {
  for(const task of tasks){const terminal=['completed','cancelled','failed'].includes(task.state)||['done','canceled','failed'].includes(task.status);const kind=terminal?'ended':paused||task.paused||task.status==='paused'?'paused':task.state==='running'?'running':'waiting';counts[kind]++;}
  return Object.entries({running:'実行中',waiting:'待機',paused:'停止',ended:'終了'}).filter(([key])=>counts[key]).map(([key,label])=>`${label}${counts[key]}作業`).join('・');
 }
+/** モデルに送った回数と量。接続先が報告した数を使い、報告のない回の入力は送る前の見積もりで数える。 */
+export function usageSummary(runs) {
+ const list=Array.isArray(runs)?runs:[];let input=0,output=0,estimated=0;
+ for(const run of list){
+  if(Number.isFinite(run.input_tokens))input+=run.input_tokens;else{input+=Number(run.estimated_input_tokens)||0;estimated++;}
+  if(Number.isFinite(run.output_tokens))output+=run.output_tokens;
+ }
+ return {calls:list.length,input,output,estimated};
+}

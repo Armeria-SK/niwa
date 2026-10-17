@@ -26,3 +26,8 @@ test('memory source names the speaker and room, marks private conversations and 
  const gone=memorySource({created_at:'2026-09-09T08:53:00.000Z',source:null});
  assert.equal(gone.room,'元の会話は削除されています');assert.equal(gone.excerpt,'');assert.equal(gone.openable,false);
 });
+test('usage sums reported tokens and falls back to the estimate only for unreported input',async()=>{
+ const {usageSummary}=await ui('work-display.js');
+ assert.deepEqual(usageSummary([{input_tokens:1200,output_tokens:80,estimated_input_tokens:1500},{input_tokens:null,output_tokens:null,estimated_input_tokens:900}]),{calls:2,input:2100,output:80,estimated:1});
+ assert.deepEqual(usageSummary(undefined),{calls:0,input:0,output:0,estimated:0});
+});
