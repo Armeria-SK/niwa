@@ -21,6 +21,9 @@ export const SHAPES = [
   { id: 'comet', name: 'ながれぼし' },
 ];
 
+/** アイコンの動き。Botのプロフィールで選べる値と、その呼び名。 */
+export const MOTIONS = [{ value: 'auto', label: '状態に合わせる' }, { value: 'none', label: 'なし' }, { value: 'float', label: 'ふわふわ' }, { value: 'sway', label: 'ゆらゆら' }, { value: 'pulse', label: 'ぽよぽよ' }];
+
 export const THEMES = [
   { id: 'auto', name: '自動', description: '端末の明るさに合わせる（ガーデン／ミッドナイト）', colors: ['#fafaf7', '#18242e', '#46684e'] },
   { id: 'garden', name: 'ガーデン', description: 'やわらかな白とセージ', colors: ['#fafaf7', '#ebefe5', '#46684e'] },

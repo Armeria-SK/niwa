@@ -60,8 +60,9 @@ import { Watch } from './watch.ts';
 import { trustSchema } from '../storage/trust-schema.ts';
 import { Trust, type ApprovalKind } from './trust.ts';
 import { mediaAttachmentSchema } from '../storage/media-attachment-schema.ts';
+import { botImportSchema } from '../storage/bot-import-schema.ts';
 import { Replays } from './replay.ts';
-import { Seeds } from './seeds.ts';
+import { BotFiles } from './bot-files.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -85,7 +86,7 @@ import { Value } from '@sinclair/typebox/value';
 import { conversationReplySchema } from '../storage/conversation-reply-schema.ts';
 import type { Task, TaskLease } from '../domain/task.ts';
 import { summarySchema, type WorkSummary } from '../domain/summary.ts';
-import { executeProcedure } from './procedures.ts';
+import { executeProcedure, importedProcedureSchema, PROCEDURE_MAX_LENGTH } from './procedures.ts';
 import type { JsonObject } from '../contracts/model.ts';
 import { contentManagementSchema } from '../storage/content-management-schema.ts';
 import { actionApprovalSchema } from '../storage/action-approval-schema.ts';
@@ -101,6 +102,10 @@ type Principal = { kind: 'admin'; id: 'administrator' } | { kind: 'agent'; id: s
 /** Procedures whose current version cites the memory bound to the single parameter. */
 const CITING_PROCEDURES = `SELECT p.id FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision, json_each(v.body,'$.sources') s
   WHERE json_extract(s.value,'$.kind')='memory' AND json_extract(s.value,'$.source_id')=?`;
+/** The version of a source as a Bot reads it: any change to where it is or what it says gives another. */
+function historyRevision(kind: string, id: string, roomId: string, body: string, revision: number | null): string {
+  return createHash('sha256').update(JSON.stringify([kind, id, roomId, body, revision])).digest('hex');
+}
 
 export class Runtime {
   readonly quality: ArtifactQuality;
@@ -112,7 +117,7 @@ export class Runtime {
   readonly watch: Watch;
   readonly trust: Trust;
   readonly replays: Replays;
-  readonly seeds: Seeds;
+  readonly botFiles: BotFiles;
   readonly artifactVersions: ArtifactVersions;
   readonly schedules: Schedules;
   readonly providerLimits: ProviderLimits;
@@ -126,7 +131,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema, mediaAttachmentSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema, mediaAttachmentSchema, botImportSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -152,7 +157,7 @@ export class Runtime {
     this.watch = new Watch(this.#db, this, actor => this.#admin(actor));
     this.trust = new Trust(this.#db, actor => this.#admin(actor));
     this.replays = new Replays(this.#db, this, actor => this.#admin(actor));
-    this.seeds = new Seeds(this, actor => this.#admin(actor));
+    this.botFiles = new BotFiles(this.#db, this, actor => this.#admin(actor));
     this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id,this.initiatives,now=>this.nights.gate(now));
     this.quality = new ArtifactQuality(this.#db,this,actor=>this.#principal(actor));
     this.artifactVersions = new ArtifactVersions(this.#db,this,actor=>this.#principal(actor));
@@ -1269,12 +1274,13 @@ export class Runtime {
     return db.prepare(`SELECT p.id,p.room_id,p.revision,p.enabled,p.disabled_reason,v.body,v.created_at,(SELECT count(*) FROM procedure_uses u WHERE u.procedure_id=p.id) AS uses,
       (SELECT max(created_at) FROM procedure_uses u WHERE u.procedure_id=p.id) AS last_used_at
       FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision ORDER BY v.created_at DESC LIMIT 200`).all().map(row => {
-      let body: { title?: unknown; conditions?: unknown; steps?: unknown } = {};
+      let body: { title?: unknown; conditions?: unknown; steps?: unknown; origin?: unknown } = {};
       try { body = JSON.parse(String(row.body)) as typeof body; } catch { /* A damaged record still lists so it can be disabled. */ }
       const source = this.#liveRoom(String(row.room_id));
       return { id: String(row.id), revision: Number(row.revision), enabled: row.enabled === 1, title: String(body.title ?? ''), conditions: String(body.conditions ?? ''),
         steps: Array.isArray(body.steps) ? body.steps.map(String) : [], saved_at: Number(row.created_at), uses: Number(row.uses),
-        last_used_at: row.last_used_at === null ? null : Number(row.last_used_at), disabled_reason: row.disabled_reason === null ? null : String(row.disabled_reason), room_title: source ? String(source.title) : null, private: source?.visibility === 'private' };
+        last_used_at: row.last_used_at === null ? null : Number(row.last_used_at), disabled_reason: row.disabled_reason === null ? null : String(row.disabled_reason), room_title: source ? String(source.title) : null, private: source?.visibility === 'private',
+        imported: body.origin === 'imported' };
     });
   }
   /** Turning a procedure back on does not vouch for it: the Bot still rechecks its sources before each use and disables it if they changed. */
@@ -1285,6 +1291,38 @@ export class Runtime {
     check(row, 'not_found', 'Procedure not found');
     check(!enabled || row.disabled_reason !== 'memory_corrected', 'conflict', 'A memory this procedure cites was corrected; the Bot must save it again');
     db.prepare('UPDATE procedures SET enabled=?,disabled_reason=NULL WHERE id=?').run(enabled ? 1 : 0, id);
+  }
+  /** Administrator only: procedures and memories from a Bot file, written into the Bot just made from it. Each cites the administrator's message
+   * that carried it in, so the Bot's source checks and the memory source display treat them like any other. The caller fixes the ids,
+   * so writing again adds nothing twice, and a memory deleted in the meantime is not brought back. */
+  importKnowledge(actor: Actor, agentId: string, roomId: string, items: {
+    procedures: { id: string; message_id: string; title: string; conditions: string; steps: string[] }[]; memories: { id: string; message_id: string; body: string }[];
+  }): void {
+    const principal = this.#admin(actor);
+    check(this.#room(actor, roomId).visibility === 'shared', 'invalid', 'Imported knowledge needs a shared conversation');
+    const message = this.#db.prepare('SELECT body FROM messages WHERE id=? AND room_id=? AND author_id=?');
+    const cite = (id: string) => {
+      const row = message.get(text(id, 100), roomId, principal.id);
+      check(row && !this.#db.prepare('SELECT 1 FROM message_attachments WHERE message_id=?').get(id), 'not_found', 'Source message unavailable');
+      return { kind: 'message' as const, source_id: id, revision: historyRevision('message', id, roomId, String(row.body), null) };
+    };
+    const db = this.#memory(actor, agentId);
+    transaction(db, () => {
+      for (const item of items.memories) {
+        text(item.body); check(/^[0-9a-f]{64}$/.test(item.id), 'invalid', 'Invalid memory id');
+        if (db.prepare('SELECT 1 FROM memory_audit WHERE memory_id=?').get(item.id) || this.#db.prepare('SELECT 1 FROM deletion_records WHERE agent_id=? AND memory_id=?').get(agentId, item.id)) continue;
+        const source = cite(item.message_id);
+        db.prepare('INSERT INTO memories VALUES (?, ?, ?, ?, ?)').run(item.id, item.body, source.source_id, roomId, 1);
+        this.#audit(db, item.id, 'created', principal.id, 1);
+      }
+      for (const item of items.procedures) {
+        const body = { title: item.title, conditions: item.conditions, steps: item.steps, origin: 'imported', sources: [cite(item.message_id)] };
+        check(/^[0-9a-f]{64}$/.test(item.id) && Value.Check(importedProcedureSchema, body) && JSON.stringify(body).length <= PROCEDURE_MAX_LENGTH, 'invalid', 'Procedure is too large or invalid');
+        if (db.prepare('SELECT 1 FROM procedures WHERE id=?').get(item.id)) continue;
+        db.prepare('INSERT INTO procedures(id,room_id,revision,enabled) VALUES (?,?,1,1)').run(item.id, roomId);
+        db.prepare('INSERT INTO procedure_versions VALUES (?,1,?,?)').run(item.id, JSON.stringify(body), Date.now());
+      }
+    });
   }
   /** The previous wording is kept only when asked, so a correction that removes something private leaves no copy. */
   correctMemory(actor: Actor, agentId: string, id: string, revision: number, body: string, keepPrevious = false): void {
@@ -1429,7 +1467,7 @@ export class Runtime {
     }
     const allowed = this.rooms(actor).some(room => room.id === record?.room_id && (room.visibility === 'shared' || room.id === roomId));
     check(record && allowed, 'not_found', 'Source unavailable in this conversation');
-    const current = createHash('sha256').update(JSON.stringify([kind, sourceId, record.room_id, record.body, record.revision ?? null])).digest('hex');
+    const current = historyRevision(kind, sourceId, record.room_id, record.body, record.revision ?? null);
     check(revision === null || revision === current, 'conflict', 'Source changed; read it again from the beginning');
     check(offset <= record.body.length, 'invalid', 'Offset exceeds source length');
     const next = Math.min(offset + 20_000, record.body.length);

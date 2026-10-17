@@ -151,10 +151,33 @@ test('a task replay has its own URL and reads each kind of record in plain words
  assert.equal(replayItemView({type:'message',link:'response',author:'リーダー',text:'答え'}).label,'返答（リーダー）');
  assert.equal(replayItemView({type:'approval',decision:'auto'}).detail,'任せた範囲で自動');
 });
-test('the seed export has its own URL and says what goes in and what cannot',async()=>{
+test('the Bot export has its own URL and says what goes in and what cannot',async()=>{
  const {parseRoute,routeHash}=await ui('route.js');
- assert.deepEqual(parseRoute('#bots/b-1/seed'),{page:'bots',id:'b-1',tab:'seed'});assert.equal(routeHash({page:'bots',id:'b-1',tab:'seed'}),'#bots/b-1/seed');
- const {seedSummary,privateNote}=await ui('seed.js');
- assert.equal(seedSummary(0,0),'人格・見た目');assert.equal(seedSummary(2,1),'人格・見た目・手順2件・記憶1件');
+ assert.deepEqual(parseRoute('#bots/b-1/export'),{page:'bots',id:'b-1',tab:'export'});assert.equal(routeHash({page:'bots',id:'b-1',tab:'export'}),'#bots/b-1/export');
+ const {exportSummary,privateNote}=await ui('bot-file.js');
+ assert.equal(exportSummary(0,0),'人格・見た目');assert.equal(exportSummary(2,1),'人格・見た目・手順2件・記憶1件');
  assert.equal(privateNote(1,3),'個別の会話から生まれた手順1件と記憶3件は、書き出せません。');assert.equal(privateNote(0,2),'個別の会話から生まれた記憶2件は、書き出せません。');assert.equal(privateNote(0,0),'');
+});
+test('reading a Bot file has its own URL and says what it makes and why a file cannot be read, in plain words',async()=>{
+ const {parseRoute,routeHash}=await ui('route.js');
+ assert.deepEqual(parseRoute('#bots/import'),{page:'bots',id:'import'});assert.deepEqual(parseRoute('#bots/import/memory'),{page:'bots',id:'import'});
+ assert.equal(routeHash({page:'bots',id:'import'}),'#bots/import');assert.equal(routeHash({page:'bots',id:'import',tab:'memory'}),'#bots/import');
+ const {BOT_FILE_MAX_LENGTH:screenLimit,problemText,appearanceText,importPlan,hiddenNote,limitNote}=await ui('bot-file.js');
+ const {BOT_FILE_MAX_LENGTH:serverLimit}=await import('../src/runtime/bot-files.ts');assert.equal(screenLimit,serverLimit);
+ assert.equal(problemText({kind:'json',path:''}),'JSONとして読めません。');assert.equal(problemText({kind:'format',path:'/format'}),'Niwaで書き出したBotのファイルではありません。');
+ assert.equal(problemText({kind:'value',path:'/appearance/shape'}),'「かたち」の値が、Niwaで使える形ではありません。');assert.equal(problemText({kind:'unknown',path:'/bot/model'}),'知らない項目「model」があります。');
+ assert.equal(problemText({kind:'missing',path:'/appearance/motion'}),'「動き」がありません。');assert.equal(problemText({kind:'blank',path:'/bot/name'}),'「名前」が空です。');
+ assert.equal(problemText({kind:'blank',path:'/procedures/1/steps/2'}),'2件目の手順の「手順の中身」の3つ目が空です。');assert.equal(problemText({kind:'too_long',path:'/procedures/0'}),'1件目の手順が長すぎます。');
+ assert.equal(problemText({kind:'blank',path:'/memories/4/body'}),'5件目の記憶が空です。');
+ assert.equal(appearanceText({shape:'cloud',color:'#336699',motion:'float'}),'かたち：くも・カラー：#336699・動き：ふわふわ');
+ const preview={bot:{name:'カナデ'},procedures:[{title:'集合の案内',steps:2}],memories:3,room_title:'ファイルから迎えたカナデの手順と記憶'};
+ const all=importPlan(preview,{procedures:true,memories:true});
+ assert.deepEqual(all.slice(0,3),['新しいBot「カナデ」を1体迎えます。','今いるBotは書き換えません。','モデルは「新しいBotの標準モデル」を使います。']);
+ assert.ok(all.includes('共有の会話「ファイルから迎えたカナデの手順と記憶」を1つ作ります。')&&all.includes('そこに手順1件と記憶3件を、あなたの発言として1件ずつ載せます。')&&all.includes('ほかのBotも、この会話を読めます。'));
+ assert.ok(importPlan(preview,{procedures:false,memories:true}).includes('そこに記憶3件を、あなたの発言として1件ずつ載せます。'));
+ assert.deepEqual(importPlan(preview,{procedures:false,memories:false}).slice(3),['手順と記憶は入れません。','会話も作りません。']);
+ assert.equal(importPlan({...preview,procedures:[],memories:0},{procedures:true,memories:true}).length,3);
+ assert.ok(all.every((line:string)=>line.split('。').length===2),'one sentence per line');
+ assert.equal(hiddenNote(0),'');assert.equal(hiddenNote(2),'秘密らしい文字を2か所伏せました。伏せたまま迎えます。');
+ assert.equal(limitNote(2,3),'');assert.match(limitNote(3,3),/^迎えられるBotの上限（3体）に達しています。/);
 });

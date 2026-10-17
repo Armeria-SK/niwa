@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
-import { SHAPES, PALETTE } from './data.js';
+import { SHAPES, PALETTE, MOTIONS } from './data.js';
 import { CloseIcon, UserIcon, CheckIcon, InfoIcon } from './icons.jsx';
 import { splitSentences } from './sentences.js';
 
@@ -100,5 +100,5 @@ export function StatusLabel({ member, paused = false, showDescription = true }) 
 }
 
 export function MotionPicker({ value, onChange }) {
-  return <Segmented label="アイコンの動き" className="motion-picker" value={value} onChange={onChange} options={[{ value: 'auto', label: '状態に合わせる' }, { value: 'none', label: 'なし' }, { value: 'float', label: 'ふわふわ' }, { value: 'sway', label: 'ゆらゆら' }, { value: 'pulse', label: 'ぽよぽよ' }]} />;
+  return <Segmented label="アイコンの動き" className="motion-picker" value={value} onChange={onChange} options={MOTIONS} />;
 }

@@ -11,12 +11,20 @@ import { transaction } from '../storage/database.ts';
 const id = () => Type.String({ minLength: 1, maxLength: 100 });
 const revision = () => Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER - 1 });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
-const procedureSchema = Type.Object({
+const content = {
   title: Type.String({ minLength: 1, maxLength: 200 }), conditions: Type.String({ minLength: 1, maxLength: 2000 }),
   steps: Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), { minItems: 1, maxItems: 30 }),
-  source_task_id: id(), sources: summarySchema.properties.sources,
-}, { additionalProperties: false });
+};
+/** What a procedure says, without where it came from. A Bot file carries procedures in this shape. */
+export const procedureContentSchema = Type.Object(content, { additionalProperties: false });
+const procedureSchema = Type.Object({ ...content, source_task_id: id(), sources: summarySchema.properties.sources }, { additionalProperties: false });
+/** A procedure brought in from a Bot file. No task of this Bot is behind it; its source is the administrator's message that carried it in. */
+export const importedProcedureSchema = Type.Object({ ...content, origin: Type.Literal('imported'), sources: summarySchema.properties.sources }, { additionalProperties: false });
+const storedProcedureSchema = Type.Union([procedureSchema, importedProcedureSchema]);
 type Procedure = Static<typeof procedureSchema>;
+type StoredProcedure = Static<typeof storedProcedureSchema>;
+/** The same size limit applies to procedures a Bot saves and procedures brought in from a file. */
+export const PROCEDURE_MAX_LENGTH = 16_000;
 export const procedureDefinitions = {
   procedure_save: { description: '自分の完了済み仕事から再利用する手順を保存する。条件とhistory_readで確認した出典の版を含める。新規はid=null、expected_revision=0。更新は最新の版を指定する。', schema: object({
     id: Type.Union([Type.Null(), id()]), expected_revision: Type.Integer({ minimum: 0 }), procedure: procedureSchema,
@@ -52,7 +60,7 @@ export function executeProcedure(context: ProcedureContext, name: string, args: 
       JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=coalesce(?,p.revision) WHERE p.id=?`).get(revision, id);
     check(row && rooms.includes(String(row.room_id)), 'not_found', 'Procedure unavailable in this conversation');
     const body = JSON.parse(String(row.body)) as unknown;
-    check(Value.Check(procedureSchema, body), 'invalid', 'Stored procedure is invalid');
+    check(Value.Check(storedProcedureSchema, body), 'invalid', 'Stored procedure is invalid');
     try { for (const source of body.sources) context.readSource(source.kind, source.source_id, source.revision); }
     catch { db.prepare('UPDATE procedures SET enabled=0 WHERE id=?').run(id); throw new DomainError('conflict', 'Procedure source changed; the procedure cannot be used'); }
     return { id, room_id: String(row.room_id), revision: Number(row.revision), latest_revision: Number(row.latest_revision), enabled: row.enabled === 1, ...body };
@@ -82,19 +90,20 @@ export function executeProcedure(context: ProcedureContext, name: string, args: 
     if (receipt) { check(receipt.input_hash === hash, 'conflict', 'Procedure operation changed'); return JSON.parse(String(receipt.output)) as JsonObject; }
     let output: JsonObject;
     if (name === 'procedure_save' || name === 'procedure_restore') {
-      let body: Procedure;
+      let body: StoredProcedure;
       if (name === 'procedure_restore') {
-        const { title, conditions, steps, source_task_id, sources } = read(String(args.id), Number(args.revision));
-        body = { title, conditions, steps, source_task_id, sources };
+        const item = read(String(args.id), Number(args.revision));
+        const { title, conditions, steps, sources } = item;
+        body = 'source_task_id' in item ? { title, conditions, steps, source_task_id: item.source_task_id, sources } : { title, conditions, steps, origin: 'imported', sources };
       } else {
-        body = args.procedure as Procedure;
-        const sourceTask = context.taskInfo(body.source_task_id);
+        const saved = args.procedure as Procedure;
+        const sourceTask = context.taskInfo(saved.source_task_id);
         check(sourceTask.agent_id === task.agent_id && sourceTask.state === 'completed', 'invalid', 'A completed task of this bot is required');
         const source = context.readSource('task', sourceTask.id, null);
-        body = { ...body, sources: [...body.sources.filter(item => item.kind !== 'task' || item.source_id !== sourceTask.id),
+        body = { ...saved, sources: [...saved.sources.filter(item => item.kind !== 'task' || item.source_id !== sourceTask.id),
           { kind: 'task', source_id: sourceTask.id, revision: source.revision }] };
       }
-      check(Value.Check(procedureSchema, body) && JSON.stringify(body).length <= 16_000, 'invalid', 'Procedure is too large or invalid');
+      check(Value.Check(storedProcedureSchema, body) && JSON.stringify(body).length <= PROCEDURE_MAX_LENGTH, 'invalid', 'Procedure is too large or invalid');
       for (const source of body.sources) context.readSource(source.kind, source.source_id, source.revision);
       const id = args.id === null ? createHash('sha256').update(`${task.id}:${operationId}`).digest('hex') : String(args.id);
       const existing = args.id === null ? null : head(id);
