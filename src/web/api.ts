@@ -19,6 +19,7 @@ import { serveStatic } from './static.ts';
 import { profileSchema, creationProfileSchema } from '../domain/profile.ts';
 import type { Backups } from '../backup/backups.ts';
 import type { WorkspaceRead, WorkspaceDownload } from '../tools/files/client.ts';
+import { SecondOpinions } from '../runtime/second-opinions.ts';
 
 const string = Type.String({ minLength: 1, maxLength: 20_000 });
 const id = Type.String({ pattern: '^[0-9a-f-]{36}$' });
@@ -77,7 +78,10 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
   workspace?: { read: WorkspaceRead; download: WorkspaceDownload }, workareas?:WorkareaTransport, mcp?:McpConnector, mcpSettings?:McpSettings) {
   const admin = runtime.administrator();
   const live = new LiveStreams(runtime, admin, auth);
-  type Route = { method: string; path: RegExp; schema?: TSchema; limit?: number; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL) => unknown };
+  const opinions = new SecondOpinions(runtime, (selection, signal) => models.adapterFor(selection, signal));
+  const selection = { provider, model: Type.String({ minLength: 1, maxLength: 256 }), reasoning: Type.String({ minLength: 1, maxLength: 64 }) };
+  /** The signal aborts when the browser goes away before the answer, so a model call nobody waits for stops. */
+  type Route = { method: string; path: RegExp; schema?: TSchema; limit?: number; run: (match: RegExpMatchArray, body: Record<string, unknown>, url: URL, signal: AbortSignal) => unknown };
   const scoped=(area:string,input:Parameters<Runtime['workareas']['execute']>[2])=>{
     if(!workareas)throw new DomainError('conflict','Workareas are not configured');
     return runtime.workareas.execute(admin,area,input,workareas);
@@ -166,7 +170,16 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/review$/, schema: object({expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'}),verdict:Type.Union([Type.Literal('approved'),Type.Literal('changes_requested')]),note:Type.String({minLength:1,maxLength:1000}),checks:Type.Optional(qualityReviewSchema)}),run:(m,b)=>runtime.artifactVersions.review(admin,m[1]!,b.expected_sha256 as string,b.verdict as 'approved'|'changes_requested',b.note as string,b.checks as QualityReview|undefined) },
     { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/freeze$/, schema: object({expected_sha256:Type.String({pattern:'^[a-f0-9]{64}$'})}),run:(m,b)=>runtime.artifactVersions.freeze(admin,m[1]!,b.expected_sha256 as string) },
     { method: 'DELETE', path: /^\/api\/artifacts\/([0-9a-f-]{36})$/, schema: object({}), run: m => { runtime.deleteContent(admin, 'artifact', m[1]!); return { ok: true }; } },
-    { method: 'DELETE', path: /^\/api\/rooms\/([0-9a-f-]{36})$/, schema: object({}), run: async m => { runtime.deleteContent(admin, 'room', m[1]!); if(workareas)await runtime.workareas.purgeRetired(workareas);return { ok: true }; } },
+    // Another company's model check: what it would send first, then one call per press. The judgment is saved as an opinion, not evidence.
+    { method: 'GET', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/model-check$/, run: m => opinions.checkEstimate(admin, m[1]!) },
+    { method: 'POST', path: /^\/api\/artifacts\/([0-9a-f-]{36})\/model-check$/, schema: object({ expected_sha256: Type.String({ pattern: '^[a-f0-9]{64}$' }), ...selection }),
+      run: (m, b, _u, signal) => opinions.check(admin, m[1]!, b.expected_sha256 as string, { provider: b.provider as Agent['provider'], model: b.model as string, reasoning: b.reasoning as string }, signal) },
+    // Another model's answer to a Bot's message: the estimate, one call per press, and keeping a shown answer in the conversation.
+    { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages\/([0-9a-f-]{36})\/second-opinion$/, run: m => opinions.estimate(admin, m[1]!, m[2]!) },
+    { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages\/([0-9a-f-]{36})\/second-opinion$/, schema: object(selection),
+      run: (m, b, _u, signal) => opinions.ask(admin, m[1]!, m[2]!, { provider: b.provider as Agent['provider'], model: b.model as string, reasoning: b.reasoning as string }, signal) },
+    { method: 'POST', path: /^\/api\/second-opinions\/([0-9a-f-]{36})\/keep$/, schema: object({}), run: m => opinions.keep(admin, m[1]!) },
+    { method: 'DELETE', path: /^\/api\/rooms\/([0-9a-f-]{36})$/, schema: object({}), run: async m => { runtime.deleteContent(admin, 'room', m[1]!); opinions.forgetRoom(m[1]!); if(workareas)await runtime.workareas.purgeRetired(workareas);return { ok: true }; } },
     { method: 'POST', path: /^\/api\/approvals\/([0-9a-f-]{36})$/, schema: object({ approved: Type.Boolean(), version: id }), run: (m, b) => { runtime.decideApproval(admin, m[1]!, b.approved as boolean, b.version as string); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/updates$/, run: () => runtime.updates(admin) },
     { method: 'POST', path: /^\/api\/updates\/read$/, schema: object({ ids: Type.Array(Type.Integer({ minimum: 1 }), { maxItems: 1000, uniqueItems: true }) }),
@@ -328,7 +341,9 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
         if (req.method !== route.method || !match) continue;
         const body = route.schema ? await readBody(req, route.limit) : {};
         if (route.schema && !Value.Check(route.schema, body)) throw new DomainError('invalid', 'Invalid request');
-        send(res, 200, await route.run(match, body as Record<string, unknown>, url)); return;
+        const gone = new AbortController();
+        res.once('close', () => { if (!res.writableFinished) gone.abort(); });
+        send(res, 200, await route.run(match, body as Record<string, unknown>, url, gone.signal)); return;
       }
       send(res, 404, { error: 'not_found' });
     } catch (error) {

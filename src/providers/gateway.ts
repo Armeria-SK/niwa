@@ -1,6 +1,6 @@
 import {ModelSetupError, setupFailure} from './shared/setup-error.ts';
 import type { Agent, FallbackProvider } from '../domain/types.ts';
-import { check, DomainError } from '../domain/types.ts';
+import { check, DomainError, MODEL_PROVIDERS } from '../domain/types.ts';
 import type { Runtime } from '../runtime/runtime.ts';
 import type { ResolveAdapter } from '../runtime/turns.ts';
 import { inspectLocalLlmModel, listLocalLlmModels, localLlmUrl, LocalLlmAdapter, type LocalLlmSlot } from './local-llm/adapter.ts';
@@ -281,7 +281,16 @@ export class ModelGateway {
     this.#runtime.configureGeneratedModel(admin, provider, model, reasoning);
     return this.#runtime.generatedModel(admin);
   }
-  resolve: ResolveAdapter = async (agent, _taskId, signal) => {
+  resolve: ResolveAdapter = async (agent, _taskId, signal) => this.#adapter(agent, signal, true);
+  /** A model the administrator picked for one call outside any work (a second opinion, a model check). The selection is verified like a Bot's,
+   * no Bot's route record changes, and a subscription at its usage limit fails instead of switching to the fallback model. */
+  async adapterFor(selection: Pick<Agent, 'provider' | 'model' | 'reasoning'>, signal?: AbortSignal): Promise<ModelAdapter> {
+    check(MODEL_PROVIDERS.includes(selection.provider), 'invalid', 'Invalid provider');
+    (await this.#verify(selection.provider, selection.model, selection.reasoning))();
+    signal?.throwIfAborted();
+    return this.#adapter({ id: '', name: '', role: 'member', status: 'active', ...selection } as Agent, signal, false);
+  }
+  async #adapter(agent: Agent, signal: AbortSignal | undefined, route: boolean): Promise<ModelAdapter> {
     signal?.throwIfAborted();
     if (agent.provider === 'openai_subscription' && this.subscription) {
       const subscription = this.subscription; const generation = subscription.revision;
@@ -291,6 +300,7 @@ export class ModelGateway {
       const key = createHash('sha256').update(credential.account_id).digest('hex');
       const runtime = this.#runtime; const admin = runtime.administrator();
       if (runtime.providerLimits.blocked(admin, key)) {
+        if (!route) throw new ModelSetupError({ code: 'QUOTA_EXCEEDED', retryable: true, message: '接続先の利用枠回復を待っています。', reset_at: Math.ceil(runtime.providerLimits.nextProbe(admin, key) / 1000) });
         const settings=runtime.modelSettings(admin);
         if(!settings.fallbackModel||!(settings.fallbackProvider==='local_llm'?settings.localLlmUrl:settings.fallbackProvider==='anthropic'?await this.#anthropicTarget():settings.compatibleUrl))throw new ModelSetupError({code:'QUOTA_EXCEEDED',retryable:true,message:'接続先の利用枠回復を待っています。',reset_at:Math.ceil(runtime.providerLimits.nextProbe(admin,key)/1000)});
         const fallback = await this.#fallback(agent, signal);
@@ -307,7 +317,7 @@ export class ModelGateway {
           if (revision === undefined) {
             yield { type: 'failed', error: { code: 'QUOTA_EXCEEDED', message: 'Subscription quota is waiting for recovery', retryable: true } }; return;
           }
-          runtime.recordModelRoute(admin, agent.id, 'openai_subscription', agent.model, 'configured');
+          if (route) runtime.recordModelRoute(admin, agent.id, 'openai_subscription', agent.model, 'configured');
           let completed = false; let failed = false;
           for await (const event of adapter.run(request, options)) {
             if (subscription.revision === generation) {
@@ -325,21 +335,24 @@ export class ModelGateway {
       try { target = await this.#compatible(); }
       catch (error) { throw error instanceof DomainError ? new ModelSetupError({ code: 'INVALID_REQUEST', retryable: false, message: 'OpenAI互換APIの接続先URLを設定してください。' }) : error; }
       signal?.throwIfAborted();
-      return this.#record(this.#compatibleAdapter(target, agent.model), agent.id, 'openai_compatible', agent.model, 'configured');
+      const adapter = this.#compatibleAdapter(target, agent.model);
+      return route ? this.#record(adapter, agent.id, 'openai_compatible', agent.model, 'configured') : adapter;
     }
     if (agent.provider === 'anthropic') {
       const target = await this.#anthropicRequired();
       const model = await this.#anthropicModel(target, agent.model, signal); signal?.throwIfAborted();
       check((this.#anthropic?.key.revision ?? 0) === target.revision, 'conflict', 'Claude API key changed during discovery');
-      return this.#record(this.#anthropicAdapter(target, model), agent.id, 'anthropic', agent.model, 'configured');
+      const adapter = this.#anthropicAdapter(target, model);
+      return route ? this.#record(adapter, agent.id, 'anthropic', agent.model, 'configured') : adapter;
     }
     check(agent.provider === 'local_llm', 'conflict', 'Subscription login and capability verification are required');
     const url = this.#url();
     const model = await inspectLocalLlmModel(url, agent.model, this.#fetch);
     signal?.throwIfAborted();
     check(this.#url() === url, 'conflict', 'Local LLM configuration changed during discovery');
-    return this.#record(new LocalLlmAdapter(url, model, this.#fetch, this.#slot(url)), agent.id, 'local_llm', agent.model, 'configured');
-  };
+    const adapter = new LocalLlmAdapter(url, model, this.#fetch, this.#slot(url));
+    return route ? this.#record(adapter, agent.id, 'local_llm', agent.model, 'configured') : adapter;
+  }
   #record(adapter: ModelAdapter, agentId: string, provider: Agent['provider'], model: string, reason: 'configured' | 'quota'): ModelAdapter {
     const runtime = this.#runtime;
     return { adapter_id: adapter.adapter_id, capabilities: adapter.capabilities,

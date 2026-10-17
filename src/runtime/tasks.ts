@@ -495,6 +495,23 @@ export class Tasks {
   discardPrompt(actor:Actor,lease:TaskLease,id:number){this.#owned(actor,lease);this.#db.prepare("UPDATE prompt_runs SET status='discarded' WHERE id=? AND task_id=?").run(id,lease.task.id);}
   promptAttempts(actor:Actor,lease:TaskLease,phase:string):number{this.#owned(actor,lease);return Number(this.#db.prepare("SELECT count(*) AS count FROM prompt_runs WHERE task_id=? AND phase=? AND status NOT IN ('failed','discarded')").get(lease.task.id,phase)!.count);}
   promptRuns(actor:Actor,id:string){this.get(actor,id);return this.#db.prepare('SELECT * FROM prompt_runs WHERE task_id=? ORDER BY id').all(id);}
+  /** A model call the administrator asked for outside any work (second opinion, model check). It has no task, but counts in usage like any other call. */
+  recordAdminPrompt(actor:Actor,input:{version:string;phase:string;rules_revision:number;memory_revision:number;input_bytes:number;estimated_input_tokens:number;removed_messages:number}):number{
+    this.#admin(actor);
+    return Number(this.#db.prepare('INSERT INTO prompt_runs(task_id,version,phase,rules_revision,memory_revision,input_bytes,estimated_input_tokens,removed_messages,created_at) VALUES (NULL,?,?,?,?,?,?,?,?)').run(input.version,input.phase,input.rules_revision,input.memory_revision,input.input_bytes,input.estimated_input_tokens,input.removed_messages,Date.now()).lastInsertRowid);
+  }
+  finishAdminPrompt(actor:Actor,id:number,events:readonly ModelEvent[]){
+    this.#admin(actor);const usage=events.filter(e=>e.type==='usage').at(-1);
+    const status=events.some(e=>e.type==='failed')?'failed':events.some(e=>e.type==='completed')?'completed':'unknown';
+    this.#db.prepare('UPDATE prompt_runs SET status=?,input_tokens=?,output_tokens=? WHERE id=? AND task_id IS NULL').run(status,usage?.input_tokens??null,usage?.output_tokens??null,id);
+    return {status,input_tokens:usage?.input_tokens??null,output_tokens:usage?.output_tokens??null};
+  }
+  /** The work a Bot's message answered or reported on, when the message was posted by work. */
+  messageTask(actor:Actor,messageId:string):Task|undefined{
+    this.#admin(actor);
+    const row=this.#db.prepare("SELECT task_id FROM task_message_links WHERE message_id=? AND kind IN ('response','progress') ORDER BY rowid LIMIT 1").get(messageId);
+    return row?this.get(actor,String(row.task_id)):undefined;
+  }
   /** Model use across all work since a time, for the administrator: reported tokens, with the estimate standing in where none was reported. */
   usageSince(actor:Actor,since:number){
     this.#admin(actor);check(Number.isSafeInteger(since)&&since>=0,'invalid','Invalid time');

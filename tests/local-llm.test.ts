@@ -78,7 +78,7 @@ function assertLocalLlm(file: string, member: string, autonomy: number): void {
   const db = new DatabaseSync(file);
   try {
     const sql = (name: string) => String(db.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(name)!.sql);
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 57);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 58);
     assert.equal(db.prepare('PRAGMA integrity_check').get()!.integrity_check, 'ok');
     assert.doesNotMatch(sql('agents') + sql('model_settings'), /ollama/);
     assert.equal(db.prepare('SELECT provider FROM agents WHERE id=?').get(member)!.provider, 'local_llm');

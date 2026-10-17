@@ -102,7 +102,8 @@
   .message-meta strong { font-size: var(--fs-4); font-weight: 500; color: var(--accent-text); }
   .message-meta time { color: var(--muted); font-size: var(--fs-1); }
   .message-reply { width: 27px; height: 26px; opacity: 0; margin-left: auto; }
-  .message:hover .message-reply, .message:focus-within .message-reply { opacity: 1; }
+  .message-compare { width: 27px; height: 26px; opacity: 0; margin-left: -12px; }
+  .message:hover :is(.message-reply, .message-compare), .message:focus-within :is(.message-reply, .message-compare) { opacity: 1; }
   .message-content h1 { font-size: var(--fs-5); line-height: 1.6; margin-top: 10px; font-weight: 600; color: var(--text); letter-spacing: -.015em; }
   .message-content p { font-size: var(--fs-5); line-height: 1.85; color: var(--text); font-weight: 400; margin-top: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .message > .avatar-button .bot-avatar, .message > .human-avatar { width: 42px !important; height: 42px !important; }
@@ -378,6 +379,20 @@
   .modal.drawer[open] { display: flex; flex-direction: column; }
   .modal.drawer > .form-actions { margin-top: auto; }
   .modal.drawer > .modal-body:last-child { padding-bottom: 24px; }
+  /* 聞き比べと点検：モデルの答えや判断は、見出しの小さな注記でどこから来たかを示す。 */
+  .opinion-modal.drawer { width: min(900px, 100vw); }
+  .opinion-estimate { padding: 12px 14px; border-radius: var(--r-m); background: var(--surface); display: grid; gap: 6px; }
+  .opinion-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .opinion-compare section { min-width: 0; border: 1px solid var(--border); border-radius: var(--r-m); padding: 12px 14px; background: var(--paper); }
+  .opinion-compare h3, .model-checks h3 { font-size: var(--fs-2); font-weight: 600; }
+  .opinion-model { font-size: var(--fs-1); color: var(--muted); margin: 4px 0 8px; overflow-wrap: anywhere; }
+  .opinion-text { font-size: var(--fs-2); line-height: 1.85; overflow-wrap: anywhere; }
+  .opinion-text p { white-space: pre-wrap; margin-bottom: 8px; }
+  .model-checks { display: grid; gap: 12px; border-top: 1px solid var(--border); padding-top: 16px; }
+  .model-check-note { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: var(--r-m); background: var(--info-soft); color: var(--info); font-size: var(--fs-1); line-height: 1.8; }
+  .model-check { border: 1px solid var(--border); border-radius: var(--r-m); padding: 10px 12px; display: grid; gap: 6px; font-size: var(--fs-1); }
+  .model-check ul { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; line-height: 1.7; }
+  .model-check .stale { color: var(--warn); }
   @keyframes drawer-in { from { transform: translateX(28px); opacity: 0; } }
   .memory-search { position: sticky; top: -5px; z-index: 1; background: var(--canvas); padding-block: 4px 0; }
   .memory-search .memory-count { margin: 10px 0 4px; }
@@ -593,7 +608,9 @@
     .message-meta { min-height: 24px; gap: 12px; }
     .message-meta strong { font-size: var(--fs-2); }
     .message-meta time { font-size: var(--fs-1); }
-    .message-reply { opacity: .55; }
+    .message-reply, .message-compare { opacity: .55; }
+    .message-compare { margin-left: -6px; }
+    .opinion-compare { grid-template-columns: 1fr; }
     .message-content h1 { font-size: var(--fs-4); line-height: 1.65; margin-top: 8px; }
     .message-content p { font-size: var(--fs-2); line-height: 1.9; margin-top: 8px; }
     .root-message .message-content p { margin-top: 10px; }

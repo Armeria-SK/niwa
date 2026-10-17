@@ -6,6 +6,7 @@ import { api } from '../api.js';
 import { Avatar, EmptyState, Modal, Segmented, Switch } from '../components.jsx';
 import { CheckCircleIcon, FileIcon, SearchIcon, DownloadIcon, ChatIcon } from '../icons.jsx';
 import { WorkspaceFiles } from '../WorkspaceFiles.jsx';
+import { ModelCheck } from '../ModelCheck.jsx';
 
 export function Recap({ updates, seen, onRead, members, onThread, onArtifact, onActivity }) {
   const [showRead, setShowRead] = useState(false);
@@ -79,5 +80,5 @@ export function ArtifactPreview({ onDelete, artifact, members, onClose, onThread
         <p className="muted">内容の確認記録です。<br />外部操作の実行を承認するものではありません。<br />凍結すると、この版からの改訂はできません。</p>
         {!artifact.frozen ? <button className="button secondary" disabled={busy || (artifact.quality&&!artifact.quality.verified) || !artifact.reviews.some(item=>item.verdict==='approved') || artifact.reviews.some(item=>item.verdict==='changes_requested')} onClick={()=>record('freeze')}>確認済みの版を凍結</button> : null}
       </details>{error ? <p role="alert">{error}</p> : null}
-    </div> : null}{artifact.file?<p>固定ファイル · {artifact.file.size.toLocaleString()}バイト。ファイル本体は通常バックアップに含まれません。{!artifact.file.available?'復元後のため取得できません。':''}</p>:<div className="artifact-document-view"><label className="read-toggle"><input type="checkbox" checked={raw} onChange={e=>setRaw(e.target.checked)}/>原文を表示</label>{raw||['code','csv','json'].includes(artifact.kind)?<pre className="artifact-document">{artifact.content}</pre>:<Markdown text={artifact.content}/>}</div>}</div><div className="form-actions"><button className="button subtle" onClick={() => { onClose(); onThread(artifact.thread || artifact.room_id); }}>関連する会話</button><button className="button subtle" onClick={onDelete}>この版を削除</button><button className="button primary" disabled={busy||artifact.file?.available===0} onClick={download}><DownloadIcon size={17} />ダウンロード</button></div></Modal>;
+    </div> : null}{artifact.sha256 && !artifact.file ? <ModelCheck artifact={artifact} authorName={members[artifact.member || artifact.author_id]?.name} onChanged={() => onOpen(artifact.id)} /> : null}{artifact.file?<p>固定ファイル · {artifact.file.size.toLocaleString()}バイト。ファイル本体は通常バックアップに含まれません。{!artifact.file.available?'復元後のため取得できません。':''}</p>:<div className="artifact-document-view"><label className="read-toggle"><input type="checkbox" checked={raw} onChange={e=>setRaw(e.target.checked)}/>原文を表示</label>{raw||['code','csv','json'].includes(artifact.kind)?<pre className="artifact-document">{artifact.content}</pre>:<Markdown text={artifact.content}/>}</div>}</div><div className="form-actions"><button className="button subtle" onClick={() => { onClose(); onThread(artifact.thread || artifact.room_id); }}>関連する会話</button><button className="button subtle" onClick={onDelete}>この版を削除</button><button className="button primary" disabled={busy||artifact.file?.available===0} onClick={download}><DownloadIcon size={17} />ダウンロード</button></div></Modal>;
 }

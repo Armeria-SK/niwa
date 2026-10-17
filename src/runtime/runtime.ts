@@ -55,6 +55,7 @@ import { memoryConflictSchema } from '../storage/memory-conflict-schema.ts';
 import { findMemoryConflicts } from './memory-conflicts.ts';
 import { nightSchema } from '../storage/night-schema.ts';
 import { NightPlans } from './night-plans.ts';
+import { secondOpinionSchema } from '../storage/second-opinion-schema.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -115,7 +116,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -722,6 +723,16 @@ export class Runtime {
   messages(actor: Actor, roomId: string): Message[] {
     this.#room(actor, roomId);
     return this.#db.prepare('SELECT * FROM messages WHERE room_id = ? ORDER BY rowid').all(roomId) as unknown as Message[];
+  }
+  /** An answer from another model that the administrator chose to keep: a reply from the Bot that was asked, to the message it was compared with.
+   * The administrator's choice, so it is posted even while activity is paused or the Bot rests; the body names the model it came from. */
+  keepSecondOpinion(actor: Actor, roomId: string, replyTo: string, agentId: string, body: string): Message {
+    this.#admin(actor); this.#room(actor, roomId); this.#agent(agentId); text(body);
+    check(!this.roomPreferences(actor, roomId).archived, 'conflict', 'Restore the archived room before replying');
+    check(this.#db.prepare('SELECT 1 FROM messages WHERE id=? AND room_id=? AND author_id=?').get(replyTo, roomId, agentId), 'not_found', 'The compared message is no longer available');
+    const message: Message = { reply_to: replyTo, id: randomUUID(), room_id: roomId, author_id: agentId, body, created_at: new Date().toISOString() };
+    this.#db.prepare('INSERT INTO messages(id,room_id,author_id,body,created_at,reply_to) VALUES (?,?,?,?,?,?)').run(message.id, roomId, agentId, body, message.created_at, replyTo);
+    return message;
   }
   acknowledgments(actor: Actor, roomId: string) {
     this.#room(actor, roomId);

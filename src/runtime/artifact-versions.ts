@@ -7,13 +7,19 @@ import {transaction} from '../storage/database.ts';
 
 interface Artifact {id:string;room_id:string;author_id:string;name:string;kind:string;description:string;content:string;created_at:number}
 interface Version {series_id:string;version:number;parent_id:string|null;frozen:number}
+/** reviewer_id of a check the administrator asked another company's model for. It is the model's opinion, not evidence:
+ * it is listed apart and never counts toward a version's status, its verification or freezing. */
+export const MODEL_REVIEWER='model:';
+/** SQL condition for reviews by the administrator or a Bot, which are the only ones that decide status and freezing. */
+const PERSON_REVIEW="substr(reviewer_id,1,6)<>'model:'";
+export type ModelCheck={criterion:string;verdict:'pass'|'fail'|'unknown';note:string};
 
 /** Every revision is a separate immutable artifact; an existing reference never silently changes. */
 export class ArtifactVersions {
  constructor(private db:DatabaseSync,private runtime:Runtime,private principal:(actor:Actor)=>{kind:string;id:string}) {}
  /** Status describes this exact version, never an earlier approved revision. */
  status(actor:Actor,id:string) {
-  const reviews=this.db.prepare('SELECT verdict,evidence_revision FROM artifact_reviews WHERE artifact_id=?').all(id);
+  const reviews=this.db.prepare(`SELECT verdict,evidence_revision FROM artifact_reviews WHERE artifact_id=? AND ${PERSON_REVIEW}`).all(id);
   const quality=this.runtime.quality.inspect(actor,id);
   if(reviews.some(r=>r.verdict==='changes_requested'))return 'changes_requested';
   if(quality){try{this.runtime.quality.verified(actor,id);return 'verified';}catch{return reviews.length||quality.evidence.length?'checking':'unchecked';}}
@@ -26,10 +32,28 @@ export class ArtifactVersions {
   const saved=this.db.prepare('SELECT series_id,version,parent_id,frozen FROM artifact_versions WHERE artifact_id=?').get(id) as unknown as Version | undefined;
   const meta=saved ?? {series_id:id,version:1,parent_id:null,frozen:0};
   const versions=this.db.prepare(`SELECT a.id,a.name,a.author_id,a.created_at,v.version,v.frozen FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.series_id=? AND a.room_id=? ORDER BY v.version DESC`).all(meta.series_id!,item.room_id!).filter(row=>this.runtime.workareas.visible(actor,String(row.id))&&this.runtime.quality.readable(actor,String(row.id))).map(row=>({...row,id:String(row.id),quality_status:this.status(actor,String(row.id))}));
-  const reviews=this.db.prepare('SELECT reviewer_id,sha256,verdict,note,created_at,checks,evidence_revision,review_model FROM artifact_reviews WHERE artifact_id=? ORDER BY created_at').all(id);
+  const reviews=this.db.prepare(`SELECT reviewer_id,sha256,verdict,note,created_at,checks,evidence_revision,review_model FROM artifact_reviews WHERE artifact_id=? AND ${PERSON_REVIEW} ORDER BY created_at`).all(id);
+  // Model checks are shown to the administrator only; a Bot never reads them as if they were a review of its work.
+  const model_checks=this.principal(actor).kind==='admin'?this.db.prepare(`SELECT sha256,verdict,note,created_at,checks,review_model FROM artifact_reviews WHERE artifact_id=? AND NOT ${PERSON_REVIEW} ORDER BY created_at DESC`).all(id):undefined;
   const referenced_by=this.db.prepare('SELECT r.task_id,t.agent_id,r.sha256 FROM artifact_references r JOIN tasks t ON t.id=r.task_id WHERE r.artifact_id=? AND t.room_id=?').all(id,item.room_id);
   const quality=this.runtime.quality.inspect(actor,id);let verified=false;try{if(quality){this.runtime.quality.verified(actor,id);verified=true;}}catch{}
-  return {...item,...meta,quality_status:this.status(actor,id),sha256,quality:quality?{...quality,verified}:null,file:file??null,versions:versions.length?versions:[{id,name:item.name,author_id:item.author_id,created_at:item.created_at,version:1,frozen:0}],reviews,referenced_by};
+  return {...item,...meta,quality_status:this.status(actor,id),sha256,quality:quality?{...quality,verified}:null,file:file??null,versions:versions.length?versions:[{id,name:item.name,author_id:item.author_id,created_at:item.created_at,version:1,frozen:0}],reviews,...(model_checks?{model_checks}:{}),referenced_by};
+ }
+ /** Saves another company's model check of this exact version, one per model; checking again with the same model replaces it.
+  * The caller has already called the model; this only records what it said. */
+ recordModelCheck(actor:Actor,id:string,expected:string,model:{provider:string;model:string;reasoning:string},checks:ModelCheck[],summary:string) {
+  check(this.principal(actor).kind==='admin','forbidden','Administrator required');
+  const current=this.inspect(actor,id);
+  check(expected===current.sha256,'conflict','Review must name the exact artifact hash');
+  check(/^[a-z_]{1,40}$/.test(model.provider),'invalid','Invalid review model');text(model.model,256);text(model.reasoning,64);
+  check(checks.length>=1&&checks.length<=6&&checks.every(c=>['pass','fail','unknown'].includes(c.verdict)),'invalid','Invalid model check');
+  for(const c of checks)text(c.note,1000);
+  const verdict=checks.every(c=>c.verdict==='pass')?'approved':'changes_requested';
+  // Same provider/model/reasoning form as a Bot's review; one row per model, so checking again with it replaces its earlier opinion.
+  const reviewModel=`${model.provider}/${model.model}/${model.reasoning}`,reviewer=`${MODEL_REVIEWER}${model.provider}/${model.model}`;
+  this.db.prepare('INSERT INTO artifact_reviews(artifact_id,reviewer_id,sha256,verdict,note,created_at,checks,evidence_revision,review_model) VALUES (?,?,?,?,?,?,?,NULL,?) ON CONFLICT(artifact_id,reviewer_id) DO UPDATE SET sha256=excluded.sha256,verdict=excluded.verdict,note=excluded.note,created_at=excluded.created_at,checks=excluded.checks,evidence_revision=NULL,review_model=excluded.review_model')
+   .run(id,reviewer,expected,verdict,text(summary,1000),Date.now(),JSON.stringify(checks),reviewModel);
+  return {verdict,checks};
  }
  link(actor:Actor,parent:string,next:string){
   const current=this.inspect(actor,parent),item=this.runtime.artifact(actor,next);

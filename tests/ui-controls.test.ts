@@ -88,3 +88,19 @@ test('today counts what is waiting on you, who is working and what was made in t
  assert.equal(digest.summary,'あなたの番が1件あります。いま1体のBotが仕事を進めています。直近24時間で、決まったことが1件、できたものが1件あります。');
  assert.equal(todayDigest({now,paused:true,activities}).summary,'あなたの判断を待っているものはありません。Botの活動は一時停止しています。');
 });
+test('second opinions show the estimate before asking, explain failures by kind and keep model checks apart by provider',async()=>{
+ const {estimateLabel,usedLabel,failureText,modelCheckView,checkProviders}=await ui('second-opinion.js');
+ assert.equal(estimateLabel({estimated_input_tokens:12345,messages:3,memories:2,removed_messages:0}),'入力の見積もり：約12,345トークン（会話3件・記憶2件）');
+ assert.equal(estimateLabel({estimated_input_tokens:900,messages:1,memories:0,removed_messages:4}),'入力の見積もり：約900トークン（会話1件・記憶0件）。古い発言4件は入りきらないので外します');
+ assert.equal(estimateLabel({estimated_input_tokens:2000,truncated:true}),'入力の見積もり：約2,000トークン。長いので先頭の部分だけを渡します');
+ assert.equal(estimateLabel(null),'');
+ assert.equal(usedLabel({input_tokens:1200,output_tokens:80,estimated_input_tokens:1500}),'入力1,200・出力80トークン');
+ assert.equal(usedLabel({input_tokens:null,output_tokens:null,estimated_input_tokens:1500}),'入力1,500（見積もり）・出力不明トークン');
+ assert.equal(failureText({code:'RATE_LIMITED',message:'provider text'}),'接続先が混み合っています。少し待ってから試してください。（RATE_LIMITED）');
+ assert.equal(failureText({code:'SOMETHING_NEW'}),'モデルの呼び出しを完了できませんでした。（SOMETHING_NEW）');
+ const view=modelCheckView({review_model:'openai_compatible/org/model-x/native',note:'時刻を足す',created_at:1,sha256:'a',checks:JSON.stringify([{criterion:'c1',verdict:'fail',note:'時刻がない'},{criterion:'overall',verdict:'pass',note:'よい'}])},[{id:'c1',condition:'時刻と場所がある'}]);
+ assert.equal(view.model,'OpenAI互換API org/model-x');assert.deepEqual(view.checks.map((c:{condition:string;label:string})=>[c.condition,c.label]),[['時刻と場所がある','直したほうがよい'],['全体として、正確で、筋が通り、役に立つか','条件を満たす']]);
+ assert.equal(modelCheckView({review_model:'anthropic/claude-x/high',checks:'broken'}).model,'Claude（Anthropic API） claude-x・推論 high');
+ assert.deepEqual(modelCheckView({review_model:'anthropic/claude-x/high',checks:'broken'}).checks,[]);
+ assert.deepEqual(checkProviders(['anthropic','local_llm','openai_compatible'],['openai_subscription','anthropic']),['anthropic']);
+});

@@ -2,7 +2,8 @@ import {memberWork,presenceCounts,shortWork,workLabel} from '../work-display.js'
 import {WorkFacts} from '../WorkFacts.jsx';
 import { useEffect, useLayoutEffect, useId, useRef, useState } from 'react';
 import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
-import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon, DownloadIcon } from '../icons.jsx';
+import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon, DownloadIcon, CompareIcon } from '../icons.jsx';
+import { SecondOpinion } from '../SecondOpinion.jsx';
 import { ATTACHMENT_LIMITS, formatSize, readTextAttachments } from '../attachments.js';
 import { documentName } from '../artifact-display.js';
 import { Markdown } from '../Markdown.jsx';
@@ -41,6 +42,7 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
   const [attachments, setAttachments] = useState([]);
   const [attachmentErrors, setAttachmentErrors] = useState([]);
   const [openFile, setOpenFile] = useState(null);
+  const [comparing, setComparing] = useState(null);
   const [sending, setSending] = useState(false);
   const [recipients, setRecipients] = useState([]);
   const [caret, setCaret] = useState(0);
@@ -91,7 +93,7 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
       {history.loading ? <p role="status">発言を読み込み中…</p> : null}
       {history.error ? <p role="alert">{history.error}<button className="text-button" onClick={history.reload}>再読み込み</button></p> : null}
       {history.next !== null ? <button className="text-button" disabled={history.loading} onClick={loadEarlier}>以前の返信を50件読み込む</button> : null}
-      <div className="replies">{history.items.map(message=><Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message=>{setReplyTo(message);inputRef.current?.focus();}} onArtifact={onArtifact}/>)}{liveDrafts.map(item => <DraftMessage key={item.task_id} draft={item} member={memberMap[item.agent_id]} />)}</div>
+      <div className="replies">{history.items.map(message=><Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message=>{setReplyTo(message);inputRef.current?.focus();}} onArtifact={onArtifact} onCompare={readOnly?undefined:setComparing}/>)}{liveDrafts.map(item => <DraftMessage key={item.task_id} draft={item} member={memberMap[item.agent_id]} />)}</div>
       {thread.message_count === 1 && !tasks.some(task => !['done', 'canceled'].includes(task.status)) ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
     </div>
     <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中の会話です。<br />返信するには「保管から戻す」を選んでください。</p> : null}
@@ -115,17 +117,20 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
       </form>
       {candidates.length ? <span className="composer-hint" id={`${mentionListId}-hint`}>Tab / ↑↓ で候補を移動 · Enter で選択 · Esc で閉じる</span> : null}
       {openFile ? <AttachmentPreview file={openFile} onClose={() => setOpenFile(null)} /> : null}
+      {comparing ? <SecondOpinion roomId={thread.id} message={comparing} member={memberMap[comparing.author]} onClose={() => setComparing(null)} onKept={history.reload} /> : null}
       <span className="composer-hint">{thread.scope === 'private' ? 'この会話は、あなたと相手のBotだけに表示されます。' : 'すべてのBotが読んで参加できる会話です。'}<span>Ctrl / ⌘ + Enter で送信</span></span>
     </div>
   </>;
 }
 
-function Message({ acknowledgments = [], message, isRoot = false, title, memberMap, artifacts = [], onAttachment, onMember, onReply, onArtifact }) {
+function Message({ acknowledgments = [], message, isRoot = false, title, memberMap, artifacts = [], onAttachment, onMember, onReply, onArtifact, onCompare }) {
   if (!message) return <h1>{title}</h1>;
   const member = memberMap[message.author];
+  // 聞き比べは、いるBotの文章の発言だけ。休んでいるBotは同じ記憶の範囲を読めないので出さない。
+  const comparable = onCompare && member && !member.deleted && member.status !== 'sleeping' && !!message.text;
   return <article data-message-id={message.id} className={`message ${isRoot ? 'root-message' : ''}`}>
     {member ? <button className="avatar-button" aria-label={`${member.name}のプロフィール`} onClick={() => onMember(member.id)}><Avatar member={member} size={60} /></button> : <Avatar size={60} />}
-    <div className="message-content"><div className="message-meta"><strong>{member?.name || 'あなた'}</strong><time dateTime={message.created_at}>{message.time}</time><IconButton label={`${member?.name || 'あなた'}のメッセージに返信`} className="message-reply" onClick={() => onReply(message)}><ReplyIcon size={18} /></IconButton></div>
+    <div className="message-content"><div className="message-meta"><strong>{member?.name || 'あなた'}</strong><time dateTime={message.created_at}>{message.time}</time><IconButton label={`${member?.name || 'あなた'}のメッセージに返信`} className="message-reply" onClick={() => onReply(message)}><ReplyIcon size={18} /></IconButton>{comparable ? <IconButton label="別のモデルでも聞く" className="message-compare" onClick={() => onCompare(message)}><CompareIcon size={18} /></IconButton> : null}</div>
       {isRoot ? <h1>{title}</h1> : null}
       {(message.text || message.replyTo || message.artifact || message.attachments?.length) ? <div className="message-bubble">
       {message.reply_to ? <span className="message-reply-label"><ReplyIcon size={13} />返信</span> : null}
