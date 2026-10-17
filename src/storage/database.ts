@@ -6,7 +6,8 @@ import { dirname } from 'node:path';
 export type Migration = string | ((db: DatabaseSync) => void);
 export function openDatabase(path: string, schema: string | readonly Migration[]): DatabaseSync {
   mkdirSync(dirname(path), { recursive: true });
-  const db = new DatabaseSync(path);
+  // Defensive mode is the Node 24.20 default; asking for it keeps earlier 24.x builds the same. editSchema lifts it only for a schema edit.
+  const db = new DatabaseSync(path, { defensive: true });
   try {
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA secure_delete = ON;');
     const migrations = typeof schema === 'string' ? [schema] : schema;
@@ -26,8 +27,8 @@ export function openDatabase(path: string, schema: string | readonly Migration[]
   }
 }
 
-/** Runs SQLite's documented in-place schema edit (writable_schema and a schema_version bump). Node 24.20 and later open databases
- * in defensive mode, which refuses both, so the flag is lifted only for the edit; Node versions without the switch never set it. */
+/** Runs SQLite's documented in-place schema edit (writable_schema and a schema_version bump). Databases open in defensive mode,
+ * which refuses both, so the flag is lifted only for the edit and set again after; Node versions without the switch never set it. */
 export function editSchema(db: DatabaseSync, edit: () => void): void {
   const defensive = typeof db.enableDefensive === 'function' ? (active: boolean) => db.enableDefensive(active) : undefined;
   defensive?.(false);

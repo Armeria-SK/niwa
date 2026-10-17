@@ -29,7 +29,7 @@ export function Activity({ questions = [], notice, onDeleteArtifact, activities,
   return <main className="work-area activity-page" id="main-content" tabIndex={-1}>
     <div className="page-heading"><div><span className="eyebrow">いま、どんなことをしている？</span><h1>活動</h1><p>決まったこと、進めている主な仕事、承認が必要なこと。</p></div><button className="button secondary" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? '活動を再開' : '全体を一時停止'}</button></div>
     {notice}
-    {paused ? <div className="inline-notice"><PauseIcon size={18} /><p>Botの活動を一時停止しています。個別に再開した仕事も、全体を再開するまで待機します。</p></div> : null}
+    {paused ? <div className="inline-notice"><PauseIcon size={18} /><p>Botの活動を一時停止しています。<br />個別に再開した仕事も、全体を再開するまで待機します。</p></div> : null}
     <AttentionList items={attention} members={members} onOpen={id => { setFromThread(false); openActivity(id); }} onThread={onThread} onRead={onRead} onRecap={() => onFilter('recap')} />
     <Segmented label="活動の表示" className="activity-tabs" options={[{ value: 'recap', label: 'できごと', count: updates.filter(item => !seen[item.id]).length }, { value: 'running', label: '仕事', count: workGroups.length }, { value: 'approval', label: '承認待ち', count: pending.length }, { value: 'artifacts', label: '成果物', count: artifactGroups(artifacts).length }, { value: 'schedules', label: '定期実行' }]} value={filter} onChange={onFilter} />
     <div className="activity-scroll" key={filter}>
@@ -79,9 +79,13 @@ function TaskDetail({ task, member, paused, onClose, onControl, onThread, onBack
     let active = true;
     api(`/tasks/${task.id}/history`).then(items => { if (active) { setHistory(items); setHistoryError(''); } })
       .catch(error => { if (active) setHistoryError(error.message); });
-    api(`/tasks/${task.id}/prompt-runs`).then(runs => { if (active) setUsage(usageSummary(runs)); }).catch(() => { if (active) setUsage(null); });
     return () => { active = false; };
   }, [task.id, task.updated_at, task.instructions?.length]);
+  useEffect(() => {
+    let active = true; setUsage(null);
+    api(`/tasks/${task.id}/prompt-runs`).then(runs => { if (active) setUsage(usageSummary(runs)); }).catch(() => {});
+    return () => { active = false; };
+  }, [task.id, task.state]);
   const canAct = !member?.deleted && openStatuses.includes(task.status);
   return <Modal title={shortWork(task.title)} onClose={onClose} className="task-modal"><div className="modal-body form-stack">{onBack?<button className="text-button" onClick={onBack}>スレッドの仕事へ戻る</button>:null}<div className="activity-detail-owner"><Avatar member={member} size={40} /><span>{member?.name}</span><span role="status">{workLabel(task,paused)}</span></div><WorkFacts task={task}/><details><summary>依頼全文・説明</summary><p>{task.prompt||task.title}</p><p>{task.detail}</p></details><div><h3 className="small-heading">これまでの進み具合</h3><ol className="task-steps">{task.steps.map((step, i) => <li key={`${i}-${step}`}>{step}</li>)}</ol></div>
     {task.instructions?.length ? <div><h3 className="small-heading">追加した指示</h3><ul className="task-instructions">{task.instructions.map(item => <li key={item.id}><time>{item.time}</time><p>{item.text}</p></li>)}</ul></div> : null}
@@ -101,5 +105,5 @@ function TaskDetail({ task, member, paused, onClose, onControl, onThread, onBack
 function ApprovalDialog({ task, member, onClose, onDecide }) {
   const [busy, setBusy] = useState(false); const pending = useRef(false);
   async function decide(approved) { if (pending.current) return; pending.current = true; setBusy(true); try { if (await onDecide(task.id, approved, task.approvalVersion)) onClose(); } finally { pending.current = false; setBusy(false); } }
-  return <Modal title="承認する内容を確認" onClose={() => { if (!pending.current) onClose(); }}><div className="modal-body form-stack"><div className="activity-detail-owner"><Avatar member={member} size={44} /><span>{member?.name}からの確認</span></div><h3>{task.title}</h3><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{task.detail}</p><p className="muted">承認すると、この内容で仕事を再開します。見送ると仕事を中止します。</p></div><div className="form-actions"><button className="button secondary" disabled={busy} onClick={() => decide(false)}>今回は見送る</button><button className="button primary" disabled={busy} onClick={() => decide(true)}>承認して再開</button></div></Modal>;
+  return <Modal title="承認する内容を確認" onClose={() => { if (!pending.current) onClose(); }}><div className="modal-body form-stack"><div className="activity-detail-owner"><Avatar member={member} size={44} /><span>{member?.name}からの確認</span></div><h3>{task.title}</h3><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{task.detail}</p><p className="muted">承認すると、この内容で仕事を再開します。<br />見送ると仕事を中止します。</p></div><div className="form-actions"><button className="button secondary" disabled={busy} onClick={() => decide(false)}>今回は見送る</button><button className="button primary" disabled={busy} onClick={() => decide(true)}>承認して再開</button></div></Modal>;
 }

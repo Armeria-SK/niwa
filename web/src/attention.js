@@ -8,8 +8,9 @@ export function attentionItems({ activities = [], questions = [], decisions = []
   for (const task of activities) if (task.status === 'approval') items.push({ kind: 'approval', id: task.id, title: task.title, member: task.member, thread: task.thread, at: at(task.updated_at) });
   for (const question of questions) {
     const task = question.activity ? tasks.get(question.activity) : undefined;
-    if (question.seen || (task && task.state !== 'waiting_user')) continue;
-    if (task) asked.add(task.id);
+    // A task waiting on a question is that question, seen or not; a question whose task is gone or moved on was answered.
+    if (task?.state === 'waiting_user') asked.add(task.id);
+    if (question.seen || (question.activity && task?.state !== 'waiting_user')) continue;
     items.push({ kind: 'question', id: question.id, title: question.title, detail: question.detail && question.detail !== question.title ? question.detail : '', member: question.member, thread: question.thread, at: at(question.created_at) });
   }
   for (const task of activities) if (task.state === 'waiting_user' && task.status !== 'approval' && !task.paused && !asked.has(task.id))

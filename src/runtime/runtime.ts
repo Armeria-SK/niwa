@@ -1142,15 +1142,19 @@ export class Runtime {
       total: Number(db.prepare("SELECT count(*) AS total FROM memories WHERE body LIKE ? ESCAPE '\\'").get(pattern)!.total),
       next: rows.length > 50 ? rows[49]!.cursor : null };
   }
+  /** Title and visibility of a conversation that has not been deleted, for administrator views that point back to it. */
+  #liveRoom(id: string): { title: string; visibility: string } | undefined {
+    const row = this.#db.prepare("SELECT title,visibility FROM rooms WHERE id=? AND id NOT IN (SELECT id FROM deleted_content WHERE kind='room')").get(id);
+    return row ? { title: String(row.title), visibility: String(row.visibility) } : undefined;
+  }
   /** Administrator view of memoryPage: when each memory was made and the conversation and words it came from. Bots never receive this. */
   memoryPageWithSources(actor: Actor, agentId: string, query = '', before = Number.MAX_SAFE_INTEGER) {
     this.#admin(actor);
     const page = this.memoryPage(actor, agentId, query, before), db = this.#memory(actor, agentId);
     const created = db.prepare("SELECT created_at FROM memory_audit WHERE memory_id=? AND action='created' ORDER BY sequence LIMIT 1");
-    const room = this.#db.prepare("SELECT title,visibility FROM rooms WHERE id=? AND id NOT IN (SELECT id FROM deleted_content WHERE kind='room')");
     const message = this.#db.prepare('SELECT m.body,m.author_id,m.created_at,a.name FROM messages m LEFT JOIN agents a ON a.id=m.author_id WHERE m.id=? AND m.room_id=?');
     return { ...page, items: page.items.map(item => {
-      const source = room.get(item.source_room_id), said = source ? message.get(item.source_message_id, item.source_room_id) : undefined;
+      const source = this.#liveRoom(item.source_room_id), said = source ? message.get(item.source_message_id, item.source_room_id) : undefined;
       return { ...item, created_at: String(created.get(item.id)?.created_at ?? ''),
         source: source ? { room_title: String(source.title), private: source.visibility === 'private',
           ...(said ? { excerpt: String(said.body).slice(0, 160), author_id: String(said.author_id), author_name: said.name === null ? null : String(said.name), said_at: String(said.created_at) } : {}) } : null };
@@ -1160,13 +1164,12 @@ export class Runtime {
   procedureBook(actor: Actor, agentId: string) {
     this.#admin(actor);
     const db = this.#memory(actor, agentId);
-    const room = this.#db.prepare("SELECT title,visibility FROM rooms WHERE id=? AND id NOT IN (SELECT id FROM deleted_content WHERE kind='room')");
     return db.prepare(`SELECT p.id,p.room_id,p.revision,p.enabled,v.body,v.created_at,(SELECT count(*) FROM procedure_uses u WHERE u.procedure_id=p.id) AS uses,
       (SELECT max(created_at) FROM procedure_uses u WHERE u.procedure_id=p.id) AS last_used_at
       FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision ORDER BY v.created_at DESC LIMIT 200`).all().map(row => {
       let body: { title?: unknown; conditions?: unknown; steps?: unknown } = {};
       try { body = JSON.parse(String(row.body)) as typeof body; } catch { /* A damaged record still lists so it can be disabled. */ }
-      const source = room.get(String(row.room_id));
+      const source = this.#liveRoom(String(row.room_id));
       return { id: String(row.id), revision: Number(row.revision), enabled: row.enabled === 1, title: String(body.title ?? ''), conditions: String(body.conditions ?? ''),
         steps: Array.isArray(body.steps) ? body.steps.map(String) : [], saved_at: Number(row.created_at), uses: Number(row.uses),
         last_used_at: row.last_used_at === null ? null : Number(row.last_used_at), room_title: source ? String(source.title) : null, private: source?.visibility === 'private' };

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from './api.js';
-import { EmptyState } from './components.jsx';
+import { EmptyState, Sentences } from './components.jsx';
 import { LockIcon } from './icons.jsx';
 import { procedureUse } from './procedure-display.js';
 
@@ -22,7 +22,7 @@ export function ProcedureBook({ member }) {
   }
   if (!state.items) return <p className="muted" role="status">手順帳を読み込んでいます…</p>;
   return <div className="procedure-book">
-    <p className="field-hint">{member.name}が仕事を終えたあと、次も使えるやり方として保存した手順です。使う前に、元になった資料が変わっていないかを{member.name}自身が確かめます。</p>
+    <p className="field-hint"><Sentences>{`${member.name}が仕事を終えたあと、次も使えるやり方として保存した手順です。使う前に、元になった資料が変わっていないかを${member.name}自身が確かめます。`}</Sentences></p>
     <p className="field-hint procedure-warning">いまの作りでは、{member.name}の記憶を1件でも直したり消したりすると、この手順帳はすべて消えます。</p>
     {state.error ? <p className="field-error" role="alert">{state.error}</p> : null}
     {state.items.length ? <ul className="procedure-list">{state.items.map(item => <li key={item.id} className={`procedure-item ${item.enabled ? '' : 'disabled'}`}>

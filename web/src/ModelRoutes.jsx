@@ -16,7 +16,7 @@ export function ModelRoutes() {
   }, []);
   return <>
     <div className="form-section-label">直近のモデル接続</div>
-    <p className="field-hint">応答を試みた接続先です。完了や接続成功を示すものではありません。</p>
+    <p className="field-hint">応答を試みた接続先です。<br />完了や接続成功を示すものではありません。</p>
     {routes.map(route => <div key={route.id}>
       <strong>{route.name}</strong>
       <p className="field-hint">設定: {providerName(route.configured_provider)} / {route.configured_model}</p>

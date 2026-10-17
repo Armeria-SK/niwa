@@ -10,12 +10,14 @@ test('artifact categories preserve Japanese names, unite aliases and group unkno
 test('work counts distinguish assignments from purposes and never call paused work running',async()=>{
  const {workCounts}=await ui('work-display.js');const tasks=[{state:'running'},{state:'running',paused:1},{state:'queued'},{state:'waiting_child'},{state:'completed'},{state:'cancelled'}];assert.equal(workCounts(tasks),'実行中1作業・待機2作業・停止1作業・終了2作業');assert.equal(workCounts(tasks,true),'停止4作業・終了2作業');
 });
-test('model setup notice appears only when no saved connection can answer the leader',async()=>{
+test('model setup notice appears only when no saved connection can answer the Bot in question',async()=>{
  const {modelSetupNotice}=await ui('providers.js');
- assert.equal(modelSetupNotice(null,'anthropic'),null);
- assert.match(modelSetupNotice([],'openai_subscription').title,/まずモデルをつなぎましょう/);
- assert.match(modelSetupNotice(['anthropic'],'openai_subscription').title,/リーダーのモデル（Codex）/);
- assert.equal(modelSetupNotice(['anthropic','local_llm'],'anthropic'),null);
+ const leader={authority:'leader',name:'リーダー',provider:'openai_subscription'},kanade={authority:'member',name:'カナデ',provider:'anthropic'};
+ assert.equal(modelSetupNotice(null,leader),null);
+ assert.match(modelSetupNotice([],leader).title,/まずモデルをつなぎましょう/);
+ assert.match(modelSetupNotice(['anthropic'],leader).title,/リーダーのモデル（Codex）/);
+ assert.match(modelSetupNotice(['openai_subscription'],kanade).title,/カナデのモデル（Claude（Anthropic API））/);
+ assert.equal(modelSetupNotice(['anthropic','local_llm'],kanade),null);assert.equal(modelSetupNotice(['anthropic'],undefined),null);
 });
 test('memory source names the speaker and room, marks private conversations and survives a deleted room',async()=>{
  const {memorySource}=await ui('memory-source.js');
@@ -49,10 +51,18 @@ test('your-turn list puts approvals first, hides answered questions and never li
  assert.deepEqual(items.map((i:{kind:string;id:string})=>[i.kind,i.id]),[['approval','t1'],['question','q1'],['stopped','t3'],['decisions','decisions']]);
  assert.equal(items[1].detail,'');assert.deepEqual(items[3].ids,['d1']);
  assert.deepEqual(attentionItems({}),[]);
+ const seenAsk=attentionItems({activities:[{id:'t2',status:'waiting',state:'waiting_user',title:'文章'}],questions:[{id:'q1',title:'参加費は？',activity:'t2',seen:1},{id:'q9',title:'消えた仕事',activity:'gone'}]});
+ assert.deepEqual(seenAsk,[]);
 });
 test('procedure use reads as a count with the last day, and says when a procedure is turned off',async()=>{
  const {procedureUse}=await ui('procedure-display.js');
  assert.equal(procedureUse({enabled:true,uses:0,last_used_at:null}),'まだ使っていません');
  assert.match(procedureUse({enabled:true,uses:3,last_used_at:Date.UTC(2026,9,17,3)}),/^3回使った・最後は10\/1[67]$/);
  assert.equal(procedureUse({enabled:false,uses:0,last_used_at:null}),'止めています（まだ使っていません）');
+});
+test('sentences split after each full stop, but not inside brackets or at the very end',async()=>{
+ const {splitSentences}=await ui('sentences.js');
+ assert.deepEqual(splitSentences('一つ目です。二つ目です。'),['一つ目です。','二つ目です。']);
+ assert.deepEqual(splitSentences('「設定」→「保存。」を押します。続けます'),['「設定」→「保存。」を押します。','続けます']);
+ assert.deepEqual(splitSentences('句点のない文'),['句点のない文']);assert.deepEqual(splitSentences('（途中。）まで。 次へ。'),['（途中。）まで。','次へ。']);
 });

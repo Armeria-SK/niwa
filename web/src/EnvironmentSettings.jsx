@@ -32,6 +32,6 @@ export function EnvironmentSettings({area}){
     {run.preview&&run.state==='running'?<><button className="button subtle" disabled={busy} onClick={()=>view(run)}>画面を確認</button><button className="button subtle" disabled={busy} onClick={()=>view(run,true)}>モバイル表示</button></>:null}
   </div></div>)}
   {log?<pre className="artifact-document">{[log.stdout,log.stderr,log.error].filter(Boolean).join('\n')||'まだ出力はありません。'}</pre>:null}
-  {preview?<><p className="field-hint">隔離ブラウザーの画面です。外部公開していません。操作後の確認は再取得してください。</p><img alt="制作中の画面プレビュー" src={`data:image/jpeg;base64,${preview.data}`} style={{maxWidth:'100%',height:'auto'}}/></>:null}
+  {preview?<><p className="field-hint">隔離ブラウザーの画面です。<br />外部公開していません。<br />操作後の確認は再取得してください。</p><img alt="制作中の画面プレビュー" src={`data:image/jpeg;base64,${preview.data}`} style={{maxWidth:'100%',height:'auto'}}/></>:null}
  </div></details>;
 }

@@ -23,7 +23,7 @@ export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, o
   const atLimit = members.filter(item => item.authority !== 'leader').length >= maxMembers;
   const member = members.find(item => item.id === selected) || members[0];
   return <main className="work-area members-page" id="main-content" tabIndex={-1}>
-    <div className="page-heading"><div><span className="eyebrow">それぞれの個性を、大切に。</span><h1>メンバー</h1><p>話し方、記憶、見た目。ひとりずつ、少しずつ。</p></div><div className="member-heading-actions"><span className="quiet-count">{members.length}人の仲間</span><button className="button primary" onClick={() => setAdding(true)}><PlusIcon size={17} />メンバー追加</button></div></div>
+    <div className="page-heading"><div><span className="eyebrow">それぞれの個性を、大切に。</span><h1>メンバー</h1><p>話し方、記憶、見た目。<br />ひとりずつ、少しずつ。</p></div><div className="member-heading-actions"><span className="quiet-count">{members.length}人の仲間</span><button className="button primary" onClick={() => setAdding(true)}><PlusIcon size={17} />メンバー追加</button></div></div>
     <div className="members-layout"><MemberScroll>{members.map(item => <button key={item.id} className={`member-list-row ${item.id === member.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)} aria-pressed={item.id === member.id}><Avatar member={item} size={64} /><span><strong>{item.name}{item.authority === 'leader' ? <span className="role-label">リーダー</span> : null}</strong><small>{item.role}</small><StatusLabel member={item} paused={paused} showDescription={false} /></span><ChevronRightIcon size={17} /></button>)}</MemberScroll>
       <section className="member-detail" aria-label={`${member.name}の詳細`}><div className="member-detail-top"><Avatar member={member} size={76} /><div><h2>{member.name}</h2><span className="muted">{member.role}</span></div>{member.authority !== 'leader' ? member.status === 'sleeping' ? <button className="button secondary" onClick={() => onDormant(member.id, false)}>呼び戻す</button> : <button className="button subtle" onClick={() => setResting(member)}>休ませる</button> : null}<button className="button secondary" onClick={() => onDM(member.id)}><ChatIcon size={18} />個別に話す</button></div>
         <Segmented label="メンバーの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }, { value: 'procedures', label: '手順帳' }]} value={memoryFor===member.id?'memory':tab} onChange={selectTab} />
@@ -36,7 +36,7 @@ export function Members({ members, selected, onSelect, onUpdate, onSaveMemory, o
       </section>
     </div>
     {deleting ? <DeleteMember member={deleting} onClose={() => setDeleting(null)} onDelete={onDelete} /> : null}
-    {resting ? <Modal title={`${resting.name}を休ませますか？`} onClose={() => setResting(null)}><div className="modal-body"><p className="muted">進めている仕事は止まり、自分から動く活動もしなくなります。記憶と会話はそのまま残り、いつでも呼び戻せます。</p></div><div className="form-actions"><button type="button" className="button subtle" onClick={() => setResting(null)}>やめる</button><button type="button" className="button primary" onClick={async () => { if (await onDormant(resting.id, true)) setResting(null); }}>休ませる</button></div></Modal> : null}
+    {resting ? <Modal title={`${resting.name}を休ませますか？`} onClose={() => setResting(null)}><div className="modal-body"><p className="muted">進めている仕事は止まり、自分から動く活動もしなくなります。<br />記憶と会話はそのまま残り、いつでも呼び戻せます。</p></div><div className="form-actions"><button type="button" className="button subtle" onClick={() => setResting(null)}>やめる</button><button type="button" className="button primary" onClick={async () => { if (await onDormant(resting.id, true)) setResting(null); }}>休ませる</button></div></Modal> : null}
     {adding ? <AddMemberModal atLimit={atLimit} maxMembers={maxMembers} onClose={() => setAdding(false)} onAdd={async draft => { const error = await onAdd(draft); if (!error) { setAdding(false); setTab('profile'); } return error; }} /> : null}
   </main>;
 }
@@ -85,7 +85,7 @@ function Profile({ member, onSave }) {
 function MemorySourceLine({ memory, onOpenThread }) {
   const source = memory.source;
   return <div className="memory-source">{source.excerpt ? <q>{source.excerpt}</q> : null}<span>{[source.author, source.room, source.said].filter(Boolean).join(' · ')}</span>
-    {source.private ? <span className="memory-private"><LockIcon size={13} />個別の会話から生まれた記憶です。その会話の中でだけ使います</span> : null}
+    {source.private ? <span className="memory-private"><LockIcon size={13} />個別の会話から生まれた記憶（その会話の中でだけ使います）</span> : null}
     {source.openable ? <button type="button" className="text-button" onClick={() => onOpenThread(memory.source_room_id)}>元の会話へ</button> : null}</div>;
 }
 
@@ -131,13 +131,13 @@ function AddMemberModal({ onClose, onAdd, atLimit, maxMembers }) {
   const change = (key, value) => { setDraft(current => ({ ...current, [key]: value })); setError(''); };
   return <Modal title="メンバーを追加" onClose={() => { if (!busy) onClose(); }}><form onSubmit={async e => { e.preventDefault(); if (busy || atLimit || !draft.name.trim()) return; setBusy(true); try { setError(await onAdd({ ...draft, name: draft.name.trim(), persona: draft.persona.trim() }) || ''); } finally { setBusy(false); } }}>
     <fieldset className="modal-body form-stack" disabled={busy} style={{ border: 0, margin: 0 }}>
-      <p className="field-hint">指定した内容で仲間を追加します。追加後はこのメンバー一覧で確認できます。</p>
+      <p className="field-hint">指定した内容で仲間を追加します。<br />追加後はこのメンバー一覧で確認できます。</p>
       {atLimit ? <p className="field-error" role="alert">生成メンバーの上限（{maxMembers}体）に達しています。休眠中も数に含みます。設定の「活動と人数」を確認してください。</p> : null}
       <div className="field-pair"><label className="field"><span>名前</span><input autoFocus required maxLength={20} value={draft.name} onChange={e => change('name', e.target.value)} placeholder="新しい仲間の名前" /></label><label className="field"><span>役割</span><input maxLength={40} value={draft.role} onChange={e => change('role', e.target.value)} placeholder="例：調べる・まとめる" /></label></div>
       <label className="field"><span>性格と話し方</span><textarea rows={3} maxLength={2000} value={draft.persona} onChange={e => change('persona', e.target.value)} placeholder="どんな仲間にしたいですか？" /></label>
       <div className="new-member-appearance"><Avatar shape={draft.shape} color={draft.color} motion={draft.motion} size={54} /><label className="field"><span>かたち</span><select value={draft.shape} onChange={e => change('shape', e.target.value)}>{SHAPES.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>カラー</span><input type="color" value={draft.color} onChange={e => change('color', e.target.value)} /></label></div>
       <fieldset><legend>動き</legend><MotionPicker value={draft.motion} onChange={value => change('motion', value)} /></fieldset>
-      <p className="field-hint">モデルは「新しいBotの標準モデル」を使用します。見た目やプロフィールは追加後も変更できます。</p>
+      <p className="field-hint">モデルは「新しいBotの標準モデル」を使用します。<br />見た目やプロフィールは追加後も変更できます。</p>
       {error ? <p className="field-error" role="alert">{error}</p> : null}
     </fieldset>
     <div className="form-actions"><button type="button" className="button subtle" disabled={busy} onClick={onClose}>キャンセル</button><button className="button primary" disabled={busy || atLimit || !draft.name.trim()}>{busy ? '追加中…' : '追加する'}</button></div>

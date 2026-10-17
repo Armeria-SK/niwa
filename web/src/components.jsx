@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import { SHAPES, PALETTE } from './data.js';
 import { CloseIcon, UserIcon, CheckIcon, InfoIcon } from './icons.jsx';
+import { splitSentences } from './sentences.js';
 
 export function Avatar({ member, shape, color, motion, size = 48, className = '' }) {
   if (!member && !shape) return <span className={`human-avatar ${className}`} style={{ width: size, height: size }} aria-hidden="true"><UserIcon size={size * .8} weight="light" /></span>;
@@ -36,12 +37,18 @@ export function Segmented({ label, options, value, onChange, className = '' }) {
   })}</div>;
 }
 
+/** 文ごとに改行して読みやすくする。文字列でない中身はそのまま出す。 */
+export function Sentences({ children }) {
+  if (typeof children !== 'string') return children ?? null;
+  return splitSentences(children).map((part, index) => <Fragment key={index}>{index ? <br /> : null}{part}</Fragment>);
+}
+
 export function SetupNotice({ notice, onConnect }) {
-  return <div className="inline-notice setup-notice" role="status"><InfoIcon size={20} /><div><strong>{notice.title}</strong><p>{notice.body}</p><button type="button" className="button primary" onClick={onConnect}>モデルをつなぐ</button></div></div>;
+  return <div className="inline-notice setup-notice" role="status"><InfoIcon size={20} /><div><strong>{notice.title}</strong><p><Sentences>{notice.body}</Sentences></p><button type="button" className="button primary" onClick={onConnect}>モデルをつなぐ</button></div></div>;
 }
 
 export function EmptyState({ icon: Icon = InfoIcon, title, children, action }) {
-  return <div className="empty-state"><Icon size={34} weight="light" /><h3>{title}</h3>{children ? <p>{children}</p> : null}{action}</div>;
+  return <div className="empty-state"><Icon size={34} weight="light" /><h3>{title}</h3>{children ? <p><Sentences>{children}</Sentences></p> : null}{action}</div>;
 }
 
 export function AppearanceFields({ draft, onChange }) {
@@ -55,7 +62,7 @@ export function AppearanceFields({ draft, onChange }) {
     <fieldset><legend>動き</legend><MotionPicker value={motion} onChange={value => onChange('motion', value)} /></fieldset>
     <fieldset><legend>カラー</legend><div className="swatches">{PALETTE.map(item => <button key={item.color} type="button" title={item.name} aria-label={item.name} aria-pressed={color.toLowerCase() === item.color.toLowerCase()} className={color.toLowerCase() === item.color.toLowerCase() ? 'swatch selected' : 'swatch'} style={{ '--swatch': item.color }} onClick={() => chooseColor(item.color)}>{color.toLowerCase() === item.color.toLowerCase() ? <CheckIcon size={16} weight="bold" /> : null}</button>)}</div></fieldset>
     <label className="field"><span>好きな色を指定</span><div className="color-custom"><input type="color" aria-label="カラーピッカー" value={color} onChange={e => chooseColor(e.target.value)} /><input aria-label="カラーコード" value={draft.color} maxLength={7} spellCheck="false" onChange={e => { onChange('color', e.target.value); }} /></div>{!valid ? <small className="field-error">#と6桁の英数字で指定してください。</small> : null}</label>
-    <p className="field-hint">形・色・動きは、いつでも変更できます。端末で動きを減らす設定をしている場合は静止します。</p>
+    <p className="field-hint">形・色・動きは、いつでも変更できます。<br />端末で動きを減らす設定をしている場合は静止します。</p>
   </div>;
 }
 

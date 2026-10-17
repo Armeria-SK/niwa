@@ -20,7 +20,7 @@ export function CoordinationBoard({roomId,members,onClose,onArtifact}) {
  const name=id=>id==='administrator'?'管理者':members[id]?.name || '未指定';
  const visible=tasks.filter(task=>!task.acknowledgment_only && (showDone || !['completed','cancelled'].includes(task.state)));
  return <Modal title="この会話の共同作業" onClose={onClose} className="coordination-modal"><div className="modal-body form-stack">
-  <p>この会話に属する依頼と受け渡しの状況です。直近・進行中の最大100件を表示します。</p>
+  <p>この会話に属する依頼と受け渡しの状況です。<br />直近・進行中の最大100件を表示します。</p>
   {data?.digest ? <section className="coordination-task" aria-label="進捗ダイジェスト"><strong>直近24時間の実績と現在の待ち状況</strong>
    <p>保存した版（改訂含む）{data.digest.artifact_count}件 · 承認待ち {data.digest.approvals}件 · ブロッカー {data.digest.blockers}件 · 期限超過 {data.digest.overdue}件</p>
    {data.digest.artifacts.map(item=><div key={item.id}><button className="text-button" onClick={()=>onArtifact(item.id)}>{item.name}（第{item.version}版）</button> · {name(item.author_id)}</div>)}

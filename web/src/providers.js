@@ -7,10 +7,11 @@ export const modelListPath = provider => ({ local_llm: '/models', openai_compati
 export const modelLabel = item => item.display_name && item.display_name !== item.model ? `${item.display_name}（${item.model}）` : item.model;
 /** モデル一覧を取得できないときに直接入力したClaudeのモデルで選べる推論の強さ。 */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-/** 保存済みの接続先（ready）でBotが返事をできないとき、その案内を返す。読み込めていない間（null）は何も出さない。 */
-export function modelSetupNotice(ready, leaderProvider) {
+/** 保存済みの接続先（ready）で、そのBot（agent）が返事をできないときの案内を返す。読み込めていない間（null）は何も出さない。 */
+export function modelSetupNotice(ready, agent) {
   if (!Array.isArray(ready)) return null;
   if (!ready.length) return { title: 'まずモデルをつなぎましょう', body: 'Botが考えて返事をするには、AIモデルへの接続が1つ以上必要です。ChatGPT・Claude（Anthropic API）・OpenAI互換API・Local LLMから選べます。つなぐまで、自分から動く活動も始まりません。' };
-  if (leaderProvider && !ready.includes(leaderProvider)) return { title: `リーダーのモデル（${providerLabel(leaderProvider)}）がつながっていません`, body: 'その接続を保存するか、メンバーのプロフィールでリーダーのモデルを、つながっている接続先のものに変えてください。' };
-  return null;
+  if (!agent?.provider || ready.includes(agent.provider)) return null;
+  const who = agent.authority === 'leader' ? 'リーダー' : agent.name;
+  return { title: `${who}のモデル（${providerLabel(agent.provider)}）がつながっていません`, body: `その接続を保存するか、メンバーのプロフィールで${who}のモデルを、つながっている接続先のものに変えてください。` };
 }

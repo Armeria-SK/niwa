@@ -94,9 +94,9 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
       <div className="replies">{history.items.map(message=><Message key={message.id} acknowledgments={thread.acknowledgments} message={message} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message=>{setReplyTo(message);inputRef.current?.focus();}} onArtifact={onArtifact}/>)}{liveDrafts.map(item => <DraftMessage key={item.task_id} draft={item} member={memberMap[item.agent_id]} />)}</div>
       {thread.message_count === 1 && !tasks.some(task => !['done', 'canceled'].includes(task.status)) ? <p className="first-reply-hint">ここから、会話が始まります。</p> : null}
     </div>
-    <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。返信するには「保管から戻す」を選んでください。</p> : null}
-      {deletedConversation ? <p className="archive-note" role="status">相手のBotは削除されています。この会話は履歴として読むことができます。</p> : null}
-      {paused && !readOnly ? <div className="pause-notice"><PauseIcon size={14} />Botの活動は一時停止中です。返信は残せます。</div> : null}
+    <div className="composer-wrap">{thread.archived ? <p className="archive-note"><ArchiveIcon size={16} />保管中のスレッドです。<br />返信するには「保管から戻す」を選んでください。</p> : null}
+      {deletedConversation ? <p className="archive-note" role="status">相手のBotは削除されています。<br />この会話は履歴として読むことができます。</p> : null}
+      {paused && !readOnly ? <div className="pause-notice"><PauseIcon size={14} />Botの活動は一時停止中です。<br />返信は残せます。</div> : null}
       {replyTo ? <div className="reply-preview"><ReplyIcon size={16} /><div><strong>{memberMap[replyTo.author]?.name || 'あなた'}に返信</strong><span>{replyTo.text}</span></div><IconButton label="返信先を解除" onClick={() => setReplyTo(null)}><CloseIcon size={16} /></IconButton></div> : null}
       {attachmentErrors.length ? <div className="attachment-errors" role="alert"><div>{attachmentErrors.map((error, index) => <p key={index}>{error}</p>)}</div><IconButton label="エラーを閉じる" onClick={() => setAttachmentErrors([])}><CloseIcon size={13} /></IconButton></div> : null}
       {attachments.length ? <div className="attachment-previews">{attachments.map(file => <span key={file.id}><PaperclipIcon size={15} />{file.name}<small>{formatSize(file.size)}</small><IconButton label={`${file.name}を外す`} onClick={() => setAttachments(current => current.filter(item => item.id !== file.id))}><CloseIcon size={13} /></IconButton></span>)}</div> : null}

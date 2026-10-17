@@ -28,7 +28,7 @@ export function WorkareaSettings({value,onChange,area,onSelect}) {
         <fieldset><legend>共同編集するBot</legend>{value.agents.filter(a=>room?.visibility==='shared'||room?.participants.includes(a.id)).map(a=><label key={a.id} style={{display:'block'}}><input type="checkbox" disabled={busy} checked={project.members.includes(a.id)} onChange={e=>setProject({...project,members:e.target.checked?[...project.members,a.id]:project.members.filter(id=>id!==a.id)})}/>{a.name}</label>)}</fieldset>
         <div className="inline-actions"><button className="button primary" disabled={busy||!project.members.length}>設定を保存</button><button type="button" className="button subtle" disabled={busy} onClick={()=>setProject(null)}>取消</button></div>
       </form>:null}
-      <p className="field-hint">個人領域はBotが仕事中に選ぶと作成されます。管理者はすべて閲覧できます。案件から外したBotは以後の取得と変更ができません。</p>
+      <p className="field-hint">個人領域はBotが仕事中に選ぶと作成されます。<br />管理者はすべて閲覧できます。<br />案件から外したBotは以後の取得と変更ができません。</p>
     </SettingDisclosure>{error?<p role="alert" className="field-error">{error}</p>:null}
   </div>;
 }
