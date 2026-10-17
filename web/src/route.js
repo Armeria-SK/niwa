@@ -1,6 +1,8 @@
 /** 画面ごとのURL（#のあと）。共有したり、戻る・進むで行き来したりできるようにする。 */
 export const PAGES = ['today', 'conversation', 'bots', 'records', 'settings'];
 export const BOT_TABS = ['profile', 'memory', 'procedures'];
+// 「みんなの記憶」は、Botの代わりに everyone を選んだ形で開く（#bots/everyone/conflicts）。
+export const EVERYONE_TABS = ['search', 'conflicts'];
 export const RECORD_TABS = ['recap', 'running', 'approval', 'artifacts', 'schedules'];
 export const SETTINGS_TABS = ['theme', 'rules', 'models', 'mcp', 'activity', 'backup'];
 // 前の名前のURL（ブックマークや、MCPの認証から戻るページ）もそのまま開けるようにする。
@@ -14,7 +16,7 @@ export function parseRoute(hash) {
   if (!PAGES.includes(page)) return { page: 'today' };
   const [first, second] = rest;
   if (page === 'conversation') return ID.test(first || '') ? { page, id: first } : { page };
-  if (page === 'bots') return ID.test(first || '') ? { page, id: first, ...(BOT_TABS.includes(second) ? { tab: second } : {}) } : { page };
+  if (page === 'bots') return ID.test(first || '') ? { page, id: first, ...((first === 'everyone' ? EVERYONE_TABS : BOT_TABS).includes(second) ? { tab: second } : {}) } : { page };
   if (page === 'records') {
     if (first === 'task' && ID.test(second || '')) return { page, task: second };
     return RECORD_TABS.includes(first) ? { page, tab: first } : { page };

@@ -73,6 +73,7 @@ test('screen addresses read old names, drop what cannot be read and write back t
  assert.deepEqual(parseRoute('#settings/mcp'),{page:'settings',tab:'mcp'});assert.deepEqual(parseRoute('#settings/nope'),{page:'settings'});
  assert.deepEqual(parseRoute('#conversation/room-1'),{page:'conversation',id:'room-1'});assert.deepEqual(parseRoute('#conversation/<script>'),{page:'conversation'});
  assert.deepEqual(parseRoute('#bots/a1/memory'),{page:'bots',id:'a1',tab:'memory'});assert.deepEqual(parseRoute('#bots/a1/secret'),{page:'bots',id:'a1'});
+ assert.deepEqual(parseRoute('#bots/everyone/conflicts'),{page:'bots',id:'everyone',tab:'conflicts'});assert.deepEqual(parseRoute('#bots/everyone/memory'),{page:'bots',id:'everyone'});assert.deepEqual(parseRoute('#bots/a1/conflicts'),{page:'bots',id:'a1'});
  assert.deepEqual(parseRoute('#records/task/t9'),{page:'records',task:'t9'});assert.deepEqual(parseRoute('#records/artifacts'),{page:'records',tab:'artifacts'});
  assert.deepEqual(parseRoute('#records/%E0%A4'),{page:'records'});
  for(const hash of ['#today','#conversation/room-1','#bots/a1/procedures','#bots/a1','#records/task/t9','#records/schedules','#settings/models'])assert.equal(routeHash(parseRoute(hash)),hash);
