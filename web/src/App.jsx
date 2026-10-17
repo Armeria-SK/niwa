@@ -1,4 +1,5 @@
 import {memberWork} from './work-display.js';
+import { stateMotion } from './avatar.js';
 import { useEffect, useRef, useState } from 'react';
 import { initialSettings, THEMES } from './data.js';
 import { api } from './api.js';
@@ -92,7 +93,7 @@ export function App() {
     if (showing) next = markSeen(next, thread);
     if (next !== seenMessages) { setSeenMessages(next); writeSeen(next); }
   }, [ready, threads, page, thread, mobileDetail, seenMessages]);
-  const animatedMembers = members.map(member => ({ ...member, runtimeMotion: member.status === 'sleeping' || paused ? 'none' : celebrating[member.id] ? 'celebrate' : member.runtimeMotion, activity: paused ? '一時停止中' : member.activity }));
+  const animatedMembers = members.map(member => ({ ...member, runtimeMotion: celebrating[member.id] ? 'celebrate' : member.runtimeMotion, activity: paused ? '一時停止中' : member.activity }));
   const memberMap = Object.fromEntries([...deletedMembers, ...animatedMembers].map(item => [item.id, item]));
   const attention = attentionItems({ activities, questions, decisions: updates });
   const waitingOnYou = attention.some(item => item.kind !== 'decisions');
@@ -154,7 +155,7 @@ export function App() {
       setDeletedMembers((state.deletedAgents || []).map(agent => ({ id: agent.id, name: '削除したBot', deleted: true, shape: 'pebble', color: '#9a9a91', status: 'sleeping', motion: 'none' })));
       setMembers(state.agents.map(agent => ({ ...agent, authority: agent.role, role: agent.profile.role || (agent.role === 'leader' ? 'リーダー' : 'Bot'),
         shape: 'pebble', color: '#61B8A5', persona: '', interests: [], ...agent.profile, effort: agent.reasoning,
-        runtimeMotion: memberWork(state.tasks.filter(task=>task.agent_id===agent.id),state.settings.paused,agent.status==='dormant').kind==='running'?'sway':'none', status: agent.status === 'dormant' ? 'sleeping' : 'active', activity:memberWork(state.tasks.filter(task=>task.agent_id===agent.id),state.settings.paused,agent.status==='dormant').activity })));
+        runtimeMotion: stateMotion(memberWork(state.tasks.filter(task=>task.agent_id===agent.id),state.settings.paused,agent.status==='dormant').kind), status: agent.status === 'dormant' ? 'sleeping' : 'active', activity:memberWork(state.tasks.filter(task=>task.agent_id===agent.id),state.settings.paused,agent.status==='dormant').activity })));
       setThreads(state.rooms.map(room => ({ ...room, scope: room.visibility, members: room.participants,
         lastActivity: Date.parse(room.last_at) || 0, time: room.last_at ? time(room.last_at) : '',
         day: room.first_at ? new Date(room.first_at).toLocaleDateString('ja-JP') : '' })));

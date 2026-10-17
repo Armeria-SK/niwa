@@ -2,13 +2,26 @@ import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import { SHAPES, PALETTE, MOTIONS } from './data.js';
 import { CloseIcon, UserIcon, CheckIcon, InfoIcon } from './icons.jsx';
 import { splitSentences } from './sentences.js';
+import { avatarMotion, avatarParts, blinkTiming } from './avatar.js';
 
+// 形のSVGは、ビルド時に文字列として取り込み、体と目に分けておく。
+const SHAPE_PARTS = Object.fromEntries(Object.entries(import.meta.glob('./avatars/avatar-*.svg', { query: '?raw', import: 'default', eager: true }))
+  .map(([path, svg]) => [/avatar-([a-z]+)\.svg$/.exec(path)[1], avatarParts(svg)]));
+
+/** Botのアイコン。体の形に色を塗り、目は穴として抜く。目は別の部品なので、瞬きや、休眠中に閉じることができる。
+ * motion を渡すと見本として表示し（プロフィールの編集など）、渡さなければ member の状態に合わせて動く。 */
 export function Avatar({ member, shape, color, motion, size = 48, className = '' }) {
+  const mask = `avatar-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   if (!member && !shape) return <span className={`human-avatar ${className}`} style={{ width: size, height: size }} aria-hidden="true"><UserIcon size={size * .8} weight="light" /></span>;
-  const preference = motion ?? member?.motion ?? 'auto';
-  const stopped = motion === undefined && (member?.status === 'sleeping' || member?.activity === '一時停止中');
-  const animation = stopped ? 'none' : preference === 'auto' ? (motion !== undefined ? 'sway' : member?.runtimeMotion || 'none') : preference;
-  return <span className={`bot-avatar ${className}`} data-motion={animation} aria-hidden="true" style={{ width: size, height: size, backgroundColor: color || member?.color, maskImage: `url(/assets/avatar-${shape || member?.shape || 'pebble'}.svg)` }} />;
+  const parts = SHAPE_PARTS[shape || member?.shape] || SHAPE_PARTS.pebble;
+  const animation = motion !== undefined ? avatarMotion({ preference: motion, preview: true })
+    : avatarMotion({ preference: member?.motion || 'auto', runtime: member?.runtimeMotion, sleeping: member?.status === 'sleeping', paused: member?.activity === '一時停止中' });
+  const blink = blinkTiming(member?.id || `${shape}${color}`);
+  return <svg className={`bot-avatar ${className}`} data-motion={animation} aria-hidden="true" focusable="false" viewBox="0 0 100 100" width={size} height={size}
+    style={{ width: size, height: size, '--blink-period': `${blink.period}s`, '--blink-delay': `${blink.delay}s` }}>
+    <mask id={mask}><path d={parts.body} fill="#fff" />{parts.eyes.map((eye, index) => <path key={index} className="bot-eye" d={eye} fill="#000" />)}</mask>
+    <rect width="100" height="100" fill={color || member?.color || '#61B8A5'} mask={`url(#${mask})`} />
+  </svg>;
 }
 
 export function IconButton({ label, children, className = '', ...props }) {
@@ -100,5 +113,9 @@ export function StatusLabel({ member, paused = false, showDescription = true }) 
 }
 
 export function MotionPicker({ value, onChange }) {
-  return <Segmented label="アイコンの動き" className="motion-picker" value={value} onChange={onChange} options={MOTIONS} />;
+  return <>
+    <Segmented label="アイコンの動き" className="motion-picker" value={value} onChange={onChange} options={MOTIONS} />
+    {value === 'auto' ? <p className="field-hint">作業中は、小さく弾みます。<br />返事や承認を待つあいだは、首をかしげます。<br />手が空いているときは止まり、休眠中は目を閉じます。</p> : null}
+    <p className="field-hint">「なし」以外では、ときどき瞬きします。</p>
+  </>;
 }

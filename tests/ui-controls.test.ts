@@ -205,3 +205,23 @@ test('reading a Bot file has its own URL and says what it makes and why a file c
  assert.equal(hiddenNote(0),'');assert.equal(hiddenNote(2),'秘密らしい文字を2か所伏せました。伏せたまま迎えます。');
  assert.equal(limitNote(2,3),'');assert.match(limitNote(3,3),/^迎えられるBotの上限（3体）に達しています。/);
 });
+test('every Bot shape splits into a body and two eyes, so the eyes can blink and close while sleeping',async()=>{
+ const {readFileSync}=await import('node:fs');const {avatarParts}=await ui('avatar.js');const {SHAPES}=await ui('data.js');
+ for(const shape of SHAPES as {id:string}[]){
+  const parts=avatarParts(readFileSync(resolve(`web/src/avatars/avatar-${shape.id}.svg`),'utf8'));
+  assert.match(parts.body,/^M[\s\S]+Z$/,shape.id);assert.equal(parts.eyes.length,2,shape.id);for(const eye of parts.eyes)assert.match(eye,/^M[\s\S]+Z$/,shape.id);
+ }
+ assert.deepEqual(avatarParts('<svg/>'),{body:'',eyes:[]});
+});
+test('Bot icons move by state: working hops, waiting tilts, sleeping closes its eyes, and a still choice stays still',async()=>{
+ const {stateMotion,avatarMotion,blinkTiming}=await ui('avatar.js');
+ assert.deepEqual(['running','waiting','sleeping','paused','idle',undefined].map(stateMotion),['work','wait','sleep','idle','idle','idle']);
+ assert.equal(avatarMotion({runtime:'work'}),'work');assert.equal(avatarMotion({runtime:'wait'}),'wait');assert.equal(avatarMotion({}),'idle');
+ assert.equal(avatarMotion({runtime:'work',paused:true}),'idle');assert.equal(avatarMotion({runtime:'celebrate'}),'celebrate');
+ assert.equal(avatarMotion({runtime:'work',sleeping:true}),'sleep');assert.equal(avatarMotion({preference:'none',sleeping:true}),'sleep');
+ assert.equal(avatarMotion({preference:'none',runtime:'celebrate'}),'none');assert.equal(avatarMotion({preference:'float',runtime:'celebrate'}),'float');assert.equal(avatarMotion({preference:'float',paused:true}),'idle');
+ assert.equal(avatarMotion({preference:'auto',preview:true}),'work');assert.equal(avatarMotion({preference:'pulse',preview:true}),'pulse');
+ const one=blinkTiming('bot-1'),again=blinkTiming('bot-1'),other=blinkTiming('bot-2');
+ assert.deepEqual(one,again);assert.notDeepEqual(one,other);
+ for(const timing of [one,other,blinkTiming(''),blinkTiming(undefined)]){assert.ok(timing.period>=4.2&&timing.period<=6.6);assert.ok(timing.delay<=0&&timing.delay>-6);}
+});
