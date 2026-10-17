@@ -13,7 +13,7 @@ import { McpConnections } from '../McpConnections.jsx';
 import { CheckIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 
 export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, members }) {
-  const [tab, setTab] = useState('theme');
+  const [tab, setTab] = useState(() => window.location.hash === '#settings/mcp' ? 'mcp' : 'theme'); // The OAuth return page links here.
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
   const [touched, setTouched] = useState(() => new Set());

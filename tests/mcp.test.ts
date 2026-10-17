@@ -225,3 +225,166 @@ test('MCP remote endpoints never follow redirects, keep size limits and redact e
  await assert.rejects(mcpRpc({url:'http://example.com/mcp'},'tools/list',{}),/Invalid MCP URL/);
  await assert.rejects(mcpRpc({url:echo.url,token:'bad\ntoken'},'tools/list',{}),/Invalid MCP credential/);
 });
+test('a session whose re-initialization failed is restored by the next call instead of staying without an id',async t=>{
+ let current='',issued=0,failInit=false;
+ const f=await rawServer(t,(message,req,res)=>{
+  if(message.method==='initialize'){
+   if(failInit){res.writeHead(503);res.end();return;}
+   current=`session-${++issued}`;res.writeHead(200,{'Content-Type':'application/json','Mcp-Session-Id':current});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{protocolVersion:'2025-06-18',capabilities:{}}}));return;
+  }
+  if(req.headers['mcp-session-id']!==current){res.writeHead(req.headers['mcp-session-id']?404:400);res.end();return;}
+  if(message.id===undefined){res.writeHead(202);res.end();return;}
+  res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{tools:[]}}));
+ });
+ const session={} as {id?:string};await McpConnector.discover(f.socket,undefined,session);
+ current='expired';failInit=true;f.seen.length=0;
+ await assert.rejects(mcpRpc(f.socket,'tools/list',{},undefined,undefined,session),/transport failed/);
+ assert.equal(session.id,undefined);
+ failInit=false;f.seen.length=0;
+ await mcpRpc(f.socket,'tools/list',{},undefined,undefined,session);
+ assert.deepEqual(f.seen.map(s=>[s.method,s.session]),[['initialize',undefined],['notifications/initialized','session-2'],['tools/list','session-2']]);
+ // Later calls carry the new id and need no further initialization.
+ f.seen.length=0;await mcpRpc(f.socket,'tools/list',{},undefined,undefined,session);assert.deepEqual(f.seen.map(s=>[s.method,s.session]),[['tools/list','session-2']]);
+ // A server that stays down is tried once per call, never in a loop.
+ current='gone';failInit=true;f.seen.length=0;
+ await assert.rejects(mcpRpc(f.socket,'tools/list',{},undefined,undefined,session));await assert.rejects(mcpRpc(f.socket,'tools/list',{},undefined,undefined,session));
+ assert.deepEqual(f.seen.map(s=>s.method),['tools/list','initialize','initialize']);
+});
+test('calls that hit an expired session together share one re-initialization and all retry with the new id',async t=>{
+ let current='',issued=0;
+ const f=await rawServer(t,(message,req,res)=>{
+  if(message.method==='initialize'){setTimeout(()=>{current=`session-${++issued}`;res.writeHead(200,{'Content-Type':'application/json','Mcp-Session-Id':current});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{protocolVersion:'2025-06-18',capabilities:{}}}));},60);return;}
+  if(req.headers['mcp-session-id']!==current){res.writeHead(req.headers['mcp-session-id']?404:400);res.end();return;}
+  if(message.id===undefined){res.writeHead(202);res.end();return;}
+  res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{tools:[]}}));
+ });
+ const session={} as {id?:string};await McpConnector.discover(f.socket,undefined,session);
+ current='expired';f.seen.length=0;
+ const results=await Promise.all(Array.from({length:4},()=>mcpRpc(f.socket,'tools/list',{},undefined,undefined,session)));
+ assert.equal(results.length,4);
+ assert.equal(f.seen.filter(s=>s.method==='initialize').length,1);
+ // After the old id was refused, nothing is sent without a session id.
+ assert.ok(f.seen.filter(s=>s.method!=='initialize'&&s.session===undefined).length===0);
+ assert.equal(f.seen.filter(s=>s.method==='tools/list'&&s.session==='session-2').length,4);
+});
+test('results hide every part of a credential, including scheme credentials and values JSON would escape',async t=>{
+ const secrets=['Basic dXNlcjpwYXNzd29yZA==','quote"back\\slash-token-0123456789'];
+ for(const token of secrets){
+  const part=token.split(' ').at(-1)!;
+  const f=await remoteServer(t,(message,req,res)=>{
+   if(message.id===undefined){res.writeHead(202);res.end();return;}
+   const text=`echo ${req.headers.authorization} ${part}`;
+   const result=message.method==='initialize'?{protocolVersion:'2025-06-18',capabilities:{experimental:{niwaContextV1:true}}}:message.method==='tools/list'?{tools:[{name:'echo',description:'人工',inputSchema:{type:'object'}}]}
+    :{content:[{type:'text',text},{type:'text',text:'nested',annotations:{note:[part,{[part]:token}]}}],structuredContent:{raw:token}};
+   res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result}));
+  });
+  const mcp=await McpConnector.connect([{id:'remote',url:f.url,scope:'conversation',tools:[{name:'echo',readOnly:true}]}],undefined,false,{remote:token});
+  const result=JSON.stringify(await mcp.call('mcp_remote_echo',{},{scope:mcpScope('epoch','room'),deadline:Date.now()+10000}));
+  assert.ok(!result.includes(part),result);assert.ok(!JSON.stringify(JSON.parse(result)).includes(token));assert.match(result,/\[REDACTED\]/);
+  // Results of servers without a credential are passed through untouched.
+  const plain=await remoteServer(t,(message,_req,res)=>{
+   if(message.id===undefined){res.writeHead(202);res.end();return;}
+   const result=message.method==='initialize'?{protocolVersion:'2025-06-18',capabilities:{experimental:{niwaContextV1:true}}}:message.method==='tools/list'?{tools:[{name:'echo',inputSchema:{type:'object'}}]}:{content:[{type:'text',text:'token = visible'}]};
+   res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result}));
+  });
+  const open=await McpConnector.connect([{id:'remote',url:plain.url,scope:'conversation',tools:[{name:'echo',readOnly:true}]}]);
+  assert.match(JSON.stringify(await open.call('mcp_remote_echo',{},{scope:mcpScope('epoch','room'),deadline:Date.now()+10000})),/token = visible/);
+ }
+});
+test('a long echoed credential is removed from a JSON-RPC error before the message is shortened',async t=>{
+ const token='T'.repeat(30)+'abcdefghij'.repeat(12);
+ const f=await remoteServer(t,(message,_req,res)=>{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,error:{code:-32001,message:`${'rejected '.repeat(18)}${token}`}}));});
+ const error=await mcpRpc({url:f.url,token},'tools/list',{}).then(()=>undefined,e=>e as Error);
+ assert.ok(error);assert.ok(!error.message.includes('TTTTTTTTTT'),error.message);assert.ok(!error.message.includes('abcdefghij'));assert.match(error.message,/^MCP error -32001: rejected/);assert.ok(error.message.length<=200);
+ assert.equal(McpConnector.reason(error).includes('abcdefghij'),false);
+});
+test('MCP token field rules of the settings screen: raw typing, delete box only while shown, removed connections do not bring their token back',async()=>{
+ const {tokenChanges,probeToken,tokenCleared,tokenText,savedToken}=await import(pathToFileURL(resolve('web/src/mcp-tokens.js')).href);
+ const status={tokens:['remote']};
+ const card=(patch:Record<string,unknown>={})=>({id:'remote',transport:'url',auth:'token',url:'https://a.example.com/mcp',savedId:'remote',savedUrl:'https://a.example.com/mcp',token:'',clearToken:false,...patch});
+ // Typing keeps a space; only the payload is trimmed.
+ assert.equal(tokenText(card({token:'Basic abc'})),'Basic abc');assert.equal(tokenText(card({token:'  Basic abc \n'})),'Basic abc');
+ assert.deepEqual(tokenChanges([card({token:'Basic abc '})],status),[{id:'remote',value:'Basic abc'}]);assert.deepEqual(probeToken(card({token:'Basic abc '}),status),{token:'Basic abc'});
+ // The saved token is kept, or removed on request.
+ assert.deepEqual(tokenChanges([card()],status),[]);assert.deepEqual(probeToken(card(),status),{id:'remote'});
+ assert.deepEqual(tokenChanges([card({clearToken:true})],status),[{id:'remote',value:null}]);assert.deepEqual(probeToken(card({clearToken:true}),status),{});
+ // A ticked delete box does not stay in force once its checkbox is gone (ID or origin changed).
+ for(const moved of [{id:'other'},{url:'https://b.example.com/mcp'}]){
+  const changed=card({clearToken:true,...moved});assert.equal(savedToken(changed,status),false);assert.equal(tokenCleared(changed,status),false);
+  assert.deepEqual(tokenChanges([changed],{tokens:[]}),[]);assert.deepEqual(probeToken(card({clearToken:true,token:'abc',...moved}),status),{token:'abc'});
+ }
+ // Choosing "no authentication" removes a saved token, and without one sends nothing.
+ assert.deepEqual(tokenChanges([card({auth:'none'})],status),[{id:'remote',value:null}]);assert.deepEqual(tokenChanges([card({auth:'none'})],{tokens:[]}),[]);
+ // OAuth cards and sockets carry no token entries.
+ assert.deepEqual(tokenChanges([card({auth:'oauth'}),card({transport:'socket'})],status),[]);
+ // A connection deleted and added again under the same ID is a new card: the stored token is dropped unless a new one is typed.
+ const again=card({savedId:undefined,savedUrl:undefined});
+ assert.deepEqual(tokenChanges([again],status),[{id:'remote',value:null}]);assert.deepEqual(probeToken(again,status),{});
+ assert.deepEqual(tokenChanges([card({savedId:undefined,savedUrl:undefined,token:'new-token-123456'})],status),[{id:'remote',value:'new-token-123456'}]);
+ assert.deepEqual(tokenChanges([card({savedId:undefined,savedUrl:undefined,auth:'none'})],status),[{id:'remote',value:null}]);
+});
+test('results keep everything that is not a known credential, even when it looks like a secret',async t=>{
+ const token='Basic dXNlcjpwYXNzd29yZA==',jwt='eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJlMTIz',docs='const token = abc; Authorization: Bearer example-not-ours; api_key=docs-sample';
+ const f=await remoteServer(t,(message,req,res)=>{
+  if(message.id===undefined){res.writeHead(202);res.end();return;}
+  const result=message.method==='initialize'?{protocolVersion:'2025-06-18',capabilities:{experimental:{niwaContextV1:true}}}:message.method==='tools/list'?{tools:[{name:'echo',inputSchema:{type:'object'}}]}
+   :{content:[{type:'text',text:docs},{type:'text',text:jwt},{type:'text',text:`mine ${req.headers.authorization}`}],structuredContent:{'token = abc':[jwt,'dXNlcjpwYXNzd29yZA==']}};
+  res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:message.id,result}));
+ });
+ const mcp=await McpConnector.connect([{id:'remote',url:f.url,scope:'conversation',tools:[{name:'echo',readOnly:true}]}],undefined,false,{remote:token});
+ const result=await mcp.call('mcp_remote_echo',{},{scope:mcpScope('epoch','room'),deadline:Date.now()+10000}) as {content:{text:string}[];structuredContent:Record<string,string[]>};
+ assert.equal(result.content[0]!.text,docs);assert.equal(result.content[1]!.text,jwt);assert.equal(result.content[2]!.text,'mine [REDACTED]');
+ assert.deepEqual(result.structuredContent,{'token = abc':[jwt,'[REDACTED]']});
+});
+test('an unreadable saved token is reported by name and \"none\" removes it',async()=>{
+ const {tokenChanges}=await import(pathToFileURL(resolve('web/src/mcp-tokens.js')).href);
+ const card=(auth:string)=>({id:'remote',transport:'url',auth,url:'https://a.example.com/mcp',savedId:'remote',savedUrl:'https://a.example.com/mcp',token:'',clearToken:false});
+ const status={tokens:[],token_errors:['remote']};
+ assert.deepEqual(tokenChanges([card('none')],status),[{id:'remote',value:null}]);
+ assert.deepEqual(tokenChanges([card('token')],status),[]);
+ assert.deepEqual(tokenChanges([{...card('token'),token:'new-token-123456'}],status),[{id:'remote',value:'new-token-123456'}]);
+ assert.deepEqual(tokenChanges([card('none')],{tokens:[],token_errors:[]}),[]);
+});
+test('tool choices survive edits of the same server only; another server starts from the defaults',async()=>{
+ const {carryTools,resetTools,mergeCatalog}=await import(pathToFileURL(resolve('web/src/mcp-tools.js')).href);
+ const tools=[{name:'read',readOnlyHint:true},{name:'send'},{name:'extra'}];
+ const summary=(merged:{name:string;selected:boolean;readOnly:boolean;approval?:boolean}[])=>merged.map(t=>[t.name,t.selected,t.readOnly,t.approval]);
+ const card={url:'https://a.example.com/mcp',toolsOrigin:'https://a.example.com',catalog:[{name:'read',selected:true,readOnly:true},{name:'send',selected:true,readOnly:false,approval:true},{name:'gone',selected:true,readOnly:false}],remembered:{}};
+ const kept=[['read',true,true,undefined],['send',true,false,true],['extra',false,false,undefined]];
+ const defaults=[['read',false,false,undefined],['send',false,false,undefined],['extra',false,false,undefined]];
+ assert.deepEqual(summary(mergeCatalog(tools,card)),kept);
+ // The path or query changes: the same server, the choices follow, also over several edits.
+ const path={...card,...carryTools(card,'https://a.example.com/v2/mcp'),url:'https://a.example.com/v2/mcp'};
+ const again={...path,...carryTools(path,'https://a.example.com/v2/mcp?x=1'),url:'https://a.example.com/v2/mcp?x=1'};
+ assert.deepEqual(summary(mergeCatalog(tools,path)),kept);assert.deepEqual(summary(mergeCatalog(tools,again)),kept);
+ // The URL is half typed: nothing is lost, and typing the same server again brings the choices back.
+ const typing={...again,...carryTools(again,'https:/'),url:'https:/'};
+ const back={...typing,...carryTools(typing,'https://a.example.com/mcp'),url:'https://a.example.com/mcp'};
+ assert.deepEqual(summary(mergeCatalog(tools,back)),kept);
+ // Another origin: a tool with the same name is another tool, whatever was chosen before, and going back does not revive the old choices.
+ const other={...card,...carryTools(card,'https://b.example.com/mcp'),url:'https://b.example.com/mcp'};
+ assert.deepEqual(summary(mergeCatalog(tools,other)),defaults);
+ const home={...other,...carryTools(other,'https://a.example.com/mcp'),url:'https://a.example.com/mcp'};
+ assert.deepEqual(summary(mergeCatalog(tools,home)),defaults);
+ // The same host on another port or scheme is another origin as well.
+ for(const next of ['https://a.example.com:8443/mcp','http://127.0.0.1/mcp'])assert.deepEqual(summary(mergeCatalog(tools,{...card,...carryTools(card,next),url:next})),defaults);
+ // A changed connection method forgets everything.
+ assert.deepEqual(summary(mergeCatalog(tools,{...card,...resetTools,url:'https://a.example.com/mcp'})),defaults);
+ // A remembered choice that does not belong to the URL in the form is not used even if it is still stored.
+ assert.deepEqual(summary(mergeCatalog(tools,{...card,catalog:[],remembered:{read:{selected:true,readOnly:true}},toolsOrigin:'https://a.example.com',url:'https://z.example.com/mcp'})),defaults);
+});
+test('the screen sends the logout URL in canonical form',async()=>{
+ const {hrefOf}=await import(pathToFileURL(resolve('web/src/mcp-login.js')).href);
+ assert.equal(hrefOf('HTTPS://Mcp.Example.COM:443/mcp'),'https://mcp.example.com/mcp');assert.equal(hrefOf('http://127.0.0.1:8080'),'http://127.0.0.1:8080/');assert.equal(hrefOf('not a url'),'');
+});
+test('a card with an unreadable token file starts as "token", so only choosing "none" removes the file',async()=>{
+ const {initialAuth,tokenChanges}=await import(pathToFileURL(resolve('web/src/mcp-tokens.js')).href);
+ const status={tokens:['saved'],token_errors:['broken']};
+ const server=(id:string,extra:Record<string,unknown>={})=>({id,url:'https://a.example.com/mcp',...extra});
+ assert.equal(initialAuth(server('saved'),status),'token');assert.equal(initialAuth(server('broken'),status),'token');
+ assert.equal(initialAuth(server('plain'),status),'none');assert.equal(initialAuth(server('o',{oauth:true}),status),'oauth');assert.equal(initialAuth({id:'s',socket:'/x'},status),'none');
+ const card=(id:string,auth:string)=>({id,transport:'url',auth,url:'https://a.example.com/mcp',savedId:id,savedUrl:'https://a.example.com/mcp',token:'',clearToken:false});
+ // Saving anything with the cards as they load leaves the file alone.
+ assert.deepEqual(tokenChanges([card('broken',initialAuth(server('broken'),status)),card('saved',initialAuth(server('saved'),status))],status),[]);
+ assert.deepEqual(tokenChanges([card('broken','none')],status),[{id:'broken',value:null}]);
+});

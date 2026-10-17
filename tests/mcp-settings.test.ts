@@ -252,3 +252,45 @@ test('MCP settings reject ambiguous or unsafe remote addresses and misplaced tok
  writeFileSync(join(f.root,'state/mcp.json'),JSON.stringify({version:1,servers:[{...base,url:'https://example.com/mcp',socket:f.socket}]}),{mode:0o600});
  assert.throws(()=>readInstallation(f.root),/Invalid MCP configuration/);
 });
+test('one unreadable token file only affects its own server and a repaired file is used by the next retry without a save',{skip:process.platform==='win32'},async t=>{
+ const f=await fixture(t),good='artificial-token-good-0123456789',other='artificial-token-other-987654321';
+ const one=await remoteMini(t,[`Bearer ${good}`]),two=await remoteMini(t,[`Bearer ${other}`]);
+ const a={id:'one',url:one.url,scope:'conversation' as const,tools:[{name:'read',readOnly:true}]},b={id:'two',url:two.url,scope:'conversation' as const,tools:[{name:'read',readOnly:true}]};
+ const secrets=join(f.root,'secrets');
+ writeFileSync(join(secrets,'mcp-token-one'),good,{mode:0o600});writeFileSync(join(secrets,'mcp-token-two'),other,{mode:0o600});chmodSync(join(secrets,'mcp-token-two'),0o644);
+ writeFileSync(join(f.root,'config/niwa.json'),JSON.stringify({...readInstallation(f.root),mcpServers:[a,b]}));
+ const settings=await McpSettings.open(f.root,undefined,{initial:20,max:40});t.after(()=>settings.close());
+ let status=settings.status();
+ assert.deepEqual(status.connected,['one']);assert.deepEqual(status.failed.map(x=>x.id),['two']);assert.deepEqual(status.tokens,['one']);
+ // Fixing the file is enough: the retry reads credentials again.
+ chmodSync(join(secrets,'mcp-token-two'),0o600);
+ await until(()=>settings.status().connected.length===2);
+ status=settings.status();assert.deepEqual(status.connected.sort(),['one','two']);assert.deepEqual(status.failed,[]);assert.equal(two.auths.at(-1),`Bearer ${other}`);
+});
+test('saving ignores unreadable token files of other servers, replaces them when a token is given and refuses to keep one silently',{skip:process.platform==='win32'},async t=>{
+ const f=await fixture(t),token='artificial-token-save-0123456789',remote=await remoteMini(t,[`Bearer ${token}`]);
+ const config={id:'remote',url:remote.url,scope:'conversation' as const,tools:[{name:'read',readOnly:true}]},secrets=join(f.root,'secrets');
+ writeFileSync(join(secrets,'mcp-token-stray'),'x',{mode:0o600});chmodSync(join(secrets,'mcp-token-stray'),0o644);
+ const saved=await f.manager.save({revision:f.manager.status().revision,servers:[config],tokens:[{id:'remote',value:token}]});
+ assert.equal(saved.ok,true);assert.ok(!existsSync(join(secrets,'mcp-token-stray')));assert.equal(readFileSync(join(secrets,'mcp-token-remote'),'utf8'),token);
+ // A bad file for a connection that would keep its token blocks only that save.
+ chmodSync(join(secrets,'mcp-token-remote'),0o644);
+ const refused=await f.manager.save({revision:f.manager.status().revision,servers:[{...config,enabled:false}]});
+ assert.equal(refused.ok,false);assert.ok('message' in refused&&/remote/.test(refused.message));
+ const replaced=await f.manager.save({revision:f.manager.status().revision,servers:[config],tokens:[{id:'remote',value:token}]});
+ assert.equal(replaced.ok,true);assert.equal(statSync(join(secrets,'mcp-token-remote')).mode&0o777,0o600);
+});
+test('an unreadable token file is reported by id and can be removed by saving the connection without one',{skip:process.platform==='win32'},async t=>{
+ const f=await fixture(t),remote=await remoteMini(t,['']),secrets=join(f.root,'secrets');
+ const config={id:'remote',url:remote.url,scope:'conversation' as const,tools:[{name:'read',readOnly:true}]};
+ writeFileSync(join(secrets,'mcp-token-remote'),'artificial-token-0123456789',{mode:0o600});chmodSync(join(secrets,'mcp-token-remote'),0o644);
+ writeFileSync(join(f.root,'config/niwa.json'),JSON.stringify({...readInstallation(f.root),mcpServers:[config]}));
+ const settings=await McpSettings.open(f.root,undefined,{initial:60000,max:60000});t.after(()=>settings.close());
+ let status=settings.status();
+ assert.deepEqual(status.token_errors,['remote']);assert.deepEqual(status.tokens,[]);assert.doesNotMatch(JSON.stringify(status),/artificial-token/);
+ // Keeping it silently is refused; choosing "none" (a null token) removes the file.
+ const refused=await settings.save({revision:status.revision,servers:[config]});assert.equal(refused.ok,false);
+ const saved=await settings.save({revision:status.revision,servers:[config],tokens:[{id:'remote',value:null}]});
+ assert.equal(saved.ok,true);assert.ok(!existsSync(join(secrets,'mcp-token-remote')));
+ status=settings.status();assert.deepEqual(status.token_errors,[]);assert.deepEqual(status.connected,['remote']);
+});
