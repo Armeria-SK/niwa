@@ -3,8 +3,8 @@
 .setting-disclosure > summary::-webkit-details-marker { display:none; }
 .setting-name { font-weight:500; }
 .setting-value { margin-left:auto; color:var(--muted); text-align:right; }
-.setting-disclosure > summary > svg { flex-shrink:0; color:var(--muted); transition:transform .15s; }
-.setting-disclosure[open] > summary > svg { transform:rotate(90deg); }
+.setting-disclosure > summary > svg:not(.bot-avatar) { flex-shrink:0; color:var(--muted); transition:transform .15s; }
+.setting-disclosure[open] > summary > svg:not(.bot-avatar) { transform:rotate(90deg); }
 .setting-disclosure > summary:hover { background:var(--surface); }
 .setting-disclosure > summary:focus-visible { outline:2px solid var(--muted); outline-offset:2px; }
 .setting-content { padding:2px 14px 14px; display:grid; gap:12px; }

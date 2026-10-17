@@ -15,7 +15,6 @@ export function ModelRoutes() {
     void refresh(); return () => { active = false; clearTimeout(timer); };
   }, []);
   return <>
-    <div className="form-section-label">直近のモデル接続</div>
     <p className="field-hint">応答を試みた接続先です。<br />完了や接続成功を示すものではありません。</p>
     {routes.map(route => <div key={route.id}>
       <strong>{route.name}</strong>

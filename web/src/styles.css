@@ -85,7 +85,7 @@
   .reply-count { color: var(--muted); font-size: var(--fs-1); }
   .sidebar-bottom { border-top: 1px solid var(--border); padding-top: 10px; flex-shrink: 0; }
   .sidebar-bottom .nav-link { font-size: var(--fs-3); padding-top: 7px; padding-bottom: 7px; min-height: 43px; }
-  .bot-avatar { display: inline-block; flex-shrink: 0; vertical-align: middle; mask-mode: luminance; mask-position: center; mask-repeat: no-repeat; mask-size: contain; transform: scale(1.15); }
+  .bot-avatar { display: inline-block; flex-shrink: 0; vertical-align: middle; transform: scale(1.15); }
   .human-avatar { display: inline-flex; justify-content: center; align-items: center; flex-shrink: 0; color: var(--muted); }
   .avatar-button { flex-shrink: 0; padding: 0; width: fit-content; height: fit-content; display: inline-flex; position: relative; align-items: center; justify-content: center; border-radius: 50%; }
   .avatar-button:hover { background: #eaf0e450; }
@@ -185,7 +185,7 @@
   .member-list-row > span:not(.bot-avatar) { display: flex; flex-direction: column; gap: 7px; flex: 1; min-width: 0; }
   .member-list-row strong { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--fs-3); font-weight: 500; }
   .member-list-row small { font-size: var(--fs-1); color: var(--muted); }
-  .member-list-row > svg { color: var(--faint); width: 13px; }
+  .member-list-row > svg:not(.bot-avatar) { color: var(--faint); width: 13px; }
   .member-list-row .status-label { font-size: var(--fs-1); }
   .role-label { font-size: var(--fs-1); color: var(--muted); font-weight: 400; border: 1px solid var(--border-strong); border-radius: var(--r-s); padding: 1px 3px; }
   .member-detail { border-left: 1px solid var(--border); padding-left: 35px; min-width: 0; }
@@ -338,6 +338,26 @@
   .model-choice > .inline-actions { margin-top: 4px; }
   .connection-state { display: flex; align-items: center; gap: 7px; color: var(--faint); font-size: var(--fs-1); }
   .connection-state .status-dot { background: var(--border-strong); }
+  .model-settings { display: flex; flex-direction: column; gap: 44px; }
+  .connection-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+  .connection-card { border: 1px solid var(--border); border-radius: var(--r-l); background: var(--paper); transition: border-color .15s ease; }
+  .connection-card:hover, .connection-card[open] { border-color: var(--border-strong); }
+  .connection-card[open] { grid-column: 1 / -1; }
+  .connection-card > summary { list-style: none; cursor: pointer; display: grid; gap: 6px; padding: 16px 18px; border-radius: var(--r-l); }
+  .connection-card > summary::-webkit-details-marker { display: none; }
+  .connection-card-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--fs-3); }
+  .connection-card-title strong { font-weight: 500; }
+  .connection-card-summary { font-size: var(--fs-1); color: var(--muted); line-height: 1.7; }
+  .connection-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 4px; }
+  .connection-card-toggle::after { content: '設定を開く'; font-size: var(--fs-1); color: var(--accent-text); }
+  .connection-card[open] .connection-card-toggle::after { content: '閉じる'; }
+  .connection-card-body { display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 20px; border-top: 1px solid var(--border); }
+  .connection-subgroup { display: flex; flex-direction: column; gap: 12px; }
+  .attention-chip.muted { background: var(--canvas); color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+  .model-settings .model-choice { border: 1px solid var(--border); border-radius: var(--r-l); background: var(--paper); padding: 16px 18px; margin-bottom: 0; }
+  .settings-more > summary { width: fit-content; cursor: pointer; padding: 4px 0; font-size: var(--fs-2); color: var(--muted); }
+  .settings-more > summary:hover { color: var(--accent-text); }
+  .settings-more[open] > summary { margin-bottom: 12px; }
   .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 10px 0; position: relative; cursor: pointer; }
   .switch-row > span:first-child { flex: 1; display: flex; flex-direction: column; gap: 9px; }
   .switch-row strong { font-weight: 500; font-size: var(--fs-2); line-height: 1.6; }
@@ -492,7 +512,7 @@
   .today-usage dt { font-size: var(--fs-1); color: var(--muted); }
   .today-usage dd { margin: 0; font-size: var(--fs-3); font-variant-numeric: tabular-nums; }
   .today-garden strong { font-size: var(--fs-2); font-weight: 500; }
-  .today-garden button > svg { color: var(--faint); flex-shrink: 0; }
+  .today-garden button > svg:not(.bot-avatar) { color: var(--faint); flex-shrink: 0; }
   .prose { line-height: 1.95; font-size: var(--fs-2); color: var(--muted); }
   .prose p + p { margin-top: 18px; }
   .appearance-modal { width: min(440px, calc(100vw - 30px)); }
@@ -576,7 +596,7 @@
     .members-layout { grid-template-columns: 26% minmax(0, 1fr); gap: 20px; }
     .member-list-row { flex-wrap: wrap; padding: 12px 8px; gap: 9px; }
     .member-list-row .bot-avatar { width: 45px !important; height: 45px !important; }
-    .member-list-row > svg { display: none; }
+    .member-list-row > svg:not(.bot-avatar) { display: none; }
     .member-list-row strong { font-size: var(--fs-2); }
     .member-list-row .status-label { display: none; }
     .member-detail { padding-left: 22px; }
@@ -713,6 +733,8 @@
     .settings-section > h2 { font-size: var(--fs-4); }
     .settings-section > p:first-of-type { font-size: var(--fs-1); }
     .settings-section textarea { font-size: var(--fs-2); }
+    .connection-grid { grid-template-columns: 1fr; }
+    .model-settings { gap: 36px; }
     .settings-save { gap: 5px; flex-wrap: wrap; }
     .settings-save .saved-inline { width: 100%; }
     .pause-setting { flex-direction: column; align-items: flex-start; padding: 15px; }
@@ -863,7 +885,7 @@
   }
 }
 
-/* Animate the avatar masks without changing layout or avatar scale. */
+/* Animate the avatars without changing layout or avatar scale. */
 .bot-avatar[data-motion='float'] { animation: avatar-float 3.2s ease-in-out infinite; }
 .bot-avatar[data-motion='sway'] { animation: avatar-sway 3.6s ease-in-out infinite; }
 .bot-avatar[data-motion='pulse'] { animation: avatar-pulse 2.8s ease-in-out infinite; }
@@ -871,7 +893,19 @@
 @keyframes avatar-sway { 0%, 100% { transform: rotate(-6deg) scale(1.15); } 50% { transform: rotate(6deg) scale(1.15); } }
 @keyframes avatar-pulse { 0%, 100% { transform: scale(1.15); } 50% { transform: scale(1.2, 1.1); } }
 .motion-picker { display: flex; flex-wrap: wrap; gap: 5px; }
-@media (prefers-reduced-motion: reduce) { .bot-avatar { animation: none !important; } }
+/* State motions: working hops, waiting tilts its head, sleeping breathes with closed eyes. Eyes blink unless the motion is 'none'. */
+.bot-avatar { overflow: visible; }
+.bot-avatar[data-motion='work'] { animation: avatar-work 1.15s ease-in-out infinite; }
+.bot-avatar[data-motion='wait'] { animation: avatar-wait 4.2s ease-in-out infinite; }
+.bot-avatar[data-motion='sleep'] { animation: avatar-breathe 4.8s ease-in-out infinite; }
+@keyframes avatar-work { 0%, 100% { transform: translateY(0) scale(1.15); } 35% { transform: translateY(-3px) scale(1.13, 1.17); } 60% { transform: translateY(0) scale(1.19, 1.11); } 80% { transform: translateY(0) scale(1.15); } }
+@keyframes avatar-wait { 0%, 12%, 88%, 100% { transform: rotate(0) scale(1.15); } 28%, 72% { transform: rotate(-11deg) scale(1.15); } }
+@keyframes avatar-breathe { 0%, 100% { transform: scale(1.15); } 50% { transform: scale(1.18, 1.12); } }
+.bot-avatar .bot-eye { transform-box: fill-box; transform-origin: center; }
+.bot-avatar:not([data-motion='none']):not([data-motion='sleep']) .bot-eye { animation: avatar-blink var(--blink-period, 5s) linear var(--blink-delay, 0s) infinite; }
+.bot-avatar[data-motion='sleep'] .bot-eye { transform: scaleY(.14); }
+@keyframes avatar-blink { 0%, 91%, 100% { transform: scaleY(1); } 94% { transform: scaleY(.1); } 97% { transform: scaleY(1); } }
+@media (prefers-reduced-motion: reduce) { .bot-avatar, .bot-avatar .bot-eye { animation: none !important; } }
 .login-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: var(--bg, var(--canvas)); } .login-page > form { width: min(100%, 420px); } .login-page h1 { font-size: var(--fs-5); }
 
 

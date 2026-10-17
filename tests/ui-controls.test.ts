@@ -19,6 +19,14 @@ test('model setup notice appears only when no saved connection can answer the Bo
  assert.match(modelSetupNotice(['openai_subscription'],kanade).title,/カナデのモデル（Claude（Anthropic API））/);
  assert.equal(modelSetupNotice(['anthropic','local_llm'],kanade),null);assert.equal(modelSetupNotice(['anthropic'],undefined),null);
 });
+test('model choices are grouped by connection, with the experimental ChatGPT route last and the order inside each group kept',async()=>{
+ const {groupByProvider}=await ui('providers.js');
+ const items=[{provider:'openai_subscription',model:'gpt-6-astra'},{provider:'openai_compatible',model:'b'},{provider:'anthropic',model:'claude-opus-5-5'},{provider:'openai_compatible',model:'a'},{provider:'someday',model:'x'}];
+ const groups=groupByProvider(items);
+ assert.deepEqual(groups.map((group:{label:string})=>group.label),['Claude（Anthropic API）','OpenAI互換API','Codex','someday']);
+ assert.deepEqual(groups[1].items.map((item:{model:string})=>item.model),['b','a']);
+ assert.deepEqual(groupByProvider([]),[]);
+});
 test('memory source names the speaker and room, marks private conversations and survives a deleted room',async()=>{
  const {memorySource}=await ui('memory-source.js');
  const shared=memorySource({created_at:'2026-09-09T08:53:00.000Z',source:{room_title:'はじめての共同制作',private:false,excerpt:'日時は第2土曜です',author_id:'administrator',author_name:null,said_at:'2026-09-09T08:52:00.000Z'}});
@@ -196,4 +204,24 @@ test('reading a Bot file has its own URL and says what it makes and why a file c
  assert.ok(all.every((line:string)=>line.split('。').length===2),'one sentence per line');
  assert.equal(hiddenNote(0),'');assert.equal(hiddenNote(2),'秘密らしい文字を2か所伏せました。伏せたまま迎えます。');
  assert.equal(limitNote(2,3),'');assert.match(limitNote(3,3),/^迎えられるBotの上限（3体）に達しています。/);
+});
+test('every Bot shape splits into a body and two eyes, so the eyes can blink and close while sleeping',async()=>{
+ const {readFileSync}=await import('node:fs');const {avatarParts}=await ui('avatar.js');const {SHAPES}=await ui('data.js');
+ for(const shape of SHAPES as {id:string}[]){
+  const parts=avatarParts(readFileSync(resolve(`web/src/avatars/avatar-${shape.id}.svg`),'utf8'));
+  assert.match(parts.body,/^M[\s\S]+Z$/,shape.id);assert.equal(parts.eyes.length,2,shape.id);for(const eye of parts.eyes)assert.match(eye,/^M[\s\S]+Z$/,shape.id);
+ }
+ assert.deepEqual(avatarParts('<svg/>'),{body:'',eyes:[]});
+});
+test('Bot icons move by state: working hops, waiting tilts, sleeping closes its eyes, and a still choice stays still',async()=>{
+ const {stateMotion,avatarMotion,blinkTiming}=await ui('avatar.js');
+ assert.deepEqual(['running','waiting','sleeping','paused','idle',undefined].map(stateMotion),['work','wait','sleep','idle','idle','idle']);
+ assert.equal(avatarMotion({runtime:'work'}),'work');assert.equal(avatarMotion({runtime:'wait'}),'wait');assert.equal(avatarMotion({}),'idle');
+ assert.equal(avatarMotion({runtime:'work',paused:true}),'idle');assert.equal(avatarMotion({runtime:'celebrate'}),'celebrate');
+ assert.equal(avatarMotion({runtime:'work',sleeping:true}),'sleep');assert.equal(avatarMotion({preference:'none',sleeping:true}),'sleep');
+ assert.equal(avatarMotion({preference:'none',runtime:'celebrate'}),'none');assert.equal(avatarMotion({preference:'float',runtime:'celebrate'}),'float');assert.equal(avatarMotion({preference:'float',paused:true}),'idle');
+ assert.equal(avatarMotion({preference:'auto',preview:true}),'work');assert.equal(avatarMotion({preference:'pulse',preview:true}),'pulse');
+ const one=blinkTiming('bot-1'),again=blinkTiming('bot-1'),other=blinkTiming('bot-2');
+ assert.deepEqual(one,again);assert.notDeepEqual(one,other);
+ for(const timing of [one,other,blinkTiming(''),blinkTiming(undefined)]){assert.ok(timing.period>=4.2&&timing.period<=6.6);assert.ok(timing.delay<=0&&timing.delay>-6);}
 });
