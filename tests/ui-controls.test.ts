@@ -40,3 +40,13 @@ test('unread counts start from what exists, grow with new messages and clear whe
  const after=markSeen(seen,later);assert.equal(unreadOf(later,after),0);assert.equal(markSeen(after,later),after);
  assert.equal(startSeen(rooms,after),after);assert.equal(unreadOf(later,null),0);
 });
+test('your-turn list puts approvals first, hides answered questions and never lists a question twice',async()=>{
+ const {attentionItems}=await ui('attention.js');
+ const activities=[{id:'t1',status:'approval',state:'waiting_user',title:'送信の承認',updated_at:10},{id:'t2',status:'waiting',state:'waiting_user',title:'文章',updated_at:20},
+  {id:'t3',status:'waiting',state:'waiting_user',title:'止まった仕事',reason:'確認後に再開してください。',updated_at:30},{id:'t4',status:'running',state:'running',title:'答え済み',updated_at:40}];
+ const questions=[{id:'q1',title:'参加費は無料？',detail:'参加費は無料？',activity:'t2',created_at:'2026-10-17T00:00:00Z'},{id:'q2',title:'答えた質問',activity:'t4'},{id:'q3',title:'確認済み',seen:1}];
+ const items=attentionItems({activities,questions,decisions:[{id:'d1',title:'日時は第2土曜'},{id:'d2',title:'見た',seen:1}]});
+ assert.deepEqual(items.map((i:{kind:string;id:string})=>[i.kind,i.id]),[['approval','t1'],['question','q1'],['stopped','t3'],['decisions','decisions']]);
+ assert.equal(items[1].detail,'');assert.deepEqual(items[3].ids,['d1']);
+ assert.deepEqual(attentionItems({}),[]);
+});

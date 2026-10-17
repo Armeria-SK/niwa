@@ -243,6 +243,26 @@
   .appearance-editor .form-actions { padding-top: 0; }
   .activity-page { padding-right: max(48px, 7%); }
   .activity-tabs { gap: 10px; padding-bottom: 21px; border-bottom: 1px solid var(--border); margin-bottom: 0; }
+  .attention { margin-bottom: 18px; flex-shrink: 0; }
+  .attention h2 { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 500; margin-bottom: 10px; }
+  .attention-count { min-width: 22px; height: 22px; padding-inline: 7px; border-radius: 11px; background: #b68843; color: #fff; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
+  .attention-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+  .attention-item { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--paper); }
+  .attention-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); justify-self: center; }
+  .attention-body { min-width: 0; }
+  .attention-top { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  .attention-body strong { display: block; font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+  .attention-body p { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attention-chip { font-size: 11px; padding: 1px 8px; border-radius: 999px; font-weight: 500; }
+  .attention-chip.warn { background: #f6ead3; color: #8a5a12; }
+  .attention-chip.info { background: #dfeaf1; color: #34627a; }
+  .attention-chip.danger { background: #f6e1dd; color: #9a3f37; }
+  .attention-chip.ok { background: #e1efe4; color: #36704a; }
+  .attention-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+  .attention-actions .button { min-height: 34px; padding: 6px 12px; font-size: 12px; }
+  .attention-empty { font-size: 13px; color: var(--muted); padding: 10px 2px; }
+  .attention-list.expanded { max-height: 45vh; overflow-y: auto; scrollbar-width: thin; }
+  .attention-more { margin-top: 8px; font-size: 13px; }
   .activity-tabs button { padding: 8px 16px; }
   .segment-count { margin-left: 8px; font-size: 11px; color: #859871; }
   .activity-list { width: 100%; }
@@ -546,6 +566,8 @@
     .switch-row small { font-size: 10px; }
     .activity-page .page-heading { flex-wrap: wrap; }
     .activity-tabs { gap: 3px; }
+    .attention-item { grid-template-columns: 32px minmax(0, 1fr); }
+    .attention-actions { grid-column: 1 / -1; justify-content: flex-start; }
     .activity-tabs button { padding-inline: 10px; font-size: 12px; }
     .activity-row { gap: 12px; padding: 24px 0; }
     .activity-row > .bot-avatar { width: 45px !important; height: 45px !important; }
