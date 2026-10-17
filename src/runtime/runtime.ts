@@ -53,6 +53,8 @@ import { commonRulesDefaultSchema, commonRulesGeneralDefaultSchema } from '../st
 import { THEME_IDS, themeSchema } from '../storage/theme-schema.ts';
 import { memoryConflictSchema } from '../storage/memory-conflict-schema.ts';
 import { findMemoryConflicts } from './memory-conflicts.ts';
+import { nightSchema } from '../storage/night-schema.ts';
+import { NightPlans } from './night-plans.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
 import { backupEnabledSchema } from '../storage/backup-enabled-schema.ts';
 import { backupTimeSchema } from '../storage/backup-time-schema.ts';
@@ -99,6 +101,7 @@ export class Runtime {
   readonly workareas: Workareas;
   readonly tasks: Tasks;
   readonly autonomousWakes: AutonomousWakes;
+  readonly nights: NightPlans;
   readonly artifactVersions: ArtifactVersions;
   readonly schedules: Schedules;
   readonly providerLimits: ProviderLimits;
@@ -112,7 +115,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -134,7 +137,8 @@ export class Runtime {
     });
     this.workareas = new Workareas(this.#db,this,actor=>this.#principal(actor));
     this.initiatives = new Initiatives(this.#db,this,actor=>this.#principal(actor));
-    this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id,this.initiatives);
+    this.nights = new NightPlans(this.#db, actor => this.#admin(actor));
+    this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id,this.initiatives,now=>this.nights.gate(now));
     this.quality = new ArtifactQuality(this.#db,this,actor=>this.#principal(actor));
     this.artifactVersions = new ArtifactVersions(this.#db,this,actor=>this.#principal(actor));
     this.schedules = new Schedules(this.#db, this.tasks, actor => this.#admin(actor), (actor, agentId, roomId) => {

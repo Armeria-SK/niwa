@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { AttentionList } from '../AttentionList.jsx';
+import { MorningBasket, NightPreview, useNight } from '../NightPlan.jsx';
 import { Avatar, StatusLabel, Sentences } from '../components.jsx';
 import { documentName, kindLabel, qualityLabel } from '../artifact-display.js';
 import { DAY, dayLabel, todayDigest } from '../today.js';
@@ -23,6 +24,7 @@ export function Today({ onConflicts, notice, paused, onPause, attention, members
     api(`/usage?since=${now - DAY}`).then(result => { if (active) setUsage(result); }).catch(() => { if (active) setUsage({ error: true }); });
     return () => { active = false; };
   }, [now, finished]);
+  const [night, setNight] = useNight();
   const awake = members.filter(member => member.status !== 'sleeping'), sleeping = members.filter(member => member.status === 'sleeping');
   return <main className="work-area today-page" id="main-content" tabIndex={-1}>
     <div className="page-heading"><div><span className="eyebrow">{dayLabel(now)}</span><h1>きょう</h1><p><Sentences>{digest.summary}</Sentences></p></div>{paused ? <button className="button secondary" onClick={onPause}><PlayIcon size={17} />活動を再開</button> : null}</div>
@@ -32,6 +34,8 @@ export function Today({ onConflicts, notice, paused, onPause, attention, members
       {threads.length ? null : <section className="today-card today-start"><h2>最初の会話を始めましょう</h2><p>リーダーに、名前や好きなことを話してみてください。<br />話した内容から、少しずつ記憶が育ちます。</p><button className="button primary" onClick={onNewThread}><ChatIcon size={17} />会話を始める</button></section>}
       <div className="today-grid">
         <div className="today-main">
+          {night ? <NightPreview key={night.night.key} state={night} onChange={setNight} /> : null}
+          {night ? <MorningBasket state={night} artifacts={artifacts} memberMap={memberMap} onOpenTask={onOpenTask} onArtifact={onArtifact} /> : null}
           <AttentionList items={items} members={memberMap} onOpen={onOpenTask} onThread={onThread} onRead={onRead} onRecap={onRecap} onConflicts={onConflicts} />
           <section className="today-card" aria-labelledby="today-made">
             <h2 id="today-made">直近24時間にできたもの</h2>

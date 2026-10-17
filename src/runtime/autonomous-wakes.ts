@@ -12,7 +12,9 @@ const PROMPT = '予定によらない自発活動の機会です。自分の人�
 /** Persistent wake opportunities, not user schedules. All work still uses Tasks/TurnRunner. */
 export class AutonomousWakes {
   constructor(private db: DatabaseSync, private tasks: Tasks, private admin: (actor: Actor) => void,
-    private createRoom: (actor: Actor) => string, private initiatives: Initiatives) {}
+    private createRoom: (actor: Actor) => string, private initiatives: Initiatives,
+    // At night, unattended work waits for the previewed plan and stops at its usage limit (see NightPlans).
+    private gate: (now: number) => string | null = () => null) {}
 
   configure(actor: Actor, agentId: string, enabled: boolean) {
     this.admin(actor);
@@ -32,7 +34,7 @@ export class AutonomousWakes {
   }
 
   /** `ready` lists providers with a saved connection; omitted, connections are not checked. */
-  list(actor: Actor, ready?: ReadonlySet<string>) {
+  list(actor: Actor, ready?: ReadonlySet<string>, now = Date.now()) {
     this.admin(actor);
     const busy=this.busyAgents(this.tasks.autonomyBlocked(actor));
     const settings = this.db.prepare('SELECT paused,autonomous FROM settings WHERE id=1').get()!;
@@ -41,13 +43,14 @@ export class AutonomousWakes {
     const roomBlocked = !shared && !!this.db.prepare("SELECT 1 FROM rooms WHERE visibility='shared' LIMIT 1").get();
     const gate = Number(this.db.prepare('SELECT coalesce(max(last_started_at),0)+? AS due FROM autonomous_wakes').get(MINUTE)!.due);
     const ongoing=this.initiatives.enabled()?this.initiatives.list(actor):[];
+    const closed = this.gate(now);
     return this.db.prepare(`SELECT a.id AS agent_id,a.name,a.status,coalesce((SELECT enabled FROM agent_autonomy WHERE agent_id=a.id),1) AS enabled,a.provider,w.next_at,w.reason,w.model_calls,w.budget_reset_at,w.task_id,t.state,t.provider_retry_at
       FROM agents a LEFT JOIN autonomous_wakes w ON w.agent_id=a.id LEFT JOIN tasks t ON t.id=w.task_id
       WHERE a.id NOT IN (SELECT id FROM deleted_agents) ORDER BY a.rowid`).all().map(row => {const budgetWait=Number(row.model_calls)>=24&&Number(row.budget_reset_at)>Date.now();const blocked=roomBlocked&&!ongoing.some(i=>i.owner_id===row.agent_id&&i.state==='active'&&!this.db.prepare('SELECT 1 FROM room_preferences WHERE room_id=? AND archived=1').get(i.room_id));return ({
         enabled: row.enabled === 1, agent_id: row.agent_id, name: row.name, task_id: row.task_id, model_calls: row.model_calls ?? 0, budget_reset_at: row.budget_reset_at,
-        reason: settings.paused ? '全体停止中' : !settings.autonomous ? '自発活動オフ' : !row.enabled ? 'このBotの自発活動オフ' : row.status !== 'active' ? '休眠中' : ready && !ready.has(String(row.provider)) ? 'モデルの接続がありません'
+        reason: settings.paused ? '全体停止中' : !settings.autonomous ? '自発活動オフ' : !row.enabled ? 'このBotの自発活動オフ' : row.status !== 'active' ? '休眠中' : closed ? closed : ready && !ready.has(String(row.provider)) ? 'モデルの接続がありません'
           : blocked ? '利用できる共有会話がありません' : busy.has(String(row.agent_id)) ? (row.task_id ? '前回の活動を継続・待機中' : '既存の仕事を優先') : budgetWait ? '自発活動の利用枠待ち' : row.reason ?? '起動判定の準備中',
-        next_at: settings.paused || !settings.autonomous || !row.enabled || row.status !== 'active' || (ready && !ready.has(String(row.provider))) || blocked ? null
+        next_at: settings.paused || !settings.autonomous || !row.enabled || row.status !== 'active' || closed || (ready && !ready.has(String(row.provider))) || blocked ? null
           : busy.has(String(row.agent_id)) ? (row.state === 'waiting_provider' ? row.provider_retry_at : null) : Math.max(Number(row.next_at ?? Date.now()+MINUTE),gate,budgetWait?Number(row.budget_reset_at):0),
       });});
   }
@@ -85,7 +88,7 @@ export class AutonomousWakes {
       for (const id of blockedTasks) this.db.prepare('UPDATE autonomous_wakes SET task_id=NULL WHERE task_id=?').run(id);
       if(this.initiatives.enabled())this.db.exec("UPDATE autonomous_wakes SET task_id=NULL WHERE task_id IN (SELECT id FROM tasks WHERE paused=1 AND state<>'running')");
       const settings = this.db.prepare('SELECT paused,autonomous FROM settings WHERE id=1').get()!;
-      if (settings.paused || !settings.autonomous) return;
+      if (settings.paused || !settings.autonomous || this.gate(now)) return;
       this.db.prepare(`INSERT OR IGNORE INTO autonomous_wakes(agent_id,next_at,reason)
         SELECT id,?,'予定なしの起動機会を待機中' FROM agents WHERE status='active' AND id NOT IN (SELECT id FROM deleted_agents)`).run(now+MINUTE);
       this.initiatives.observe(actor,now);

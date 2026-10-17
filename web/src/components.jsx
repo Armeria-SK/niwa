@@ -87,7 +87,7 @@ export function AppearanceEditor({ member, onSave, onCancel }) {
 }
 
 export function Switch({ checked, onChange, label, description, disabled = false }) {
-  return <label className="switch-row"><span><strong>{label}</strong>{description ? <small>{description}</small> : null}</span><input type="checkbox" role="switch" disabled={disabled} checked={checked} onChange={e => onChange(e.target.checked)} /><span className="switch-track" aria-hidden="true" /></label>;
+  return <label className="switch-row"><span><strong>{label}</strong>{description ? <small><Sentences>{description}</Sentences></small> : null}</span><input type="checkbox" role="switch" disabled={disabled} checked={checked} onChange={e => onChange(e.target.checked)} /><span className="switch-track" aria-hidden="true" /></label>;
 }
 
 export function StatusLabel({ member, paused = false, showDescription = true }) {
