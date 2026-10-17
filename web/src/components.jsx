@@ -36,6 +36,10 @@ export function Segmented({ label, options, value, onChange, className = '' }) {
   })}</div>;
 }
 
+export function SetupNotice({ notice, onConnect }) {
+  return <div className="inline-notice setup-notice" role="status"><InfoIcon size={20} /><div><strong>{notice.title}</strong><p>{notice.body}</p><button type="button" className="button primary" onClick={onConnect}>モデルをつなぐ</button></div></div>;
+}
+
 export function EmptyState({ icon: Icon = InfoIcon, title, children, action }) {
   return <div className="empty-state"><Icon size={34} weight="light" /><h3>{title}</h3>{children ? <p>{children}</p> : null}{action}</div>;
 }

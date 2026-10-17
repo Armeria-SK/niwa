@@ -12,8 +12,10 @@ import { ModelRoutes } from '../ModelRoutes.jsx';
 import { McpConnections } from '../McpConnections.jsx';
 import { CheckIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 
+const SETTINGS_TABS = ['theme', 'rules', 'models', 'mcp', 'activity', 'backup'];
+
 export function Settings({ onPreviewTheme, settings, onSave, paused, onPause, members }) {
-  const [tab, setTab] = useState(() => window.location.hash === '#settings/mcp' ? 'mcp' : 'theme'); // The OAuth return page links here.
+  const [tab, setTab] = useState(() => { const linked = window.location.hash.split('/')[1]; return SETTINGS_TABS.includes(linked) ? linked : 'theme'; }); // The OAuth return page and setup notices link here.
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
   const [touched, setTouched] = useState(() => new Set());

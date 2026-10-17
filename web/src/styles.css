@@ -259,6 +259,11 @@
   .inline-notice { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; background: #f4f2e7; border-radius: 9px; color: #9b8558; margin-bottom: 22px; }
   .inline-notice strong { display: block; font-size: 12px; font-weight: 500; margin-bottom: 7px; }
   .inline-notice p { color: #a39674; font-size: 11px; line-height: 1.8; }
+  .setup-notice { color: var(--text); background: var(--selected); }
+  .setup-notice strong { font-size: 15px; margin-bottom: 4px; }
+  .setup-notice p { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  .conversation-notice { padding: 16px 32px 0; flex-shrink: 0; }
+  .conversation-notice .inline-notice { margin-bottom: 0; }
   .approval-explanation { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #8a987a; padding: 20px 0 0; }
   .approval-facts { margin: 0; }
   .approval-facts > div { padding: 15px 0; border-bottom: 1px solid var(--border); }

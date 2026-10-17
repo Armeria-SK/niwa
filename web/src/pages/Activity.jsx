@@ -13,7 +13,7 @@ import { Schedules } from './Schedules.jsx';
 
 const openStatuses = ['running', 'waiting', 'paused', 'failed'];
 const eventLabels = { queued: '実行待ち', running: '実行を開始', completed: '完了', failed: '失敗', cancelled: '中止', waiting_child: '仲間の結果を待機', waiting_user: '確認・回答を待機', waiting_provider: '接続・モデルの回復を待機', paused: '一時停止', resumed: '再開', instructed: '追加指示を保存', retried: '再試行' };
-export function Activity({ onDeleteArtifact, activities, members, paused, onPause, onDecide, onThread, onArtifact, onControl, updates, seen, onRead, artifacts, filter, onFilter, schedules, threads, onScheduleSave, onScheduleToggle, onScheduleDelete, onScheduleToken }) {
+export function Activity({ notice, onDeleteArtifact, activities, members, paused, onPause, onDecide, onThread, onArtifact, onControl, updates, seen, onRead, artifacts, filter, onFilter, schedules, threads, onScheduleSave, onScheduleToggle, onScheduleDelete, onScheduleToken }) {
   const [detail, setDetail] = useState(null);const [fromThread,setFromThread]=useState(false);
   const [approval, setApproval] = useState(null);
   const running = activities.filter(item => item.business && item.status !== 'approval');
@@ -26,6 +26,7 @@ export function Activity({ onDeleteArtifact, activities, members, paused, onPaus
   function openActivity(id) { const task = activities.find(item => item.id === id); if (!task) return; if (task.status === 'approval') setApproval(id); else setDetail(id); }
   return <main className="work-area activity-page" id="main-content" tabIndex={-1}>
     <div className="page-heading"><div><span className="eyebrow">いま、どんなことをしている？</span><h1>活動</h1><p>決まったこと、進めている主な仕事、承認が必要なこと。</p></div><button className="button secondary" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? '活動を再開' : '全体を一時停止'}</button></div>
+    {notice}
     {paused ? <div className="inline-notice"><PauseIcon size={18} /><p>Botの活動を一時停止しています。個別に再開した仕事も、全体を再開するまで待機します。</p></div> : null}
     <Segmented label="活動の表示" className="activity-tabs" options={[{ value: 'recap', label: 'できごと', count: updates.filter(item => !seen[item.id]).length }, { value: 'running', label: '仕事', count: workGroups.length }, { value: 'approval', label: '承認待ち', count: pending.length }, { value: 'artifacts', label: '成果物', count: artifactGroups(artifacts).length }, { value: 'schedules', label: '定期実行' }]} value={filter} onChange={onFilter} />
     <div className="activity-scroll" key={filter}>

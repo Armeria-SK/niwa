@@ -10,3 +10,10 @@ test('artifact categories preserve Japanese names, unite aliases and group unkno
 test('work counts distinguish assignments from purposes and never call paused work running',async()=>{
  const {workCounts}=await ui('work-display.js');const tasks=[{state:'running'},{state:'running',paused:1},{state:'queued'},{state:'waiting_child'},{state:'completed'},{state:'cancelled'}];assert.equal(workCounts(tasks),'実行中1作業・待機2作業・停止1作業・終了2作業');assert.equal(workCounts(tasks,true),'停止4作業・終了2作業');
 });
+test('model setup notice appears only when no saved connection can answer the leader',async()=>{
+ const {modelSetupNotice}=await ui('providers.js');
+ assert.equal(modelSetupNotice(null,'anthropic'),null);
+ assert.match(modelSetupNotice([],'openai_subscription').title,/まずモデルをつなぎましょう/);
+ assert.match(modelSetupNotice(['anthropic'],'openai_subscription').title,/リーダーのモデル（Codex）/);
+ assert.equal(modelSetupNotice(['anthropic','local_llm'],'anthropic'),null);
+});
