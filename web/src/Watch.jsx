@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { api } from './api.js';
 import { Sentences } from './components.jsx';
-import { PauseIcon } from './icons.jsx';
 import { agoLabel, limitLabel, nightLine, outcomeLabel, toolLabel } from './watch.js';
 
-/** 記録の「見張り」。いま走っている仕事・外とのやりとり・承認待ち・今日の使用量を読むだけの画面。操作は全体の一時停止だけ。 */
-export function Watch({ paused, onPause }) {
+/** 記録の「見張り」。いま走っている仕事・外とのやりとり・承認待ち・今日の使用量を読むだけの画面。全体の一時停止は、ページの見出しのボタンで行う。 */
+export function Watch({ paused }) {
   const [state, setState] = useState(null), [error, setError] = useState('');
   useEffect(() => {
     let active = true, timer;
@@ -23,8 +22,7 @@ export function Watch({ paused, onPause }) {
   }, [paused]);
   const now = state?.checked_at ?? Date.now();
   return <section className="watch-view" aria-labelledby="watch-heading">
-    <div className="section-toolbar"><div><h2 id="watch-heading">見張り</h2><p className="muted"><Sentences>{`いま動いていることと、外に出たことを、読むだけで確かめる画面です。${state ? `${new Date(state.checked_at).toLocaleTimeString('ja-JP')}の時点で、5秒ごとに読み直します。` : ''}`}</Sentences></p></div>
-      <button type="button" className="button secondary" disabled={paused} onClick={onPause}><PauseIcon size={17} />{paused ? '一時停止しています' : '全体を一時停止'}</button></div>
+    <div className="section-toolbar"><div><h2 id="watch-heading">見張り</h2><p className="muted"><Sentences>{`いま動いていることと、外に出たことを、読むだけで確かめる画面です。${state ? `${new Date(state.checked_at).toLocaleTimeString('ja-JP')}の時点で、5秒ごとに読み直します。` : ''}`}</Sentences></p></div></div>
     {error ? <p role="alert">{error}</p> : null}
     {!state ? <p role="status">読み込んでいます…</p> : <div className="watch-grid">
       <section className="today-card" aria-labelledby="watch-running"><h3 id="watch-running">いま走っている仕事（{state.running.length}件）</h3>
