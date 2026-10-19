@@ -733,6 +733,14 @@ export class Runtime {
       .run(roomId, Number(next.pinned), Number(next.archived));
     if (next.archived) this.tasks.suspendAutonomous(actor);
   }
+  /** Only the administrator renames a room; the new title shows wherever the room is listed. */
+  renameRoom(actor: Actor, roomId: string, title: string): Room {
+    this.#admin(actor); this.#room(actor, roomId);
+    const next = text(title, 200).trim();
+    check(next.length > 0, 'invalid', 'Room title is empty');
+    this.#db.prepare('UPDATE rooms SET title=? WHERE id=?').run(next, roomId);
+    return this.#room(actor, roomId);
+  }
   #room(actor: Actor, id: string): Room {
     const principal = this.#principal(actor);
     check(!this.#db.prepare("SELECT 1 FROM deleted_content WHERE kind='room' AND id=?").get(id), 'not_found', 'Room deleted');
@@ -883,12 +891,13 @@ export class Runtime {
       return {revision,changed:true};
     });
   }
-  messageSummary(actor: Actor, roomId: string): { message_count: number; last_sequence: number; first_at: string | null; last_at: string | null } {
+  messageSummary(actor: Actor, roomId: string): { message_count: number; bot_message_count: number; last_sequence: number; first_at: string | null; last_at: string | null } {
     this.#room(actor, roomId);
-    return this.#db.prepare(`SELECT count(*) AS message_count,coalesce(max(rowid),0) AS last_sequence,
+    // bot_message_count counts what the owner did not write, so the screen can chime only for messages that arrive.
+    return this.#db.prepare(`SELECT count(*) AS message_count,count(*) FILTER (WHERE author_id<>'administrator') AS bot_message_count,coalesce(max(rowid),0) AS last_sequence,
       (SELECT created_at FROM messages WHERE room_id=? ORDER BY rowid LIMIT 1) AS first_at,
       (SELECT created_at FROM messages WHERE room_id=? ORDER BY rowid DESC LIMIT 1) AS last_at FROM messages WHERE room_id=?`)
-      .get(roomId, roomId, roomId) as { message_count: number; last_sequence: number; first_at: string | null; last_at: string | null };
+      .get(roomId, roomId, roomId) as { message_count: number; bot_message_count: number; last_sequence: number; first_at: string | null; last_at: string | null };
   }
   messagePage(actor: Actor, roomId: string, before = Number.MAX_SAFE_INTEGER) {
     this.#room(actor, roomId);

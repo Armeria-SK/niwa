@@ -48,6 +48,7 @@ export default {
 
   // Notices
   threadPinned: 'Pinned the conversation',
+  threadRenamed: 'Renamed the conversation',
   threadUnpinned: 'Unpinned',
   threadArchived: 'Archived. Everything in it is kept.',
   threadRestored: 'Moved the conversation out of the archive',

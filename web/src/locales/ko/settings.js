@@ -18,6 +18,7 @@ export default {
   tabMcp: 'MCP 연결',
   tabActivity: '활동과 인원',
   tabBackup: '백업',
+  tabSound: '소리',
 
   // Models & connections
   defaultModelTitle: '기본 모델',
@@ -198,4 +199,15 @@ export default {
   setupLeaderBody: '그 연결을 저장하거나, 봇 프로필에서 리더의 모델을 연결된 곳의 모델로 바꿔 주세요.',
   setupBotTitle: '{name}의 모델({provider})이 연결되어 있지 않아요',
   setupBotBody: '그 연결을 저장하거나, 봇 프로필에서 {name}의 모델을 연결된 곳의 모델로 바꿔 주세요.',
+
+  // Notification sounds
+  soundTitle: '알림 소리',
+  soundLead: 'Niwa를 열어 둔 동안 짧은 소리로 알려 드립니다. 다른 창을 보고 있어도 들립니다.',
+  soundMessageLabel: 'Bot의 메시지가 도착했을 때',
+  soundMessageDescription: '대화에 Bot의 메시지가 추가되면 부드러운 두 음이 울립니다.',
+  soundAttentionLabel: '당신의 답을 기다리고 있을 때',
+  soundAttentionDescription: '승인·질문·멈춘 작업이 새로 생기면 올라가는 세 음이 울립니다.',
+  soundTry: '들어 보기',
+  soundHint1: '이 설정은 이 브라우저에만 저장됩니다. 바꾸면 바로 적용됩니다.',
+  soundHint2: '브라우저는 화면을 한 번 누르기 전까지 소리를 내지 않습니다. 열고 나서 아무 곳이나 클릭해 주세요.',
 };

@@ -40,3 +40,4 @@ export { Sun as TodayIcon } from '@phosphor-icons/react/dist/csr/Sun';
 export { Notebook as RecordsIcon } from '@phosphor-icons/react/dist/csr/Notebook';
 export { Scales as CompareIcon } from '@phosphor-icons/react/dist/csr/Scales';
 export { ListChecks as CheckListIcon } from '@phosphor-icons/react/dist/csr/ListChecks';
+export { SpeakerHigh as SpeakerIcon } from '@phosphor-icons/react/dist/csr/SpeakerHigh';

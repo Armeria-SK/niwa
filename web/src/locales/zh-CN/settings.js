@@ -18,6 +18,7 @@ export default {
   tabMcp: 'MCP 连接',
   tabActivity: '活动与人数',
   tabBackup: '备份',
+  tabSound: '声音',
 
   // Models & connections
   defaultModelTitle: '默认模型',
@@ -198,4 +199,15 @@ export default {
   setupLeaderBody: '请保存该连接，或在 Bot 资料页中把组长的模型换成已接入的连接所提供的模型。',
   setupBotTitle: '{name} 的模型（{provider}）未连接',
   setupBotBody: '请保存该连接，或在 Bot 资料页中把 {name} 的模型换成已接入的连接所提供的模型。',
+
+  // Notification sounds
+  soundTitle: '提示音',
+  soundLead: '打开 Niwa 期间，会用短促的声音提醒你。即使在看其他窗口也能听到。',
+  soundMessageLabel: 'Bot 的消息到达时',
+  soundMessageDescription: 'Bot 在对话中发言时，会响起两个柔和的音。',
+  soundAttentionLabel: '等待你回复时',
+  soundAttentionDescription: '出现新的审批、提问或已停止的工作时，会响起三个逐渐升高的音。',
+  soundTry: '试听',
+  soundHint1: '此设置只保存在这个浏览器中。切换后立即生效。',
+  soundHint2: '浏览器在你点击页面之前不会播放声音。打开后请随意点击一下。',
 };

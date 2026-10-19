@@ -48,6 +48,7 @@ export default {
 
   // 通知
   threadPinned: '已置顶对话',
+  threadRenamed: '已重命名对话',
   threadUnpinned: '已取消置顶',
   threadArchived: '已归档。内容都完整保留。',
   threadRestored: '已将对话移出归档',

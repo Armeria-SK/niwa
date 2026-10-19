@@ -205,11 +205,23 @@ test('memory pages cover all records with stable cursors, literal search and pri
   try { assert.deepEqual(reopened.memoryPage(reopened.administrator(), f.child.id), f.runtime.memoryPage(f.admin, f.child.id)); } finally { reopened.close(); }
 });
 
+test('the administrator renames a room; blank names, bots and deleted rooms are refused', t => {
+  const f = fixture(t); const room = f.runtime.createRoom(f.admin, '最初の名前');
+  assert.equal(f.runtime.renameRoom(f.admin, room.id, '  新しい名前  ').title, '新しい名前');
+  assert.equal(f.runtime.rooms(f.admin).find(item => item.id === room.id)?.title, '新しい名前');
+  assert.throws(() => f.runtime.renameRoom(f.admin, room.id, '   '), (e: unknown) => e instanceof DomainError && e.code === 'invalid');
+  assert.throws(() => f.runtime.renameRoom(f.admin, room.id, 'x'.repeat(201)), (e: unknown) => e instanceof DomainError && e.code === 'invalid');
+  denied(() => f.runtime.renameRoom(f.leaderActor, room.id, '勝手な名前'));
+  assert.equal(f.runtime.rooms(f.admin).find(item => item.id === room.id)?.title, '新しい名前');
+  f.runtime.deleteContent(f.admin, 'room', room.id);
+  assert.throws(() => f.runtime.renameRoom(f.admin, room.id, '戻す'), (e: unknown) => e instanceof DomainError && e.code === 'not_found');
+});
+
 test('conversation pages retain the first message and cover replies without leaking private rooms', t => {
   const f = fixture(t); const room = f.runtime.createRoom(f.admin, '個別ページ', [f.child.id]); const shared = f.runtime.createRoom(f.admin, '共有ページ');
   const root = f.runtime.post(f.admin, room.id, '最初の発言'); const replies: string[] = [];
   for (let i = 0; i < 123; i++) { replies.push(f.runtime.post(f.admin, room.id, i === 0 ? '古い Marker %_ 検索対象' : '返信' + i).id); if (i % 3 === 0) f.runtime.post(f.admin, shared.id, '別の会話'); }
-  const summary = f.runtime.messageSummary(f.admin, room.id); assert.equal(summary.message_count, 124); assert.equal(summary.first_at, root.created_at);
+  const summary = f.runtime.messageSummary(f.admin, room.id); assert.equal(summary.message_count, 124); assert.equal(summary.bot_message_count, 0); assert.equal(summary.first_at, root.created_at);
   const first = f.runtime.messagePage(f.childActor, room.id); assert.equal(first.first?.id, root.id); assert.equal(first.items.length, 50); assert.ok(first.next);
   const second = f.runtime.messagePage(f.admin, room.id, first.next!); const last = f.runtime.messagePage(f.admin, room.id, second.next!);
   assert.equal(last.items.length, 23); assert.equal(last.next, null); assert.deepEqual([...last.items, ...second.items, ...first.items].map(item => item.id), replies);
@@ -219,8 +231,9 @@ test('conversation pages retain the first message and cover replies without leak
   assert.deepEqual(new Set(f.runtime.searchRoomMessages(f.admin, '')), new Set([room.id, shared.id]));
   f.runtime.post(f.admin, room.id, 'ページ取得後に追加'); assert.ok(f.runtime.messageSummary(f.admin, room.id).last_sequence > summary.last_sequence);
   assert.deepEqual(f.runtime.messagePage(f.admin, room.id, first.next!).items, second.items);
+  f.runtime.post(f.childActor, room.id, 'Botからの返事'); assert.equal(f.runtime.messageSummary(f.admin, room.id).bot_message_count, 1);
   const empty = f.runtime.createRoom(f.admin, '空の会話'); assert.deepEqual(f.runtime.messagePage(f.admin, empty.id), { first: null, items: [], next: null });
-  assert.deepEqual({ ...f.runtime.messageSummary(f.admin, empty.id) }, { message_count: 0, last_sequence: 0, first_at: null, last_at: null });
+  assert.deepEqual({ ...f.runtime.messageSummary(f.admin, empty.id) }, { message_count: 0, bot_message_count: 0, last_sequence: 0, first_at: null, last_at: null });
   for (const cursor of [0, -1, NaN, Infinity, 1.5]) assert.throws(() => f.runtime.messagePage(f.admin, room.id, cursor), /Invalid/);
   assert.throws(() => f.runtime.searchRoomMessages(f.admin, 'x'.repeat(201)), /Invalid/);
   const reopened = new Runtime(f.path);

@@ -2,7 +2,7 @@ import {memberWork,presenceCounts,shortWork,workLabel} from '../work-display.js'
 import {WorkFacts} from '../WorkFacts.jsx';
 import { useEffect, useLayoutEffect, useId, useRef, useState } from 'react';
 import { Avatar, IconButton, Modal, StatusLabel } from '../components.jsx';
-import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon, DownloadIcon, CompareIcon } from '../icons.jsx';
+import { BackIcon, UsersIcon, PauseIcon, PlayIcon, MoonIcon, PlusIcon, ReplyIcon, CloseIcon, FileIcon, LockIcon, PaletteIcon, PaperclipIcon, PinIcon, ArchiveIcon, DownloadIcon, CompareIcon, EditIcon } from '../icons.jsx';
 import { SecondOpinion } from '../SecondOpinion.jsx';
 import { ATTACHMENT_LIMITS, formatSize, readAttachments, unseenNotice } from '../attachments.js';
 import { documentName } from '../artifact-display.js';
@@ -14,7 +14,7 @@ import { t, serverText } from '../i18n.js';
 import { rich } from '../i18n-react.js';
 import { nameList } from '../conversationText.js';
 
-export function Conversation({ notice, thread, tasks, artifacts = [], drafts = [], onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction }) {
+export function Conversation({ notice, thread, tasks, artifacts = [], drafts = [], onNewSession, members, memberMap, paused, onPause, onSend, onAppearance, onMember, onBack, onArtifact, onThreadAction, onRename }) {
   const [showPresence, setShowPresence] = useState(false);
   const [showWork, setShowWork] = useState(false);
   const visibleMembers = thread.scope === 'private' ? members.filter(item => thread.members.includes(item.id)) : members;
@@ -27,7 +27,7 @@ export function Conversation({ notice, thread, tasks, artifacts = [], drafts = [
     <main className="conversation" id="main-content" tabIndex={-1} aria-label={thread.title}>
       <div className="conversation-mobile-tools"><button className="text-button" onClick={onBack}><BackIcon size={20} />{t('conversation.chatList')}</button><IconButton label={t('conversation.botStatus')} onClick={() => setShowPresence(true)}><UsersIcon size={22} /></IconButton></div>
       {notice ? <div className="conversation-notice">{notice}</div> : null}
-      <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} key={thread.id} thread={thread} tasks={tasks} artifacts={artifacts} drafts={drafts} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
+      <ThreadBody onShowWork={() => setShowWork(true)} onThreadAction={onThreadAction} onRename={onRename} key={thread.id} thread={thread} tasks={tasks} artifacts={artifacts} drafts={drafts} onNewSession={onNewSession} memberMap={memberMap} paused={paused} onSend={onSend} onMember={onMember} onArtifact={onArtifact} />
     </main>
     {showWork ? <CoordinationBoard roomId={thread.id} members={memberMap} onClose={() => setShowWork(false)} onArtifact={onArtifact}/> : null}
     <aside className="presence-rail" aria-label={t('conversation.botStatus')}><Presence {...presenceProps} /></aside>
@@ -35,7 +35,8 @@ export function Conversation({ notice, thread, tasks, artifacts = [], drafts = [
   </>;
 }
 
-function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction }) {
+function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession, memberMap, paused, onSend, onMember, onArtifact, onThreadAction, onRename }) {
+  const [renaming, setRenaming] = useState(false);
   const history = useConversationMessages(thread);
   const followBottom=useRef(true);
   const deletedConversation = thread.scope === 'private' && thread.members.length > 0 && thread.members.every(id => memberMap[id]?.deleted);
@@ -90,8 +91,9 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
     <header className="conversation-head" aria-label={t('conversation.headerLabel')}>
       <div className="conversation-head-text"><h1><span>{thread.title}</span>{thread.scope === 'private' ? <LockIcon size={16} aria-label={t('conversation.privateConversation')} /> : null}</h1><p>{thread.scope === 'private' ? t('conversation.privateConversation') : t('conversation.sharedConversation')}{thread.day ? ` · ${t('conversation.since', { day: thread.day })}` : ''}{thread.members.length ? ` · ${t('common.bots', { count: thread.members.length })}` : ''}</p></div>
       <span className="conversation-faces" aria-hidden="true">{thread.members.slice(0, 4).map(id => memberMap[id] ? <span key={id}><Avatar member={memberMap[id]} motion="none" size={24} /></span> : null)}</span>
-      <div className="conversation-head-actions"><button className="button subtle" onClick={onShowWork}>{t('conversation.collaboration')}</button><IconButton label={thread.pinned ? t('conversation.unpin') : t('conversation.pin')} aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={19} /></IconButton><IconButton label={thread.archived ? t('conversation.unarchive') : t('conversation.archive')} aria-pressed={thread.archived} onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={19} /></IconButton><IconButton label={t('conversation.newConversation')} disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={20} /></IconButton></div>
+      <div className="conversation-head-actions"><button className="button subtle" onClick={onShowWork}>{t('conversation.collaboration')}</button><IconButton label={t('conversation.rename')} disabled={deletedConversation} onClick={() => setRenaming(true)}><EditIcon size={19} /></IconButton><IconButton label={thread.pinned ? t('conversation.unpin') : t('conversation.pin')} aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={19} /></IconButton><IconButton label={thread.archived ? t('conversation.unarchive') : t('conversation.archive')} aria-pressed={thread.archived} onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={19} /></IconButton><IconButton label={t('conversation.newConversation')} disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={20} /></IconButton></div>
     </header>
+    {renaming ? <RenameThread title={thread.title} onClose={() => setRenaming(false)} onSave={async title => { if (await onRename(thread.id, title)) setRenaming(false); }} /> : null}
     <div className="message-scroll conversation-replies" ref={listRef} onScroll={()=>{const node=listRef.current;followBottom.current=node.scrollHeight-node.scrollTop-node.clientHeight<80;}}>
       <Message acknowledgments={thread.acknowledgments} message={history.first} isRoot title={thread.title} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
       <div className="reply-divider"><span>{t('conversation.replyCount', { count: Math.max(0, thread.message_count - 1) })}</span><span /></div>
@@ -205,4 +207,18 @@ function Presence({ members, paused, onPause, onAppearance, onMember, isPrivate,
       {openJobs[member.id]&&member.jobs?.length ? <div className="presence-job-list" id={`jobs-${member.id}`}>{member.jobs.map(job=><div key={job.id}><span>{job.progress?.work_acknowledged?t('conversation.acknowledgedWork',{label:serverText(workLabel(job,paused))}):serverText(workLabel(job,paused))}</span><WorkFacts task={job} compact/><details className="presence-job-request"><summary><span className="request-preview">{shortWork(job.title)}</span><span className="request-open-label">{t('conversation.fullRequest')}</span></summary><p>{job.prompt||job.title}</p></details></div>)}</div>:null}{member.status === 'sleeping' ? <MoonIcon size={19} className="sleep-icon" /> : null}
     </div>)}</div>
   </div>;
+}
+
+/** 会話の名前を変える窓。今の名前から書き直し、空白だけのときは保存できない。 */
+function RenameThread({ title, onSave, onClose }) {
+  const [value, setValue] = useState(title);
+  const [busy, setBusy] = useState(false);
+  const field = useRef(null);
+  // The dialog opens after this mounts and takes focus, so select the name right after that to retype it at once.
+  useEffect(() => { const timer = setTimeout(() => { field.current?.focus(); field.current?.select(); }); return () => clearTimeout(timer); }, []);
+  const next = value.trim();
+  return <Modal title={t('conversation.renameTitle')} onClose={onClose} className="rename-thread-modal"><form onSubmit={async e => { e.preventDefault(); if (busy || !next) return; if (next === title) { onClose(); return; } setBusy(true); try { await onSave(next); } finally { setBusy(false); } }}>
+    <div className="modal-body form-stack"><label className="field"><span>{t('conversation.renameField')}</span><input ref={field} maxLength={200} value={value} onChange={e => setValue(e.target.value)} required /></label></div>
+    <div className="form-actions"><button type="button" className="button subtle" onClick={onClose}>{t('conversation.renameCancel')}</button><button className="button primary" disabled={busy || !next}>{t('conversation.renameSave')}</button></div>
+  </form></Modal>;
 }

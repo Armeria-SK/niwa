@@ -8,10 +8,11 @@ import { modelSetupNotice } from './providers.js';
 import { markSeen, readSeen, startSeen, unreadOf, writeSeen } from './unread.js';
 import { ChatIcon, UsersIcon, SettingsIcon, SearchIcon, PlusIcon, LockIcon, CloseIcon, InfoIcon, CheckCircleIcon, PinIcon, TodayIcon, RecordsIcon } from './icons.jsx';
 import { attentionItems } from './attention.js';
+import { playSound, readSounds, soundCue, soundSnapshot, unlockSounds } from './sounds.js';
 import { parseRoute, routeHash } from './route.js';
 import { Today } from './pages/Today.jsx';
 import { Conversation } from './pages/Conversation.jsx';
-import { Members } from './pages/Members.jsx';
+import { BotDrawer, Members } from './pages/Members.jsx';
 import { Activity } from './pages/Activity.jsx';
 import { ArtifactPreview } from './pages/Productivity.jsx';
 import { Settings } from './pages/Settings.jsx';
@@ -114,6 +115,15 @@ export function App() {
   const memberMap = Object.fromEntries([...deletedMembers, ...animatedMembers].map(item => [item.id, item]));
   const attention = attentionItems({ activities, questions, decisions: updates });
   const waitingCount = attention.filter(item => item.kind !== 'decisions').length;
+  // Botの発言が届いたときと、あなたの返事を待つものが新しく出たときに音を鳴らす。届けられた知らせはタブが隠れていても読み直すので、裏でも鳴る。
+  const heard = useRef(null);
+  useEffect(() => unlockSounds(), []);
+  useEffect(() => {
+    if (!ready) return;
+    const next = soundSnapshot(threads, attention), cue = soundCue(heard.current, next);
+    heard.current = next;
+    if (cue && readSounds()[cue]) playSound(cue);
+  }, [ready, threads, activities, questions]);
 
   useEffect(() => { const onHash = () => setRoute(parseRoute(window.location.hash)); window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash); }, []);
   // 前の名前（#activity など）や読めない部分は、今の形のURLに置き換える（履歴は増やさない）。
@@ -243,6 +253,7 @@ export function App() {
     const value = !threads.find(item => item.id === id)[field];
     return mutate(() => api(`/rooms/${id}/organization`, 'PATCH', { [field]: value }), field === 'pinned' ? (value ? t('shell.threadPinned') : t('shell.threadUnpinned')) : (value ? t('shell.threadArchived') : t('shell.threadRestored')));
   }
+  function renameThread(id, title) { return mutate(() => api(`/rooms/${id}/title`, 'PATCH', { title }), t('shell.threadRenamed')); }
   async function updateMember(id, patch) {
     const { model, effort, profile_version, provider = memberMap[id].provider, ...profile } = patch;
     let version;
@@ -276,6 +287,10 @@ export function App() {
     for (let offset = 0; offset < ids.length; offset += 1000) await api('/updates/read', 'POST', { ids: ids.slice(offset, offset + 1000) });
   }, t('shell.markedRead')); }
   function openMember(id) { if (memberMap[id]?.deleted) { notify(t('shell.botDeletedNotice')); return; } navigate({ page: 'bots', id }); }
+  // 会話の中で押したBotは、Botの画面へ移らずに会話の上へ脇の欄で重ねる。閉じればそのまま会話に戻る。
+  function showMember(id) { if (memberMap[id]?.deleted) { notify(t('shell.botDeletedNotice')); return; } setModal({ type: 'bot', member: id, tab: 'profile' }); }
+  function restMember(id, dormant) { return mutate(() => api(`/agents/${id}/dormancy`, 'PATCH', { dormant }), dormant ? t('shell.botRested') : t('shell.botBroughtBack')); }
+  function deleteMember(id, version) { return mutate(() => api('/agents/' + id, 'DELETE', { version }), t('shell.botDeleted')); }
   function togglePause() { return mutate(() => api('/settings', 'PATCH', { paused: !paused }), paused ? t('shell.activityResumed') : t('shell.activityPaused')); }
   async function sendMessage(text, attachments = [], replyTo, selectedRecipients = [], requestContext) {
     if (selectedRecipients.some(id => memberMap[id]?.deleted)) { notify(t('shell.recipientDeleted')); return false; }
@@ -358,8 +373,8 @@ export function App() {
     </aside> : null}
     {view.page === 'today' ? <Today notice={setupNotice ? <SetupNotice notice={setupNotice} onConnect={openModelSettings} /> : null} paused={paused} onPause={togglePause} attention={attention} members={animatedMembers} memberMap={memberMap} activities={activities} artifacts={artifacts} decisions={updates} threads={threads} onOpenTask={openTask} onThread={openThread} onRead={readUpdates} onRecap={() => navigate({ page: 'records', tab: 'recap' })} onArtifact={openArtifact} onMember={openMember} onDM={openDM} onNewThread={() => setModal({ type: 'new-thread' })} onConflicts={() => navigate({ page: 'bots', id: 'everyone', tab: 'conflicts' })} onTrust={() => navigate({ page: 'records', tab: 'approval' })} /> : null}
     {view.page === 'conversation' && !thread ? <main className="conversation" id="main-content">{setupNotice ? <EmptyState title={setupNotice.title} action={<button className="button primary" onClick={openModelSettings}>{t('shell.connectModel')}</button>}>{setupNotice.body}</EmptyState> : <EmptyState title={t('shell.firstThreadTitle')} action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>{t('shell.startThread')}</button>}>{t('shell.firstThreadBody')}</EmptyState>}</main> : null}
-    {view.page === 'conversation' && thread ? <Conversation notice={threadNotice ? <SetupNotice notice={threadNotice} onConnect={openModelSettings} /> : null} onThreadAction={organizeThread} drafts={Object.values(live.drafts).filter(draft => draft.room_id === thread.id)} thread={thread} artifacts={artifacts} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} onDelete={() => setModal({ type: 'delete-content', kind: 'room', id: thread.id, title: thread.title })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => navigate({ page: 'conversation' })} onArtifact={openArtifact} /> : null}
-    {view.page === 'bots' ? <Members memberMap={memberMap} onOpenBot={id => navigate({ page: 'bots', id, tab: 'memory' })} onOpenThread={openThread} onDormant={(id, dormant) => mutate(() => api(`/agents/${id}/dormancy`, 'PATCH', { dormant }), dormant ? t('shell.botRested') : t('shell.botBroughtBack'))} onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), t('shell.botDeleted'))} onAdd={addMember} onImported={importedBot} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={view.id} tab={view.tab} onSelect={id => navigate({ page: 'bots', id, tab: view.tab })} onClose={() => navigate({ page: 'bots' })} onTab={tab => navigate({ page: 'bots', id: shownBot, tab })} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
+    {view.page === 'conversation' && thread ? <Conversation notice={threadNotice ? <SetupNotice notice={threadNotice} onConnect={openModelSettings} /> : null} onThreadAction={organizeThread} onRename={renameThread} drafts={Object.values(live.drafts).filter(draft => draft.room_id === thread.id)} thread={thread} artifacts={artifacts} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} onDelete={() => setModal({ type: 'delete-content', kind: 'room', id: thread.id, title: thread.title })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={showMember} onBack={() => navigate({ page: 'conversation' })} onArtifact={openArtifact} /> : null}
+    {view.page === 'bots' ? <Members memberMap={memberMap} onOpenBot={id => navigate({ page: 'bots', id, tab: 'memory' })} onOpenThread={openThread} onDormant={restMember} onDelete={deleteMember} onAdd={addMember} onImported={importedBot} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={view.id} tab={view.tab} onSelect={id => navigate({ page: 'bots', id, tab: view.tab })} onClose={() => navigate({ page: 'bots' })} onTab={tab => navigate({ page: 'bots', id: shownBot, tab })} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
     {view.page === 'records' ? <Activity taskId={view.task} replay={!!view.replay} onReplay={(id, on) => navigate({ page: 'records', task: id, ...(on ? { replay: true } : {}) })} onBranched={async id => { await refresh(); notify(t('shell.taskBranched')); navigate({ page: 'records', task: id }); }} onOpenTask={openTask} onCloseTask={closeTask} onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), t('shell.scheduleDeleted'))} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), t('shell.scheduleSaved'))} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? t('shell.scheduleResumed') : t('shell.schedulePaused'))} onScheduleToken={async id => { let issued = null; await mutate(async () => { issued = await api(`/schedules/${id}/token`, 'POST', {}); }, t('shell.scheduleTokenIssued')); return issued; }} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={view.tab || recordTab} onFilter={tab => navigate({ page: 'records', tab })} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(async () => { await api(`/approvals/${id}`, 'POST', { approved, version }); closeTask(); }, approved ? t('shell.approvalApproved') : t('shell.approvalDeclined'))} onThread={openThread} onArtifact={openArtifact} /> : null}
     {page === 'settings' ? <Settings tab={route.tab} onTab={tab => navigate({ page: 'settings', tab })} onClose={() => navigate(backRoute.current)} onPreviewTheme={setPreviewTheme} onPreviewLanguage={setPreviewLanguage} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} /> : null}
     <nav className="mobile-nav" aria-label={t('shell.mobileNavigation')}>{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={(id === 'settings' ? page === 'settings' : view.page === id && page !== 'settings') ? 'active' : ''} aria-current={(id === 'settings' ? page === 'settings' : view.page === id && page !== 'settings') ? 'page' : undefined}><Icon size={23} /><span>{label}</span>{id === 'today' && waitingCount ? <span className="nav-badge" aria-label={t('shell.yourTurnCount', { count: waitingCount })}>{waitingCount}</span> : null}</a>)}</nav>
@@ -367,6 +382,7 @@ export function App() {
     {modal?.type === 'appearance' ? <Modal title={t('shell.appearanceTitle', { name: memberMap[modal.member].name })} onClose={() => setModal(null)} className="appearance-modal"><AppearanceEditor member={memberMap[modal.member]} onCancel={() => setModal(null)} onSave={async patch => { if (await updateMember(modal.member, patch)) setModal(null); }} /></Modal> : null}
     {modal?.type === 'delete-content' ? <DeleteContentDialog item={modal} onClose={() => setModal(null)} onDelete={item => mutate(() => api(`/${item.kind === 'room' ? 'rooms' : 'artifacts'}/${item.id}`, 'DELETE', {}), t('shell.contentDeleted'))} /> : null}
     {modal?.type === 'artifact' ? <ArtifactPreview key={modal.artifact.id} onOpen={openArtifact} onDelete={() => setModal({ type: 'delete-content', kind: 'artifact', id: modal.artifact.id, title: modal.artifact.name })} artifact={modal.artifact} members={memberMap} onClose={() => setModal(null)} onThread={openThread} /> : null}
+    {modal?.type === 'bot' && members.some(item => item.id === modal.member) ? <BotDrawer key={modal.member} member={animatedMembers.find(item => item.id === modal.member)} tab={modal.tab} onTab={tab => setModal(current => ({ ...current, tab }))} onClose={() => setModal(null)} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={id => { setModal(null); openDM(id); }} onOpenThread={id => { setModal(null); openThread(id); }} onDormant={restMember} onDelete={async (id, version) => { const ok = await deleteMember(id, version); if (ok) setModal(null); return ok; }} /> : null}
     {modal?.type === 'new-thread' ? <NewThreadModal members={animatedMembers} initialScope={modal.scope} initialMember={modal.member} onClose={() => setModal(null)} onCreate={createThread} /> : null}
     {offline ? <div className="offline-notice" role="alert">{t('shell.offline')}<br />{t('shell.offlineRetry')}</div> : null}
     <div className="toast-region" role="status" aria-live="polite">{toast ? <div key={toast.key} className={`toast ${toastOut ? 'out' : ''}`}><CheckCircleIcon size={20} /><span><Sentences>{toast.text}</Sentences></span><IconButton label={t('shell.closeNotice')} onClick={dismissToast}><CloseIcon size={16} /></IconButton><span className="toast-timer" aria-hidden="true" /></div> : null}</div>
