@@ -3,7 +3,7 @@ import {retainCompleteExchanges} from './context/retention.ts';
 import {LEGACY_RULES as BASE_RULES} from './context/legacy-rules.ts';
 import {REQUEST_GUIDANCE} from './context/conversation.ts';
 import {replyLanguage} from './context/reply-language.ts';
-import {structuredPrompt, scopedPromptTools, type PromptVersion} from './context/prompt.ts';
+import {structuredPrompt, scopedPromptTools, withoutRequestCopies, type PromptVersion} from './context/prompt.ts';
 import type { Runtime } from './runtime.ts';
 import type { Agent } from '../domain/types.ts';
 import type { TaskLease } from '../domain/task.ts';
@@ -154,7 +154,10 @@ export class TurnRunner {
         const recoveringReads=!phaseTool&&observations.repeated_reads>=8;
         const reportingReads=recoveringReads&&observations.recovery_exhausted;
         if(reportingReads&&observations.recovery_reported){runtime.tasks.waitForReadRecovery(actor,lease,observations.retry_at!);return;}
-        const inputState = { ...workState, read_observations:observations, external_operations: workState.external_operations.map(({ result: _result, ...operation }) => operation),
+        // Per-call counters belong with the per-call state, so the system text stays the same from call to call.
+        const context_counts = { omitted_room_messages: roomMessages.length - selectedMessages.length,
+          archived_tool_messages: history.length - (promptVersion === 'structured-v5' ? retainCompleteExchanges(history, 8).length : history.length) };
+        const inputState = { ...workState, context_counts, read_observations:observations, external_operations: workState.external_operations.map(({ result: _result, ...operation }) => operation),
           ...(phaseTool === 'task_summary_save' ? { summary_sources: runtime.completionSummarySources(actor, lease), proposed_completion: pendingCompletion!.events } : {}) };
         if (workState.autonomous && !adapter.capabilities.supports_tool_calls) {
           runtime.tasks.wait(actor, lease, 'waiting_provider', '自発活動には休息を選べるツール対応モデルが必要です。'); return;
@@ -172,14 +175,13 @@ export class TurnRunner {
           configured_tools_here: configuredTools.map(tool => tool.name),
           configured_tools_in_shared_room: turnTools(agent.role === 'leader', external, true).map(tool => tool.name),
           autonomous_enabled: settings.autonomous, activity_paused: settings.paused, this_task_autonomous: workState.autonomous,
-          omitted_room_messages:roomMessages.length-selectedMessages.length, archived_tool_messages:history.length-(promptVersion==='structured-v5'?retainCompleteExchanges(history,8).length:history.length),
           execution_boundary: (this.#runtime.workareas.settings(actor).enabled&&this.#external.workareas?'個人・案件の作業場所が有効。workspace_selectで現在のBot・会話に許可された作業場所を選ぶと、私的会話でもその領域の書込・隔離実行が可能。未選択時の境界は次の通り。':'')+'program_runは共有会話の隔離コンテナ内。共有workspaceのみ書込可能、外部通信・ホスト操作不可。workspace_writeとweb_downloadも共有会話限定。自律活動は設定・停止・予算・予定・権限に従う。' };
         const recentHistory=promptVersion==='structured-v5'?retainCompleteExchanges(history,8):history;
         const trimmableConversation=promptVersion==='structured-v5'?base.filter((_m,i)=>selectedMessages[i]!.author_id!=='administrator'):base;
         const makeRequest = (): ModelRequest => ({
           system_instructions: `${RULES}\n現在の実行環境: ${JSON.stringify(environment)}${workState.autonomous ? '\n今回は自発活動の機会です。自分の関心・人格、最近の会話、過去の成果を確認し、管理者の方針の範囲で役立つ活動を自分で選んでください。毎回の発言や作業は必須ではありません。今は必要がなければtask_restを単独で呼んで休んでください。私的な経験をそのまま共有会話へ公開しないでください。' : ''}${workState.task.conversation_reply ? '\n今回は別のBotからあなたへの会話です。現在の依頼に応答し、返信相手がいる場合は@名前から始めてください。話題を引き継ぐ必要がなければ短く答えるか休息してください。' : ''}\nあなた: ${JSON.stringify({ id: agent.id, name: agent.name, role: agent.role, profile: runtime.profile(actor, agent.id) })}\nメンバー: ${JSON.stringify(members)}\n利用できる自分の記憶: ${JSON.stringify(context.memories.slice(-20).map(memory => ({ id: memory.id, body: memory.body })))}`,
           messages: [...base, { role: 'user', content: `現在の依頼: ${lease.task.prompt}` }, ...attachmentInput, ...recentHistory,
-            { role: 'user', content: JSON.stringify({ work_state: inputState }) }],
+            { role: 'user', content: JSON.stringify({ work_state: withoutRequestCopies(inputState) }) }],
           tools: adapter.capabilities.supports_tool_calls ? configuredTools
             .filter(tool => (!phaseTool || tool.name === phaseTool)&&(!reportingReads||['conversation_send','task_report'].includes(tool.name))) : [],
           response_contract: { type: 'text' }, model_options: {},

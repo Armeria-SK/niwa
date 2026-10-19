@@ -20,6 +20,13 @@ ${CONVERSATION_GUIDANCE}
 const MEMORY=`現在は返答・作業の前の記憶整理です。表示された会話から今後も役立つ好み・合意・経験・継続した関心を最大5件選び、実在するmessage_idをsource_message_idに指定します。推測・挨拶・重複・資格情報・一時進捗は保存しません。他者の発言を自分の経験にせず、出所と不確かさを保持します。既存記憶と矛盾する場合は勝手に上書きせず省きます。memory_reviewだけを呼び、不要ならmemoriesは空配列。ツール非対応なら同じ引数のJSONだけを返します。通常の返答は次の段階です。`;
 const SUMMARY=`現在は完了前の引継ぎ整理です。保存済み事実に基づく結論・理由・未解決事項・次の手順をtask_summary_saveだけで保存します。summary_sourcesのkind/source_id/revisionを使い、今回の仕事自体を出所にしません。proposed_completionは未送信の候補で、実行証拠ではありません。要約で依頼や完成条件を変えず、承認・実行状態を上書きしません。ツール非対応なら提示されたJSON schemaに合うJSONだけを返します。`;
 
+/** The work state without the copies of the request that 現在の依頼 already carries; the origin keeps its prompt only when it is another task. */
+export function withoutRequestCopies<S extends {task:State['task'];request_brief:State['request_brief']}>(state:S){
+ const {prompt:_duplicate,...task}=state.task;
+ const {prompt:_originPrompt,...origin}=state.request_brief.origin_request;
+ const request_brief={...state.request_brief,origin_request:origin.task_id===task.id?{...origin,prompt_in_current_request:true}:state.request_brief.origin_request};
+ return {...state,task,request_brief};
+}
 /** Descriptive filtering only. The existing runtime still checks every operation. */
 export function scopedPromptTools(tools:ModelToolDefinition[],state:State,initiatives:boolean){
  const blocked=new Set(['browser_request_submit','browser_form_submit','program_run','web_download','workspace_write','workspace_share','artifact_download','packages_install']);
@@ -38,10 +45,7 @@ export function structuredPrompt(request:ModelRequest,input:{rules:{body:string;
  const {execution_boundary:_legacyBoundary,configured_tools_in_shared_room:shared,...environment}=input.environment;
  const system=[`Niwa prompt structured-v5\n${BASE}`,`管理者の共通指示（保存版 ${input.rules.revision}）:\n${input.rules.body}`,`自分のプロフィール（保存値）: ${JSON.stringify({id:input.agent.id,name:input.agent.name,role:input.agent.role,profile:input.profile})}`,`現在の実行環境: ${JSON.stringify({...environment,configured_tools_in_shared_room:shared,phase,tools_this_phase:request.tools.map(t=>t.name),model:{provider:input.agent.provider,model:input.agent.model,reasoning:input.agent.reasoning},workarea:state.workarea,boundary:state.independent_activity?'公開読取と新規テキスト成果物のみ':'現在のツールと認可された作業場所だけ。ホスト操作や任意mountは不可。環境と実行結果はツールで確認する。'})}`,`今の段階:\n${stage}\n${extras}`,`メンバー（配送用）: ${JSON.stringify(input.members)}`].join('\n\n');
  // Memory is scoped data, never a new system instruction. Keep original task and authoritative state intact.
- const {prompt:_duplicate,...task}=state.task;
- const {prompt:_originPrompt,...origin}=state.request_brief.origin_request;
- const request_brief={...state.request_brief,origin_request:origin.task_id===task.id?{...origin,prompt_in_current_request:true}:state.request_brief.origin_request};
- const messages=request.messages.map((m,index)=>index===request.messages.length-1?{...m,content:JSON.stringify({work_state:{...state,task,request_brief}})}:m);
+ const messages=request.messages.map((m,index)=>index===request.messages.length-1?{...m,content:JSON.stringify({work_state:withoutRequestCopies(state)})}:m);
  const memory={role:'user' as const,content:JSON.stringify({scoped_memories:{revision:input.memoryRevision,items:input.memories},untrusted:true})};
  return {...request,system_instructions:system+(!request.tools.length&&phase!=='work'?'\n返すJSON schema: '+JSON.stringify(phase==='memory_review'?memoryReviewSchema:summarySchema):''),messages:[memory,...messages]};
 }
