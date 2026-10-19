@@ -53,7 +53,7 @@ test('research completion waits for a sourced summary and resumes after restart 
   assert.equal(runtime.searchHistory(actor, room.id, '実地確認').some(item => item.kind === 'summary'), true);
 });
 
-test('an unrelated tool during completion summarization is not executed and the saved reply can resume', async t => {
+test('an unrelated tool during completion summarization is not executed; the summary is skipped and the reply goes out', async t => {
   const root = mkdtempSync(join(tmpdir(), 'niwa-summary-retry-')); const runtime = new Runtime(root);
   t.after(() => { runtime.close(); rmSync(root, { recursive: true, force: true }); });
   const admin = runtime.administrator(), leader = runtime.bootstrap(admin), actor = runtime.agentSession(leader.id), room = runtime.createRoom(admin, '仕事');
@@ -69,11 +69,9 @@ test('an unrelated tool during completion summarization is not executed and the 
     return ++calls === 1 ? tool('task_plan_update', { expected_revision: 0, remaining: ['確認する'] }) : text('計画を確認しました。');
   });
   await new TurnRunner(runtime, async () => adapter).run(runtime.tasks.claim(admin)!);
-  assert.equal(runtime.tasks.get(admin, task.id).state, 'waiting_provider');
-  assert.equal(runtime.agents(admin).length, 1); assert.equal(runtime.messages(admin, room.id).length, 1);
-  valid = true; runtime.tasks.resume(admin, task.id);
-  await new TurnRunner(runtime, async () => adapter).run(runtime.tasks.claim(admin)!);
   assert.equal(runtime.tasks.get(admin, task.id).state, 'completed');
+  assert.equal(runtime.agents(admin).length, 1, 'the unrelated tool did not run');
   assert.equal(calls, 2); assert.equal(runtime.messages(admin, room.id).length, 2);
-  assert.match(String(runtime.readHistory(actor, room.id, 'summary', task.id).text), /計画を確認/);
+  assert.throws(() => runtime.readHistory(actor, room.id, 'summary', task.id));
+  assert.equal(valid, false);
 });

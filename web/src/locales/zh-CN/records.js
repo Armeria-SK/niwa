@@ -53,6 +53,7 @@ export default {
 
   // 任务历史和过程回放中的状态变化
   eventQueued: '等待运行',
+  eventSummarySkipped: '已跳过交接整理',
   eventRunning: '开始运行',
   eventCompleted: '完成',
   eventFailed: '失败',

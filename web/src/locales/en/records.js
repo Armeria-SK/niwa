@@ -54,6 +54,7 @@ export default {
 
   // Status changes in the task history and replay
   eventQueued: 'Queued',
+  eventSummarySkipped: 'Skipped the handoff summary',
   eventRunning: 'Started',
   eventCompleted: 'Completed',
   eventFailed: 'Failed',

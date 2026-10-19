@@ -143,24 +143,22 @@ const summaryAdapter=(onSummary:(request:ModelRequest)=>ModelEvent[]):ModelAdapt
  }};
 };
 
-test('an unusable completion summary is retried a bounded number of times, then the finished answer is sent',async t=>{
- const f=fixture(t),{task,lease}=summaryFixture(f);let summaries=0,first=lease;
- const runner=new TurnRunner(f.runtime,async()=>summaryAdapter(()=>{summaries++;return complete('形式に合わない出力');}),{}, {promptVersion:'structured-v5'});
- for(let i=0;i<6&&f.runtime.tasks.get(f.admin,task.id).state!=='completed';i++){
-  if(i)f.runtime.tasks.retryProviders(f.admin,Date.now()+120_000);
-  await runner.run(i?f.runtime.tasks.claim(f.admin)!:first);
- }
- assert.equal(summaries,3);assert.equal(f.runtime.tasks.get(f.admin,task.id).state,'completed');
+test('an unusable completion summary is skipped after one try and the finished answer is sent at once',async t=>{
+ const f=fixture(t),{task,lease}=summaryFixture(f);let summaries=0;
+ await new TurnRunner(f.runtime,async()=>summaryAdapter(()=>{summaries++;return complete('形式に合わない出力');}),{}, {promptVersion:'structured-v5'}).run(lease);
+ assert.equal(summaries,1);assert.equal(f.runtime.tasks.get(f.admin,task.id).state,'completed','no wait for another try');
+ assert.ok(f.runtime.replays.timeline(f.admin,task.id).items.some(item=>item.type==='event'&&item.code==='summary_skipped'));
  assert.ok(f.runtime.messages(f.admin,f.room.id).some(m=>m.author_id===f.leader.id&&m.body==='人工の最終回答'));
 });
 
-test('a summary whose sources are rejected is counted as an attempt and cannot loop forever',async t=>{
+test('a summary with a miscopied source revision is repaired from the sources Niwa offered and saved',async t=>{
  const f=fixture(t),{task,lease}=summaryFixture(f);let summaries=0;
  await new TurnRunner(f.runtime,async()=>summaryAdapter(request=>{
   summaries++;const state=JSON.parse(request.messages.at(-1)!.content!).work_state;
   return tool('task_summary_save',{conclusion:'人工の引継ぎ',reason:'出所の版が古い',unresolved:[],next_steps:[],sources:[{kind:state.summary_sources[0].kind,source_id:state.summary_sources[0].source_id,revision:'0'.repeat(64)}]});
  }),{}, {promptVersion:'structured-v5'}).run(lease);
- assert.equal(summaries,3);assert.equal(f.runtime.tasks.get(f.admin,task.id).state,'completed');
+ assert.equal(summaries,1);assert.equal(f.runtime.tasks.get(f.admin,task.id).state,'completed');
+ assert.match(String(f.runtime.readHistory(f.actor,f.room.id,'summary',task.id).text),/人工の引継ぎ/);
  assert.ok(f.runtime.messages(f.admin,f.room.id).some(m=>m.author_id===f.leader.id&&m.body==='人工の最終回答'));
 });
 

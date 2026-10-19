@@ -241,6 +241,9 @@ export class Tasks {
     });
   }
   /** Reserve before transport; failures and interruptions conservatively consume the reservation. */
+  /** A handoff summary the model could not give in a usable form is skipped; the finished answer is not held back for it. */
+  skipSummary(actor: Actor, lease: TaskLease): void { this.#owned(actor, lease); this.#event(lease.task.id, 'summary_skipped'); }
+  summarySkipped(actor: Actor, lease: TaskLease): boolean { this.#owned(actor, lease); return !!this.#db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='summary_skipped'").get(lease.task.id); }
   /** Work that spends an autonomous-wake or schedule allowance; side calls such as a digest refresh are not taken out of it. */
   budgeted(actor: Actor, lease: TaskLease): boolean {
     const task = this.#owned(actor, lease);

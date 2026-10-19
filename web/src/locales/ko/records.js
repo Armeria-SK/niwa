@@ -53,6 +53,7 @@ export default {
 
   // 작업 이력과 경과 재생의 상태 변화
   eventQueued: '실행 대기',
+  eventSummarySkipped: '인계 정리를 건너뜀',
   eventRunning: '실행 시작',
   eventCompleted: '완료',
   eventFailed: '실패',
