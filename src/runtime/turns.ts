@@ -26,6 +26,13 @@ const EFFORT_ADAPTERS: readonly string[] = ['openai-subscription', 'anthropic'];
 export type ResolveAdapter = (agent: Agent, taskId: string, signal?: AbortSignal) => Promise<ModelAdapter>;
 
 
+/** The answer addresses no other Bot, so nobody answers it within this exchange. */
+function endsExchange(step: { events: readonly ModelEvent[] }): boolean {
+  const calls = step.events.filter((event): event is Extract<ModelEvent, { type: 'tool_call' }> => event.type === 'tool_call');
+  if (!calls.length) return !/^\s*[@＠]/u.test(step.events.filter(event => event.type === 'text_delta').map(event => event.text).join(''));
+  const recipients = calls[0]!.arguments.recipient_ids;
+  return calls.length === 1 && (calls[0]!.name === 'task_rest' || calls[0]!.name === 'conversation_send' && Array.isArray(recipients) && recipients.length === 0);
+}
 /** Runs one claimed task; model APIs never own the tool loop or the bot's lifetime. */
 export class TurnRunner {
   #runtime: Runtime;
@@ -55,6 +62,8 @@ export class TurnRunner {
     const startedAt = Date.now();
     let historyRevision: number | undefined;
     let requestRevision: string | undefined;
+    /** A finished answer waits for a handoff summary, or for the memory review a reply deferred when it ends the exchange. */
+    const completionPhaseDue = (step: { events: readonly ModelEvent[] }) => runtime.needsCompletionSummary(actor, lease) || runtime.closingMemoryReviewDue(actor, lease, endsExchange(step));
     while (runtime.tasks.active(actor, lease) && !signal?.aborted) {
       // Keep the tool list and dispatch on one connector. Retired connectors reject new calls.
       const external={...this.#external};
@@ -87,7 +96,7 @@ export class TurnRunner {
       historyRevision = context.revision;
       requestRevision = briefRevision;
       let step: (typeof saved)[number] | undefined;
-      if (pendingCompletion && !runtime.needsCompletionSummary(actor, lease)) { step = pendingCompletion; pendingCompletion = undefined; }
+      if (pendingCompletion && !completionPhaseDue(pendingCompletion)) { step = pendingCompletion; pendingCompletion = undefined; }
       else step = saved[position++];
       if (step && (step.discarded || step.memory_revision !== context.revision || step.rules_revision !== rules.revision)) {
         runtime.tasks.discardStep(actor, lease, step.step);
@@ -102,7 +111,13 @@ export class TurnRunner {
           if (!runtime.isContextCurrent(actor, context.revision)) continue;
         }
         const roomMessages=runtime.messages(actor,lease.task.room_id);
-        const selectedMessages=roomMessages.filter((message,index)=>promptVersion==='legacy-v4'||message.author_id==='administrator'||index>=roomMessages.length-24);
+        let reviewingMemory = roomMessages.length > 0 && !runtime.memoryReviewed(actor, lease) && !runtime.memoryReviewSkipped(actor,lease);
+        // Bot-to-Bot replies review the room in batches; this reply already reads the new messages in its own prompt.
+        if (reviewingMemory && !runtime.memoryReviewDue(actor, lease)) { runtime.deferMemoryReview(actor, lease); reviewingMemory = false; }
+        if (!reviewingMemory && pendingCompletion && runtime.closingMemoryReviewDue(actor, lease, endsExchange(pendingCompletion))) reviewingMemory = true;
+        // A review also sees every message since this Bot's last saved review, so messages that scrolled out of the recent window while it was deferred are not lost.
+        const reviewedThrough=reviewingMemory&&promptVersion==='structured-v5'?roomMessages.findIndex(message=>message.id===runtime.memoryReviewMark(actor,lease)):-1;
+        const selectedMessages=roomMessages.filter((message,index)=>promptVersion==='legacy-v4'||message.author_id==='administrator'||index>=roomMessages.length-24||(reviewedThrough>=0&&index>reviewedThrough));
         const roomFiles=runtime.messageAttachments(actor,lease.task.room_id);
         const base: ModelMessage[] = selectedMessages.map(message => {
           const files=roomFiles.filter(file=>file.message_id===message.id).map(file=>({attachment_id:file.id,name:file.name,size_bytes:file.size,...(file.media_type&&file.media_type!=='text/plain'?{kind:file.media_type==='application/pdf'?'pdf':'image'}:{})}));
@@ -120,8 +135,8 @@ export class TurnRunner {
           items: requestFiles } }), ...(images.length ? { images: images.map(({ media_type, data }) => ({ media_type, data })) } : {}) }] : [];
         const workState = runtime.tasks.workState(actor, lease);
         requestRevision = workState.request_brief.revision;
-        const reviewingMemory = base.length > 0 && !runtime.memoryReviewed(actor, lease) && !runtime.memoryReviewSkipped(actor,lease);
         const phaseTool = reviewingMemory ? 'memory_review' : pendingCompletion ? 'task_summary_save' : undefined;
+        if (phaseTool === 'memory_review') runtime.noteMemoryReviewSnapshot(actor, lease, roomMessages.at(-1)!.id);
         const phaseSchema = phaseTool === 'memory_review' ? memoryReviewSchema : summarySchema;
         // Full external results remain in receipts and task_history_read, not duplicated in every request.
         const observations=runtime.tasks.observations(actor,lease);
@@ -246,7 +261,7 @@ export class TurnRunner {
       const content = step.events.filter(event => event.type === 'text_delta').map(event => event.text).join('');
       const completing = calls.length === 1 && ['conversation_send', 'task_rest'].includes(calls[0]!.name) ||
         !calls.length && step.events.some(event => event.type === 'completed' && event.finish_reason === 'stop');
-      if (completing && runtime.needsCompletionSummary(actor, lease)) { pendingCompletion = step; continue; }
+      if (completing && completionPhaseDue(step)) { pendingCompletion = step; continue; }
       if (!calls.length) {
         const terminal = step.events.find(event => event.type === 'completed');
         if (!terminal || terminal.finish_reason !== 'stop') {
