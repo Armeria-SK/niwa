@@ -299,6 +299,37 @@ test('artifacts retain exact text and room access; recap acknowledgements surviv
   } finally { reopened.close(); }
 });
 
+test('a non-waiting delegation keeps the parent running and only an explicit wait parks it', t => {
+  const f = fixture(t);
+  const parent = f.tasks.create(f.admin, f.leader.id, f.room.id, '並行作業');
+  const parentLease = f.tasks.claim(f.admin)!;
+  const child = f.tasks.delegate(f.parentActor, parentLease, f.child.id, '子の担当', false);
+  assert.equal(f.tasks.get(f.admin, parent.id).state, 'running');
+  assert.ok(f.tasks.active(f.parentActor, parentLease));
+  assert.throws(() => f.tasks.assertCompletion(f.parentActor, parentLease), /Required children remain/);
+  assert.deepEqual(f.tasks.waitForChildren(f.parentActor, parentLease), { waiting: true });
+  assert.equal(f.tasks.get(f.admin, parent.id).state, 'waiting_child');
+  const childLease = f.tasks.claim(f.admin)!;
+  assert.equal(childLease.task.id, child.id);
+  f.tasks.finish(f.childActor, childLease, '子の結果');
+  const resumed = f.tasks.claim(f.admin)!;
+  assert.equal(resumed.task.id, parent.id);
+  assert.deepEqual(f.tasks.waitForChildren(f.parentActor, resumed), { waiting: false, children_done: true });
+  assert.equal(f.tasks.get(f.admin, parent.id).state, 'running');
+  f.tasks.finish(f.parentActor, resumed, '全体の結果');
+});
+
+test('a child finishing while its non-waiting parent still works does not requeue the parent', t => {
+  const f = fixture(t);
+  const parent = f.tasks.create(f.admin, f.leader.id, f.room.id, '並行作業');
+  const parentLease = f.tasks.claim(f.admin)!;
+  f.tasks.delegate(f.parentActor, parentLease, f.child.id, '子の担当', false);
+  f.tasks.finish(f.childActor, f.tasks.claim(f.admin)!, '子の結果');
+  assert.equal(f.tasks.get(f.admin, parent.id).state, 'running');
+  assert.ok(f.tasks.active(f.parentActor, parentLease));
+  f.tasks.assertCompletion(f.parentActor, parentLease);
+});
+
 test('parent wait frees a single execution slot; child completion resumes parent exactly once', t => {
   const f = fixture(t);
   f.runtime.updateSettings(f.admin, { concurrencyLimit: 1 });

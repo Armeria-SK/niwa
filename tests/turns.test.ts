@@ -750,6 +750,38 @@ test('model tool loop creates one child, delegates, resumes parent and recalls t
   assert.equal(f.runtime.tasks.list(f.admin).filter(item => item.parent_id === task.id).length, 1);
 });
 
+test('a delegation without waiting lets the parent keep working until it chooses to wait for the child', async t => {
+  const f = fixture(t);
+  const child = f.runtime.createAgent(f.actor, '人工の子');
+  let leaderRequests = 0; let childRan = false;
+  const runner = new TurnRunner(f.runtime, async agent => model(request => {
+    if (agent.role !== 'leader') { childRan = true; return complete('子が担当分を完了しました'); }
+    leaderRequests++;
+    if (leaderRequests === 1) {
+      assert.ok(!request.tools.some(item => item.name === 'task_children_wait'));
+      return tool('task_delegate', { agent_id: child.id, prompt: '担当分を調べる', wait: false });
+    }
+    if (leaderRequests === 2) {
+      assert.equal(childRan, false);
+      assert.ok(request.tools.some(item => item.name === 'task_children_wait'));
+      return tool('artifact_create', { name: '自分の担当.md', kind: 'note', description: '並行して進めた分', content: '親の作業' });
+    }
+    if (leaderRequests === 3) return complete('早すぎる完了');
+    if (leaderRequests === 4) {
+      assert.match(JSON.stringify(request.messages), /task_children_wait/);
+      return tool('task_children_wait', {});
+    }
+    assert.match(JSON.stringify(request.messages), /子が担当分を完了しました/);
+    return complete('親も結果を確認しました');
+  }));
+  const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '仲間と並行して作業してください');
+  for (let lease = f.runtime.tasks.claim(f.admin), runs = 0; lease && runs < 10; lease = f.runtime.tasks.claim(f.admin), runs++) await runner.run(lease);
+  assert.equal(f.runtime.tasks.get(f.admin, task.id).state, 'completed');
+  assert.equal(leaderRequests, 5);
+  assert.equal(f.runtime.artifacts(f.admin).length, 1);
+  assert.equal(f.runtime.messages(f.admin, f.room.id).some(message => message.body === '早すぎる完了'), false);
+});
+
 test('an instruction arriving during generation rejects the old response and reaches the next model call', async t => {
   const f = fixture(t);
   const task = f.runtime.tasks.create(f.admin, f.leader.id, f.room.id, '最初の依頼');
