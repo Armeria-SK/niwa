@@ -185,6 +185,7 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/update.sh
 ```
 
 - It pulls the newest commit of your current branch (usually `main`), then stops, builds and starts Niwa. When you see `PASS: Niwa updated to …` at the end, you're done.
+- Even if you already ran `git pull` yourself, it rebuilds when the running build is older (it records which commit it built in `runtime/built-commit`; the first time, with no record, it starts again from `npm ci`).
 - On WSL you can run this command as is (it uses `nsenter` by itself when needed).
 - In these cases it refuses **without stopping anything**. Check the reason it shows.
   - There's no backup from the last 24 hours (to go ahead without one, add `--skip-backup-check`)
