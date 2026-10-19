@@ -4,6 +4,7 @@ import {mkdtempSync,rmSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {Runtime} from '../src/runtime/runtime.ts';
 import {TurnRunner} from '../src/runtime/turns.ts';
 import {executeTurnTool} from '../src/runtime/turn-tools.ts';
@@ -246,4 +247,22 @@ test('an amendment rejected for a later recipient keeps the earlier recipient st
  assert.throws(()=>r.submit(admin,randomUUID(),room.id,'範囲を変更',[x.id,y.id],undefined,{kind:'amend',task_id:task.id,expected_revision:ctl}),/Target does not belong/);
  assert.equal(r.tasks.get(admin,task.id).state,'running');assert.equal(r.tasks.replies(admin,task.id).length,0);
  assert.deepEqual(memoryRows(root,x.id,sql,task.id).map(row=>row.discarded),[0]);assert.equal(memoryRows(root,x.id,plan,task.id).length,1);
+});
+
+test('replies that pile up for one Bot in one conversation become one turn until that turn starts',t=>{
+ const root=mkdtempSync(join(tmpdir(),'niwa-merge-')),r=new Runtime(root),admin=r.administrator(),a=r.bootstrap(admin),aa=r.agentSession(a.id);
+ t.after(()=>{r.close();rmSync(root,{recursive:true,force:true});});
+ const b=r.createAgent(aa,'人工の聞き手'),c=r.createAgent(aa,'人工の試し手'),room=r.createRoom(admin,'人工の共同体');
+ r.submit(admin,randomUUID(),room.id,'人工の手順を三人で決めてください',a.id);
+ r.respond(aa,r.tasks.claim(admin)!,'第1案を置きました。',[b.id,c.id]);
+ const fromB=r.tasks.claim(admin)!,fromC=r.tasks.claim(admin)!;
+ r.respond(r.agentSession(fromB.task.agent_id),fromB,'賛成です。',[a.id]);
+ r.respond(r.agentSession(fromC.task.agent_id),fromC,'異議あり:長すぎます',[a.id]);
+ const queued=()=>r.tasks.list(admin).filter(task=>task.agent_id===a.id&&task.state==='queued');
+ assert.equal(queued().length,1);
+ assert.match(queued()[0]!.prompt,/賛成です。[\s\S]*人工の(聞き手|試し手)からの発言[\s\S]*異議あり:長すぎます|異議あり:長すぎます[\s\S]*人工の(聞き手|試し手)からの発言[\s\S]*賛成です。/);
+ const started=r.tasks.claim(admin)!;assert.equal(started.task.agent_id,a.id);
+ r.respond(aa,started,'第2案を置きました。',[b.id]);
+ const again=r.tasks.claim(admin)!;r.respond(r.agentSession(b.id),again,'第2案に賛成です。',[a.id]);
+ assert.equal(queued().length,1);assert.match(queued()[0]!.prompt,/第2案に賛成です。$/);assert.doesNotMatch(queued()[0]!.prompt,/異議あり/);
 });
