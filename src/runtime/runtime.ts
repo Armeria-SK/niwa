@@ -52,6 +52,7 @@ import { commonRulesSchema } from '../storage/common-rules-schema.ts';
 import { commonRulesDefaultSchema, commonRulesGeneralDefaultSchema } from '../storage/common-rules-default-schema.ts';
 import { THEME_IDS, themeSchema } from '../storage/theme-schema.ts';
 import { memoryConflictSchema } from '../storage/memory-conflict-schema.ts';
+import { memoryReviewMarkSchema } from '../storage/memory-review-mark-schema.ts';
 import { findMemoryConflicts } from './memory-conflicts.ts';
 import { nightSchema } from '../storage/night-schema.ts';
 import { NightPlans } from './night-plans.ts';
@@ -104,6 +105,15 @@ type Principal = { kind: 'admin'; id: 'administrator' } | { kind: 'agent'; id: s
 /** Procedures whose current version cites the memory bound to the single parameter. */
 const CITING_PROCEDURES = `SELECT p.id FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision, json_each(v.body,'$.sources') s
   WHERE json_extract(s.value,'$.kind')='memory' AND json_extract(s.value,'$.source_id')=?`;
+/** Tools that never count as work needing a handoff summary. */
+const COMPLETION_EXEMPT_TOOLS = new Set(['memory_review', 'memory_search', 'memory_remember', 'task_history_read', 'task_summary_save', 'conversation_send', 'task_rest', 'task_acknowledge']);
+/** A Bot-to-Bot reply may also look things up; anything else (and any new tool) still needs a summary. */
+const LIGHT_REPLY_TOOLS = new Set([...COMPLETION_EXEMPT_TOOLS, 'conversation_ack', 'history_search', 'history_read', 'coordination_read', 'coordination_digest', 'artifact_inspect', 'procedure_search', 'procedure_read']);
+/** A longer read-only investigation is worth a summary even as a reply. */
+const LIGHT_REPLY_MAX_LOOKUPS = 4;
+/** Bot-to-Bot replies review memories once this many messages arrived since the Bot's last review in the room, or once a quieter room has waited this long with anything new. */
+const MEMORY_REVIEW_BATCH = 8;
+const MEMORY_REVIEW_MAX_AGE_MS = 6 * 60 * 60_000;
 /** The version of a source as a Bot reads it: any change to where it is or what it says gives another. */
 function historyRevision(kind: string, id: string, roomId: string, body: string, revision: number | null): string {
   return createHash('sha256').update(JSON.stringify([kind, id, roomId, body, revision])).digest('hex');
@@ -133,7 +143,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema, mediaAttachmentSchema, botImportSchema, themePaletteSchema, languageSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema, mediaAttachmentSchema, botImportSchema, themePaletteSchema, languageSchema, memoryReviewMarkSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -1182,6 +1192,46 @@ export class Runtime {
     check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
     this.#db.prepare('INSERT OR REPLACE INTO task_memory_skips VALUES (?,?,?,?)').run(lease.task.id,this.context(actor,lease.task.room_id).revision,this.commonRules(actor).revision,Date.now());
   }
+  /** A deferred review is recorded like a skipped one, so it holds across restarts and is re-decided after a memory or rules change. */
+  deferMemoryReview(actor:Actor,lease:TaskLease):void { this.skipInvalidMemoryReview(actor,lease); }
+  /** Messages after this Bot's last applied review of the room; only a review that was saved moves the mark. */
+  #unreviewed(lease:TaskLease):{mark:{message_id:string|null;reviewed_at:number}|undefined;fresh:number;admin:boolean} {
+    const mark=this.#db.prepare(`SELECT (SELECT id FROM messages WHERE rowid=k.message_rowid) AS message_id,k.message_rowid,k.reviewed_at FROM memory_review_marks k
+      WHERE k.agent_id=? AND k.room_id=?`).get(lease.task.agent_id,lease.task.room_id);
+    const since=this.#db.prepare(`SELECT count(*) AS n,coalesce(max(author_id='administrator'),0) AS admin FROM messages WHERE room_id=? AND rowid>?`)
+      .get(lease.task.room_id,mark?Number(mark.message_rowid):0)!;
+    return {mark:mark?{message_id:mark.message_id===null?null:String(mark.message_id),reviewed_at:Number(mark.reviewed_at)}:undefined,fresh:Number(since.n),admin:Number(since.admin)===1};
+  }
+  /**
+   * Bot-to-Bot replies review the room in batches instead of before every reply: the reply already reads
+   * those messages in its own prompt, and new memories only help later work. Other tasks always review.
+   */
+  memoryReviewDue(actor:Actor,lease:TaskLease):boolean {
+    check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
+    if(lease.task.conversation_reply!==1)return true;
+    const {mark,fresh,admin}=this.#unreviewed(lease);
+    if(!mark)return true;
+    const age=Date.now()-mark.reviewed_at;
+    // A clock that went backwards counts as due rather than postponing reviews until it catches up.
+    return admin||fresh>=MEMORY_REVIEW_BATCH||(fresh>0&&(age>=MEMORY_REVIEW_MAX_AGE_MS||age<0));
+  }
+  /** A reply that ends an exchange reviews what it deferred, so the conclusion of a short exchange still becomes a memory. */
+  closingMemoryReviewDue(actor:Actor,lease:TaskLease,endsExchange:boolean):boolean {
+    check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
+    if(!endsExchange||lease.task.conversation_reply!==1||this.memoryReviewed(actor,lease)||!this.memoryReviewSkipped(actor,lease))return false;
+    // One review per reply: a review that came back unusable is not retried here.
+    return this.tasks.promptAttempts(actor,lease,'memory_review')===0&&this.#unreviewed(lease).fresh>0;
+  }
+  /** The newest message this Bot's last applied review of the room covered, if it is still there. */
+  memoryReviewMark(actor:Actor,lease:TaskLease):string|undefined {
+    check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
+    return this.#unreviewed(lease).mark?.message_id??undefined;
+  }
+  /** Remember the newest message a review request showed; the mark moves there only when the review is saved. */
+  noteMemoryReviewSnapshot(actor:Actor,lease:TaskLease,messageId:string):void {
+    check(this.tasks.active(actor,lease),'conflict','Task is no longer active');
+    this.#db.prepare('INSERT OR REPLACE INTO memory_review_snapshots SELECT ?,rowid FROM messages WHERE id=? AND room_id=?').run(lease.task.id,messageId,lease.task.room_id);
+  }
   memoryReviewed(actor: Actor, lease: TaskLease): boolean {
     check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
     return !!this.#memory(actor, this.#bot(actor).id).prepare(`SELECT 1 FROM task_memory_reviews
@@ -1210,6 +1260,10 @@ export class Runtime {
       }
       db.prepare(`INSERT OR REPLACE INTO task_memory_reviews VALUES (?,(SELECT revision FROM memory_state WHERE id=1),?)`)
         .run(lease.task.id, this.commonRules(actor).revision);
+      this.#db.prepare(`INSERT INTO memory_review_marks SELECT ?,?,message_rowid,? FROM memory_review_snapshots WHERE task_id=?
+        ON CONFLICT(agent_id,room_id) DO UPDATE SET message_rowid=max(message_rowid,excluded.message_rowid),reviewed_at=excluded.reviewed_at`)
+        .run(principal.id, lease.task.room_id, Date.now(), lease.task.id);
+      this.#db.prepare('DELETE FROM memory_review_snapshots WHERE task_id=?').run(lease.task.id);
       return { reviewed: true };
     });
   }
@@ -1576,10 +1630,17 @@ export class Runtime {
   }
   needsCompletionSummary(actor: Actor, lease: TaskLease): boolean {
     const state = this.tasks.workState(actor, lease);
-    const workedTools = this.tasks.steps(actor, lease.task.id).some(step => !step.discarded && step.events.some(event => event.type === 'tool_call' &&
-      !['memory_review', 'memory_search', 'memory_remember', 'task_history_read', 'task_summary_save', 'conversation_send', 'task_rest', 'task_acknowledge'].includes(event.name)));
+    const steps = this.tasks.steps(actor, lease.task.id).filter(step => !step.discarded);
+    // A Bot-to-Bot reply that only read and answered leaves its whole outcome in the posted message,
+    // which history_search already finds; a handoff summary would cost a full extra model call.
+    const reply = lease.task.conversation_reply === 1;
+    const exempt = reply ? LIGHT_REPLY_TOOLS : COMPLETION_EXEMPT_TOOLS;
+    const calls = steps.flatMap(step => step.events.filter(event => event.type === 'tool_call'));
+    const workedTools = calls.some(call => !exempt.has(call.name));
+    // Only the lookups this relaxation allows count toward its limit; replies that need no summary today stay that way.
+    const lookups = calls.filter(call => !COMPLETION_EXEMPT_TOOLS.has(call.name)).length;
     const worked = state.remaining_plan.revision > 0 || state.external_operations.length > 0 || state.artifacts.length > 0 || state.child_results.length > 0 ||
-      workedTools || !!this.#db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(lease.task.id);
+      workedTools || (reply && lookups > LIGHT_REPLY_MAX_LOOKUPS) || !!this.#db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(lease.task.id);
     // A summary the model cannot produce must not block the finished answer forever.
     return worked && this.tasks.promptAttempts(actor, lease, 'task_summary_save') < 3 && !this.#summary(actor, lease.task.room_id, lease.task.id) && this.completionSummarySources(actor, lease).length > 0;
   }
