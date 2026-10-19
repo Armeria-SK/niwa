@@ -196,6 +196,7 @@ export default {
   branchHere: '从这里分支',
   phaseWork: '回复与工作',
   phaseMemoryReview: '整理记忆',
+  phaseRoomDigest: '对话摘要',
   phaseTaskSummarySave: '整理结果',
   phaseReadRecovery: '重新规划查找方法',
   phaseReadRecoveryReport: '汇总已确认的范围',

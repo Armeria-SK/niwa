@@ -9,6 +9,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { Type, type TSchema } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { DomainError } from '../domain/types.ts';
+import { DIGEST_SECTIONS, type DigestSection } from '../domain/room-digest.ts';
 import { ATTACHMENT_LIMITS } from '../domain/attachments.ts';
 import type { Agent, FallbackProvider, Settings } from '../domain/types.ts';
 import type { Runtime } from '../runtime/runtime.ts';
@@ -231,6 +232,12 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/rooms$/, schema: object({ title: Type.String({ minLength: 1, maxLength: 200 }), participants: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
       run: (_m, b) => runtime.createRoom(admin, b.title as string, b.participants as string[] | undefined) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, run: m => runtime.messages(admin, m[1]!) },
+    { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/digest$/, run: m => ({ digest: runtime.digests.get(admin, m[1]!) ?? null, history: runtime.digests.history(admin, m[1]!) }) },
+    { method: 'PATCH', path: /^\/api\/rooms\/([0-9a-f-]{36})\/digest\/items\/(d[0-9]{1,15})$/,
+      schema: object({ text: Type.String({ minLength: 1, maxLength: 300 }), section: Type.Union(DIGEST_SECTIONS.map(name => Type.Literal(name))) }),
+      run: (m, b) => runtime.digests.edit(admin, m[1]!, m[2]!, { text: b.text as string, section: b.section as DigestSection }) },
+    { method: 'DELETE', path: /^\/api\/rooms\/([0-9a-f-]{36})\/digest\/items\/(d[0-9]{1,15})$/, schema: object({}), run: m => runtime.digests.remove(admin, m[1]!, m[2]!) },
+    { method: 'POST', path: /^\/api\/rooms\/([0-9a-f-]{36})\/digest\/reset$/, schema: object({}), run: m => { runtime.digests.reset(admin, m[1]!); return { reset: true }; } },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/response-progress$/, run: m => runtime.tasks.responseProgress(admin,m[1]!) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/work-notes$/, run: m => ({notes:runtime.workNotes(admin,m[1]!),progress:runtime.tasks.list(admin).filter(t=>t.room_id===m[1]).slice(-50).map(t=>runtime.tasks.progress(admin,t.id))}) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/coordination$/, run: m => ({tasks:runtime.coordination(admin,m[1]!).map(task=>({...task,progress:runtime.tasks.progress(admin,String(task.id))})),digest:runtime.coordinationDigest(admin,m[1]!)}) },

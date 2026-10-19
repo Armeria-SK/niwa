@@ -13,6 +13,8 @@ const schema = Type.Object({ version: Type.Literal(1), origin: Type.String({ max
   reasoningSummary: Type.Optional(Type.Boolean()),
   tailscaleLogins: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 32 })),
   promptVersion: Type.Optional(Type.Union([Type.Literal('legacy-v4'),Type.Literal('structured-v5')])),
+  /** How Bots read a long conversation: every message (full), every message while a 会話のまとめ is kept on the side (shadow), or the digest in place of older messages (digest). */
+  roomContext: Type.Optional(Type.Union([Type.Literal('full'),Type.Literal('shadow'),Type.Literal('digest')])),
   port: Type.Integer({ minimum: 1, maximum: 65535 }), workspaceExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
   programExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })), browserExecutorUid: Type.Optional(Type.Integer({ minimum: 1 })),
   workareasEnabled: Type.Optional(Type.Boolean()), packagesEnabled: Type.Optional(Type.Boolean()) }, { additionalProperties: false });
