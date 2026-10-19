@@ -18,6 +18,7 @@ export default {
   tabMcp: 'MCP接続',
   tabActivity: '活動と人数',
   tabBackup: 'バックアップ',
+  tabSound: '音',
 
   // モデルと接続
   defaultModelTitle: 'いつものモデル',
@@ -198,4 +199,15 @@ export default {
   setupLeaderBody: 'その接続を保存するか、Botのプロフィールでリーダーのモデルを、つながっている接続先のものに変えてください。',
   setupBotTitle: '{name}のモデル（{provider}）がつながっていません',
   setupBotBody: 'その接続を保存するか、Botのプロフィールで{name}のモデルを、つながっている接続先のものに変えてください。',
+
+  // 知らせの音
+  soundTitle: '知らせの音',
+  soundLead: 'Niwaを開いているあいだ、短い音で知らせます。ほかの画面を見ていても聞こえます。',
+  soundMessageLabel: 'Botの発言が届いたとき',
+  soundMessageDescription: '会話にBotの発言が加わると、柔らかい2つの音が鳴ります。',
+  soundAttentionLabel: 'あなたの返事を待っているとき',
+  soundAttentionDescription: '承認・質問・止まった仕事が新しく出ると、上がっていく3つの音が鳴ります。',
+  soundTry: '試しに鳴らす',
+  soundHint1: 'この設定は、このブラウザーにだけ覚えます。切り替えるとすぐ反映されます。',
+  soundHint2: 'ブラウザーは、画面に一度触れるまで音を出させません。開いたらどこかをクリックしておいてください。',
 };

@@ -12,11 +12,12 @@ import { ModelRoutes } from '../ModelRoutes.jsx';
 import { McpConnections } from '../McpConnections.jsx';
 import { NightPreviewSetting } from '../NightPlan.jsx';
 import { LANGUAGES, t } from '../i18n.js';
-import { CheckIcon, GlobeIcon, LanguageIcon, MemoryIcon, PaletteIcon, PauseIcon, PlayIcon, ShieldIcon, SlidersIcon, UsersIcon } from '../icons.jsx';
+import { CheckIcon, GlobeIcon, LanguageIcon, MemoryIcon, PaletteIcon, PauseIcon, PlayIcon, ShieldIcon, SlidersIcon, SpeakerIcon, UsersIcon } from '../icons.jsx';
+import { playSound, readSounds, writeSounds } from '../sounds.js';
 
 // 欄の名前は、描くたびに今の言語で引く（label は読むときに訳す getter）。
 const tabItem = (value, key, icon) => ({ value, icon, get label() { return t(`settings.${key}`); } });
-const TABS = [tabItem('theme', 'tabTheme', PaletteIcon), tabItem('language', 'tabLanguage', LanguageIcon), tabItem('rules', 'tabRules', ShieldIcon), tabItem('models', 'tabModels', SlidersIcon), tabItem('mcp', 'tabMcp', GlobeIcon), tabItem('activity', 'tabActivity', UsersIcon), tabItem('backup', 'tabBackup', MemoryIcon)];
+const TABS = [tabItem('theme', 'tabTheme', PaletteIcon), tabItem('language', 'tabLanguage', LanguageIcon), tabItem('rules', 'tabRules', ShieldIcon), tabItem('models', 'tabModels', SlidersIcon), tabItem('mcp', 'tabMcp', GlobeIcon), tabItem('activity', 'tabActivity', UsersIcon), tabItem('backup', 'tabBackup', MemoryIcon), tabItem('sound', 'tabSound', SpeakerIcon)];
 /** 下の「設定を保存」で保存する項目が、どの欄にあるか（欄の value）。 */
 const FIELD_TABS = { theme: 'theme', language: 'language', rules: 'rules', autonomous: 'activity', maxMembers: 'activity', unlimited: 'activity', concurrent: 'activity', backupEnabled: 'backup', backupTime: 'backup', backupDays: 'backup' };
 
@@ -32,6 +33,20 @@ function ModelSettings() {
     </section>
     <details className="settings-more"><summary>{t('settings.recentRoutes')}</summary><ModelRoutes /></details>
   </div>;
+}
+
+/** 知らせの音。この端末のブラウザーにだけ覚えるので、切り替えたその場で保存する（ページ下の「設定を保存」は使わない）。 */
+function SoundSettings() {
+  const [sounds, setSounds] = useState(readSounds);
+  const change = (kind, value) => { const next = { ...sounds, [kind]: value }; setSounds(next); writeSounds(next); };
+  const row = (kind, key) => <div key={kind} className="sound-setting">
+    <Switch checked={sounds[kind]} onChange={value => change(kind, value)} label={t(`settings.${key}Label`)} description={t(`settings.${key}Description`)} />
+    <button type="button" className="button secondary" onClick={() => playSound(kind)}><SpeakerIcon size={17} />{t('settings.soundTry')}</button>
+  </div>;
+  return <div className="settings-form"><section className="settings-section"><h2>{t('settings.soundTitle')}</h2><p>{t('settings.soundLead')}</p>
+    {row('message', 'soundMessage')}{row('attention', 'soundAttention')}
+    <p className="field-hint">{t('settings.soundHint1')}<br />{t('settings.soundHint2')}</p>
+  </section></div>;
 }
 
 /** 開いている欄はURL（#settings/欄）で決まる。MCPの認証から戻るページと、モデル接続の案内がここへつなぐ。 */
@@ -55,7 +70,7 @@ export function Settings({ tab = 'theme', onTab, onClose, onPreviewTheme, onPrev
     <nav className="settings-nav" aria-label={t('settings.navLabel')}><Segmented label={t('settings.categoryLabel')} options={TABS.map(({ value, label, icon: Icon }) => ({ value, label: <><Icon size={19} />{label}</> }))} value={tab} onChange={value => { onTab(value); setSaved(false); }} /></nav>
     <div className="settings-pane">
     <div className="settings-scroll" key={tab}>
-    {tab === 'mcp' ? <McpConnections /> : tab === 'models' ? <ModelSettings /> : <form className="settings-form" onSubmit={submit}>
+    {tab === 'mcp' ? <McpConnections /> : tab === 'sound' ? <SoundSettings /> : tab === 'models' ? <ModelSettings /> : <form className="settings-form" onSubmit={submit}>
       {tab === 'theme' ? <section className="settings-section"><h2>{t('settings.themeTitle')}</h2><p>{t('settings.themeLead')}</p><div className="theme-picker" role="group" aria-label={t('settings.themeGroup')}>{THEMES.map(theme => <button type="button" key={theme.id} className={`theme-option ${draft.theme === theme.id ? 'selected' : ''}`} aria-pressed={draft.theme === theme.id} onClick={() => change('theme', theme.id)}><ThemePreview theme={theme} /><strong>{theme.name}</strong><small>{theme.description}</small>{draft.theme === theme.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">{t('settings.themeHint1')}<br />{t('settings.themeHint2')}<br />{t('settings.themeHint3')}</p></section> : null}
       {tab === 'language' ? <section className="settings-section"><h2>{t('settings.languageTitle')}</h2><p>{t('settings.languageLead')}</p><div className="theme-picker language-picker" role="group" aria-label={t('settings.languageGroup')}>{LANGUAGES.map(item => <button type="button" key={item.id} lang={item.id} className={`theme-option language-option ${draft.language === item.id ? 'selected' : ''}`} aria-pressed={draft.language === item.id} onClick={() => change('language', item.id)}><strong>{item.name}</strong><small>{item.sample}</small>{draft.language === item.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">{t('settings.languageHint1')}<br />{t('settings.languageHint2')}<br />{t('settings.languageHint3')}</p></section> : null}
       {tab === 'rules' ? <section className="settings-section"><h2>{t('settings.rulesTitle')}</h2><p>{t('settings.rulesLead1')}<br />{t('settings.rulesLead2')}</p><label className="field"><span>{t('settings.rulesField')}</span><textarea rows={9} maxLength={20000} value={draft.rules} onChange={e => change('rules', e.target.value)} /></label><p className="field-hint">{t('settings.rulesHint1')}<br />{t('settings.rulesHint2')}</p><div className="inline-note"><ShieldIcon size={20} /><span>{t('settings.rulesNote1')}<br />{t('settings.rulesNote2')}</span></div></section> : null}

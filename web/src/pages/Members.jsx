@@ -18,8 +18,6 @@ import { rich } from '../i18n-react.js';
 /** Botの一覧と、選んだBotのプロフィール・記憶・手順帳。どのBotのどの欄を見ているかはURL（#bots/ID/欄）で決まる。 */
 export function Members({ members, memberMap, selected, tab = 'profile', onSelect, onClose, onTab, onOpenBot, onUpdate, onSaveMemory, onDeleteMemory, onDM, paused, onAdd, maxMembers, onDelete, onOpenThread, onDormant, onImported }) {
   const [adding, setAdding] = useState(false);
-  const [deleting, setDeleting] = useState(null);
-  const [resting, setResting] = useState(null);
   const atLimit = members.filter(item => item.authority !== 'leader').length >= maxMembers;
   // 「みんなの記憶」（#bots/everyone）は、Botを1体選ぶ代わりに、すべてのBotの記憶をまとめて見る。
   const everyone = selected === 'everyone';
@@ -38,21 +36,28 @@ export function Members({ members, memberMap, selected, tab = 'profile', onSelec
     </div></div>
     {importing ? <Modal drawer title={t('bots.importTitle')} className="bot-drawer" onClose={onClose}><div className="member-detail-scroll"><BotImport onImported={onImported} /></div></Modal> : null}
     {everyone ? <Modal drawer title={t('bots.everyoneMemory')} className="bot-drawer" onClose={onClose}><EveryoneMemory tab={tab === 'conflicts' ? 'conflicts' : 'search'} onTab={onTab} members={memberMap} onSaveMemory={onSaveMemory} onDeleteMemory={onDeleteMemory} onOpenThread={onOpenThread} onOpenBot={onOpenBot} /></Modal> : null}
-    {member ? <Modal key={member.id} drawer className="bot-drawer" onClose={onClose} title={<span className="bot-drawer-title"><span><Avatar member={member} size={36} /></span><span>{member.name}<small>{member.role}</small></span></span>}>
-      <div className="bot-drawer-actions"><button className="button secondary" onClick={() => onDM(member.id)}><ChatIcon size={18} />{t('bots.talkPrivately')}</button>{member.authority !== 'leader' ? member.status === 'sleeping' ? <button className="button secondary" onClick={() => onDormant(member.id, false)}>{t('bots.bringBack')}</button> : <button className="button subtle" onClick={() => setResting(member)}>{t('bots.letRest')}</button> : null}</div>
-      <Segmented underline label={t('bots.detailTabs')} className="detail-tabs" options={[{ value: 'profile', label: t('bots.tabProfile') }, { value: 'memory', label: t('bots.tabMemory') }, { value: 'procedures', label: t('bots.tabProcedures') }, { value: 'export', label: t('bots.tabExport') }]} value={tab} onChange={onTab} />
-      <div className="member-detail-scroll" key={`${member.id}-${tab}`}>
-        {tab === 'profile' ? <Profile key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
-        {tab === 'procedures' ? <ProcedureBook key={member.id} member={member} /> : null}
-        {tab === 'export' ? <BotExport key={member.id} member={member} /> : null}
-        {tab === 'memory' ? <MemoryList key={member.id} member={member} onSave={onSaveMemory} onDelete={onDeleteMemory} onOpenThread={onOpenThread} /> : null}
-        {tab === 'profile' && member.authority !== 'leader' ? <button className="button subtle" onClick={() => setDeleting(member)}>{t('bots.deleteBot')}</button> : null}
-      </div>
-    </Modal> : null}
-    {deleting ? <DeleteMember member={deleting} onClose={() => setDeleting(null)} onDelete={onDelete} /> : null}
-    {resting ? <Modal title={t('bots.restTitle', { name: resting.name })} onClose={() => setResting(null)}><div className="modal-body"><p className="muted">{rich('bots.restBody', { br: <br /> })}</p></div><div className="form-actions"><button type="button" className="button subtle" onClick={() => setResting(null)}>{t('bots.cancel')}</button><button type="button" className="button primary" onClick={async () => { if (await onDormant(resting.id, true)) setResting(null); }}>{t('bots.letRest')}</button></div></Modal> : null}
+    {member ? <BotDrawer key={member.id} member={member} tab={tab} onTab={onTab} onClose={onClose} onUpdate={onUpdate} onSaveMemory={onSaveMemory} onDeleteMemory={onDeleteMemory} onDM={onDM} onOpenThread={onOpenThread} onDormant={onDormant} onDelete={onDelete} /> : null}
     {adding ? <AddMemberModal atLimit={atLimit} maxMembers={maxMembers} onClose={() => setAdding(false)} onAdd={async draft => { const error = await onAdd(draft); if (!error) setAdding(false); return error; }} /> : null}
   </main>;
+}
+
+/** 1体のBotの脇の欄（プロフィール・記憶・手順帳・書き出し）。Botの画面のほか、会話の上にも重ねて開く。閉じると開く前の画面に戻る。 */
+export function BotDrawer({ member, tab = 'profile', onTab, onClose, onUpdate, onSaveMemory, onDeleteMemory, onDM, onOpenThread, onDormant, onDelete }) {
+  const [deleting, setDeleting] = useState(null);
+  const [resting, setResting] = useState(null);
+  return <><Modal drawer className="bot-drawer" onClose={onClose} title={<span className="bot-drawer-title"><span><Avatar member={member} size={36} /></span><span>{member.name}<small>{member.role}</small></span></span>}>
+    <div className="bot-drawer-actions"><button className="button secondary" onClick={() => onDM(member.id)}><ChatIcon size={18} />{t('bots.talkPrivately')}</button>{member.authority !== 'leader' ? member.status === 'sleeping' ? <button className="button secondary" onClick={() => onDormant(member.id, false)}>{t('bots.bringBack')}</button> : <button className="button subtle" onClick={() => setResting(member)}>{t('bots.letRest')}</button> : null}</div>
+    <Segmented underline label={t('bots.detailTabs')} className="detail-tabs" options={[{ value: 'profile', label: t('bots.tabProfile') }, { value: 'memory', label: t('bots.tabMemory') }, { value: 'procedures', label: t('bots.tabProcedures') }, { value: 'export', label: t('bots.tabExport') }]} value={tab} onChange={onTab} />
+    <div className="member-detail-scroll" key={`${member.id}-${tab}`}>
+      {tab === 'profile' ? <Profile key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
+      {tab === 'procedures' ? <ProcedureBook key={member.id} member={member} /> : null}
+      {tab === 'export' ? <BotExport key={member.id} member={member} /> : null}
+      {tab === 'memory' ? <MemoryList key={member.id} member={member} onSave={onSaveMemory} onDelete={onDeleteMemory} onOpenThread={onOpenThread} /> : null}
+      {tab === 'profile' && member.authority !== 'leader' ? <button className="button subtle" onClick={() => setDeleting(member)}>{t('bots.deleteBot')}</button> : null}
+    </div>
+  </Modal>
+  {deleting ? <DeleteMember member={deleting} onClose={() => setDeleting(null)} onDelete={onDelete} /> : null}
+  {resting ? <Modal title={t('bots.restTitle', { name: resting.name })} onClose={() => setResting(null)}><div className="modal-body"><p className="muted">{rich('bots.restBody', { br: <br /> })}</p></div><div className="form-actions"><button type="button" className="button subtle" onClick={() => setResting(null)}>{t('bots.cancel')}</button><button type="button" className="button primary" onClick={async () => { if (await onDormant(resting.id, true)) setResting(null); }}>{t('bots.letRest')}</button></div></Modal> : null}</>;
 }
 
 function Profile({ member, onSave }) {

@@ -48,6 +48,7 @@ export default {
 
   // 알림
   threadPinned: '대화를 고정했어요',
+  threadRenamed: '대화 이름을 바꿨어요',
   threadUnpinned: '고정을 해제했어요',
   threadArchived: '보관했어요. 내용은 그대로 남아 있어요.',
   threadRestored: '대화를 보관에서 꺼냈어요',

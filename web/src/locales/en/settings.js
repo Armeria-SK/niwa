@@ -18,6 +18,7 @@ export default {
   tabMcp: 'MCP connections',
   tabActivity: 'Activity & team size',
   tabBackup: 'Backup',
+  tabSound: 'Sound',
 
   // Models & connections
   defaultModelTitle: 'Default model',
@@ -198,4 +199,15 @@ export default {
   setupLeaderBody: 'Save that connection, or change the leader’s model in its Bot profile to one from a working connection.',
   setupBotTitle: '{name}’s model ({provider}) isn’t connected',
   setupBotBody: 'Save that connection, or change {name}’s model in the Bot profile to one from a working connection.',
+
+  // Notification sounds
+  soundTitle: 'Notification sounds',
+  soundLead: 'While Niwa is open, a short sound lets you know. You can hear it even while looking at another window.',
+  soundMessageLabel: 'When a Bot’s message arrives',
+  soundMessageDescription: 'Two soft notes play when a Bot adds a message to a conversation.',
+  soundAttentionLabel: 'When something is waiting for your reply',
+  soundAttentionDescription: 'Three rising notes play when a new approval, question or stopped task appears.',
+  soundTry: 'Play sample',
+  soundHint1: 'This setting is kept only in this browser. Changes apply right away.',
+  soundHint2: 'Browsers do not play sound until you interact with the page once. Click anywhere after opening Niwa.',
 };

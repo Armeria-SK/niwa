@@ -226,6 +226,8 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       rooms: runtime.rooms(admin).map(room => ({ ...room, ...runtime.roomPreferences(admin, room.id), ...runtime.messageSummary(admin, room.id), acknowledgments: runtime.acknowledgments(admin, room.id), participants: runtime.participants(admin, room.id) })), settings: runtime.settings(admin), commonRules: runtime.commonRules(admin), tasks: runtime.tasks.list(admin).map(task => ({ ...task, work_root_id:runtime.tasks.workRoot(admin,String(task.id)), control_revision:runtime.tasks.controlRevision(admin,String(task.id)), progress:runtime.tasks.progress(admin,String(task.id)), replies: runtime.tasks.replies(admin, task.id) })) }) },
     { method: 'PATCH', path: /^\/api\/rooms\/([0-9a-f-]{36})\/organization$/, schema: object({ pinned: Type.Optional(Type.Boolean()), archived: Type.Optional(Type.Boolean()) }),
       run: (m, b) => { runtime.organizeRoom(admin, m[1]!, b); return runtime.roomPreferences(admin, m[1]!); } },
+    { method: 'PATCH', path: /^\/api\/rooms\/([0-9a-f-]{36})\/title$/, schema: object({ title: Type.String({ minLength: 1, maxLength: 200 }) }),
+      run: (m, b) => runtime.renameRoom(admin, m[1]!, b.title as string) },
     { method: 'POST', path: /^\/api\/rooms$/, schema: object({ title: Type.String({ minLength: 1, maxLength: 200 }), participants: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })) }),
       run: (_m, b) => runtime.createRoom(admin, b.title as string, b.participants as string[] | undefined) },
     { method: 'GET', path: /^\/api\/rooms\/([0-9a-f-]{36})\/messages$/, run: m => runtime.messages(admin, m[1]!) },

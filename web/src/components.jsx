@@ -45,6 +45,14 @@ export function Modal({ title, children, onClose, className = '', drawer = false
     dialog.showModal();
     return () => { clearTimeout(timer.current); dialog.close(); previous?.focus?.(); };
   }, []);
+  // 脇の欄では見出しの高さを --modal-top-height に置き、中で上に留まる欄（記憶の検索など）が見出しの下で止まるようにする。
+  useEffect(() => {
+    const dialog = ref.current, top = dialog?.querySelector(':scope > .modal-top');
+    if (!drawer || !top || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(() => dialog.style.setProperty('--modal-top-height', `${top.offsetHeight}px`));
+    observer.observe(top);
+    return () => observer.disconnect();
+  }, [drawer]);
   function requestClose() {
     if (timer.current) return;
     if (reducedMotion()) { onClose(); return; }

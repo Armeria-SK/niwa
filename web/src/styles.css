@@ -386,6 +386,9 @@
   .pause-setting > div { display: flex; flex-direction: column; gap: 9px; }
   .pause-setting strong { font-size: var(--fs-2); font-weight: 500; }
   .pause-setting small { font-size: var(--fs-1); color: var(--muted); }
+  /* 知らせの音: 切り替えの右に「試しに鳴らす」。狭い画面ではボタンを下へ回す。 */
+  .sound-setting { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .sound-setting .switch-row { flex: 1 1 320px; }
   .input-with-unit { display: flex; align-items: center; gap: 11px; }
   .input-with-unit > span { color: var(--muted); font-size: var(--fs-2); }
   .narrow-field { max-width: 280px; }
@@ -478,7 +481,8 @@
   .bot-import-who small { color: var(--muted); font-size: var(--fs-1); }
   .bot-import-list { margin: 0; padding-left: 1.4em; display: grid; gap: var(--space-1); font-size: var(--fs-2); line-height: 1.7; overflow-wrap: anywhere; }
   @keyframes drawer-in { from { transform: translateX(28px); opacity: 0; } }
-  .memory-search { position: sticky; top: -5px; z-index: 1; background: var(--canvas); padding-block: 4px 0; }
+  .memory-search { position: sticky; top: -5px; z-index: 1; background: var(--paper); padding-block: 4px 0; }
+  .modal.drawer .memory-search { top: var(--modal-top-height, 0px); }
   .memory-search .memory-count { margin: 10px 0 4px; }
   .everyone-row .everyone-icon { width: 44px; height: 44px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; background: var(--selected); color: var(--accent-text); }
   .everyone-memory { display: flex; flex-direction: column; min-height: 0; flex: 1; }

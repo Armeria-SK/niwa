@@ -225,3 +225,11 @@ test('Bot icons move by state: working hops, waiting tilts, sleeping closes its 
  assert.deepEqual(one,again);assert.notDeepEqual(one,other);
  for(const timing of [one,other,blinkTiming(''),blinkTiming(undefined)]){assert.ok(timing.period>=4.2&&timing.period<=6.6);assert.ok(timing.delay<=0&&timing.delay>-6);}
 });
+test('notification sounds chime only for new Bot messages or new things waiting on you, never on the first load',async()=>{
+ const {soundSnapshot,soundCue,readSounds}=await ui('sounds.js');const rooms=(...counts:number[])=>counts.map((count,i)=>({id:'r'+i,bot_message_count:count}));
+ const base=soundSnapshot(rooms(2,0),[{kind:'decisions',id:'decisions'}]);assert.equal(soundCue(null,base),null);assert.equal(soundCue(base,soundSnapshot(rooms(2,0),[{kind:'decisions',id:'decisions'}])),null);
+ assert.equal(soundCue(base,soundSnapshot(rooms(3,0),[])),'message');assert.equal(soundCue(base,soundSnapshot([...rooms(2,0),{id:'new',bot_message_count:1}],[])),'message');assert.equal(soundCue(base,soundSnapshot(rooms(1,0),[])),null);
+ const asked=soundSnapshot(rooms(2,0),[{kind:'question',id:'q1'}]);assert.equal(soundCue(base,asked),'attention');assert.equal(soundCue(asked,soundSnapshot(rooms(3,0),[{kind:'question',id:'q1'}])),'message');
+ assert.equal(soundCue(base,soundSnapshot(rooms(3,0),[{kind:'approval',id:'t1'}])),'attention');assert.equal(soundCue(asked,soundSnapshot(rooms(2,0),[{kind:'stopped',id:'q1'}])),'attention');
+ assert.deepEqual(readSounds(),{message:true,attention:true});
+});

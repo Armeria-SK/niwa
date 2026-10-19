@@ -48,6 +48,7 @@ export default {
 
   // 知らせ
   threadPinned: '会話をピン留めしました',
+  threadRenamed: '会話の名前を変えました',
   threadUnpinned: 'ピン留めを解除しました',
   threadArchived: '保管しました。中身はそのまま残っています。',
   threadRestored: '会話を保管から戻しました',
