@@ -84,8 +84,10 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
     } } finally { setSending(false); }
   }
   return <>
-    <header className="message-scroll conversation-header" aria-label="会話のヘッダー">
-      <div className="thread-date"><time>{thread.day}</time><div className="thread-tools"><button className="text-button" onClick={onShowWork}>共同作業</button><button className="text-button" disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={15} />新しい会話</button><button className="text-button" aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={15} />{thread.pinned ? 'ピン解除' : 'ピン留め'}</button><button className="text-button" onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={15} />{thread.archived ? '保管から戻す' : '保管する'}</button></div>{thread.scope === 'private' ? <span className="private-label"><LockIcon size={14} />個別の会話</span> : null}</div>
+    <header className="conversation-head" aria-label="会話のヘッダー">
+      <div className="conversation-head-text"><h1><span>{thread.title}</span>{thread.scope === 'private' ? <LockIcon size={16} aria-label="個別の会話" /> : null}</h1><p>{thread.scope === 'private' ? '個別の会話' : '共有の会話'}{thread.day ? ` · ${thread.day}から` : ''}{thread.members.length ? ` · ${thread.members.length}体` : ''}</p></div>
+      <span className="conversation-faces" aria-hidden="true">{thread.members.slice(0, 4).map(id => memberMap[id] ? <span key={id}><Avatar member={memberMap[id]} motion="none" size={24} /></span> : null)}</span>
+      <div className="conversation-head-actions"><button className="button subtle" onClick={onShowWork}>共同作業</button><IconButton label={thread.pinned ? 'ピン留めを解除' : 'ピン留め'} aria-pressed={thread.pinned} onClick={() => onThreadAction(thread.id, 'pinned')}><PinIcon size={19} /></IconButton><IconButton label={thread.archived ? '保管から戻す' : '保管する'} aria-pressed={thread.archived} onClick={() => onThreadAction(thread.id, 'archived')}><ArchiveIcon size={19} /></IconButton><IconButton label="新しい会話" disabled={deletedConversation} onClick={onNewSession}><PlusIcon size={20} /></IconButton></div>
     </header>
     <div className="message-scroll conversation-replies" ref={listRef} onScroll={()=>{const node=listRef.current;followBottom.current=node.scrollHeight-node.scrollTop-node.clientHeight<80;}}>
       <Message acknowledgments={thread.acknowledgments} message={history.first} isRoot title={thread.title} memberMap={memberMap} artifacts={artifacts} onAttachment={setOpenFile} onMember={onMember} onReply={message => { setReplyTo(message); inputRef.current?.focus(); }} onArtifact={onArtifact} />
@@ -124,14 +126,13 @@ function ThreadBody({ onShowWork, thread, tasks, artifacts, drafts, onNewSession
 }
 
 function Message({ acknowledgments = [], message, isRoot = false, title, memberMap, artifacts = [], onAttachment, onMember, onReply, onArtifact, onCompare }) {
-  if (!message) return <h1>{title}</h1>;
+  if (!message) return null;
   const member = memberMap[message.author];
   // 聞き比べは、いるBotの文章の発言だけ。休んでいるBotは同じ記憶の範囲を読めないので出さない。
   const comparable = onCompare && member && !member.deleted && member.status !== 'sleeping' && !!message.text;
-  return <article data-message-id={message.id} className={`message ${isRoot ? 'root-message' : ''}`}>
+  return <article data-message-id={message.id} className={`message ${isRoot ? 'root-message' : ''} ${member ? '' : 'mine'}`}>
     {member ? <button className="avatar-button" aria-label={`${member.name}のプロフィール`} onClick={() => onMember(member.id)}><Avatar member={member} size={60} /></button> : <Avatar size={60} />}
     <div className="message-content"><div className="message-meta"><strong>{member?.name || 'あなた'}</strong><time dateTime={message.created_at}>{message.time}</time><IconButton label={`${member?.name || 'あなた'}のメッセージに返信`} className="message-reply" onClick={() => onReply(message)}><ReplyIcon size={18} /></IconButton>{comparable ? <IconButton label="別のモデルでも聞く" className="message-compare" onClick={() => onCompare(message)}><CompareIcon size={18} /></IconButton> : null}</div>
-      {isRoot ? <h1>{title}</h1> : null}
       {(message.text || message.replyTo || message.artifact || message.attachments?.length) ? <div className="message-bubble">
       {message.reply_to ? <span className="message-reply-label"><ReplyIcon size={13} />返信</span> : null}
       {message.replyTo ? <blockquote><span>{memberMap[message.replyTo.author]?.name || 'あなた'}</span>{message.replyTo.text}</blockquote> : null}

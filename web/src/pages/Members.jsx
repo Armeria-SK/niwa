@@ -1,5 +1,4 @@
 import { DeleteMember } from '../DeleteMember.jsx';
-import { MemberScroll } from '../MemberScroll.jsx';
 import { useState } from 'react';
 import { ModelPicker } from '../ModelPicker.jsx';
 import { SHAPES } from '../data.js';
@@ -12,10 +11,10 @@ import { MemoryDeleteModal, MemoryEditModal, MemorySourceLine } from '../MemoryD
 import { BotExport } from '../BotExport.jsx';
 import { BotImport } from '../BotImport.jsx';
 import { Avatar, AppearanceFields, MotionPicker, EmptyState, IconButton, Modal, Segmented, StatusLabel } from '../components.jsx';
-import { ChatIcon, ChevronRightIcon, EditIcon, LockIcon, MemoryIcon, SearchIcon, TrashIcon, CloseIcon, CheckIcon, PlusIcon, UsersIcon } from '../icons.jsx';
+import { ChatIcon, EditIcon, LockIcon, MemoryIcon, SearchIcon, TrashIcon, CloseIcon, CheckIcon, PlusIcon, UsersIcon } from '../icons.jsx';
 
 /** Botの一覧と、選んだBotのプロフィール・記憶・手順帳。どのBotのどの欄を見ているかはURL（#bots/ID/欄）で決まる。 */
-export function Members({ members, memberMap, selected, tab = 'profile', onSelect, onTab, onOpenBot, onUpdate, onSaveMemory, onDeleteMemory, onDM, paused, onAdd, maxMembers, onDelete, onOpenThread, onDormant, onImported }) {
+export function Members({ members, memberMap, selected, tab = 'profile', onSelect, onClose, onTab, onOpenBot, onUpdate, onSaveMemory, onDeleteMemory, onDM, paused, onAdd, maxMembers, onDelete, onOpenThread, onDormant, onImported }) {
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState(null);
   const [resting, setResting] = useState(null);
@@ -24,21 +23,30 @@ export function Members({ members, memberMap, selected, tab = 'profile', onSelec
   const everyone = selected === 'everyone';
   // 「Botの読み込み」（#bots/import）は、書き出したファイルから新しいBotを迎える。
   const importing = selected === 'import';
-  const member = members.find(item => item.id === selected) || members[0];
+  // 一覧はいつもカードで並べ、選んだBot（#bots/ID）の詳しいことは右の脇の欄に出す。
+  const member = members.find(item => item.id === selected);
   return <main className="work-area members-page" id="main-content" tabIndex={-1}>
     <div className="page-heading"><div><span className="eyebrow">それぞれの個性を、大切に。</span><h1>Bot</h1><p>話し方、記憶、見た目。<br />ひとりずつ、少しずつ。</p></div><div className="member-heading-actions"><span className="quiet-count">{members.length}体のBot</span><button className="button secondary" onClick={() => onSelect('import')} aria-pressed={importing}>Botを読み込む</button><button className="button primary" onClick={() => setAdding(true)}><PlusIcon size={17} />Botを迎える</button></div></div>
-    <div className="members-layout"><MemberScroll><button className={`member-list-row everyone-row ${everyone ? 'selected' : ''}`} onClick={() => onSelect('everyone')} aria-pressed={everyone}><span className="everyone-icon"><UsersIcon size={26} /></span><span><strong>みんなの記憶</strong><small>探す・見比べる</small></span><ChevronRightIcon size={17} /></button>{members.map(item => <button key={item.id} className={`member-list-row ${!everyone && !importing && item.id === member.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)} aria-pressed={!everyone && !importing && item.id === member.id}><Avatar member={item} size={64} /><span><strong>{item.name}{item.authority === 'leader' ? <span className="role-label">リーダー</span> : null}</strong><small>{item.role}</small><StatusLabel member={item} paused={paused} showDescription={false} /></span><ChevronRightIcon size={17} /></button>)}</MemberScroll>
-      {importing ? <section className="member-detail" aria-label="Botの読み込み"><div className="member-detail-scroll"><BotImport onImported={onImported} /></div></section> : everyone ? <section className="member-detail" aria-label="みんなの記憶"><EveryoneMemory tab={tab === 'conflicts' ? 'conflicts' : 'search'} onTab={onTab} members={memberMap} onSaveMemory={onSaveMemory} onDeleteMemory={onDeleteMemory} onOpenThread={onOpenThread} onOpenBot={onOpenBot} /></section> : <section className="member-detail" aria-label={`${member.name}の詳細`}><div className="member-detail-top"><Avatar member={member} size={76} /><div><h2>{member.name}</h2><span className="muted">{member.role}</span></div>{member.authority !== 'leader' ? member.status === 'sleeping' ? <button className="button secondary" onClick={() => onDormant(member.id, false)}>呼び戻す</button> : <button className="button subtle" onClick={() => setResting(member)}>休ませる</button> : null}<button className="button secondary" onClick={() => onDM(member.id)}><ChatIcon size={18} />個別に話す</button></div>
-        <Segmented label="Botの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }, { value: 'procedures', label: '手順帳' }, { value: 'export', label: 'Botの書き出し' }]} value={tab} onChange={onTab} />
-        <div className="member-detail-scroll" key={`${member.id}-${tab}`}>
+    <div className="members-grid-scroll"><div className="members-grid">
+      {members.map(item => <button key={item.id} type="button" className={`bot-card ${item.status === 'sleeping' ? 'sleeping' : ''} ${item.id === member?.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)} aria-pressed={item.id === member?.id}>
+        <span className="bot-card-top"><span className="bot-card-avatar"><Avatar member={item} size={48} /></span><span className="bot-card-text"><strong className="bot-card-name">{item.name}{item.authority === 'leader' ? <span className="role-label">リーダー</span> : null}</strong><small>{item.role}</small></span></span>
+        <StatusLabel member={item} paused={paused} showDescription={false} />
+      </button>)}
+      <button type="button" className={`bot-card utility ${everyone ? 'selected' : ''}`} onClick={() => onSelect('everyone')} aria-pressed={everyone}><span className="everyone-icon"><UsersIcon size={24} /></span><strong>みんなの記憶</strong><small>探す・見比べる</small></button>
+    </div></div>
+    {importing ? <Modal drawer title="Botの読み込み" className="bot-drawer" onClose={onClose}><div className="member-detail-scroll"><BotImport onImported={onImported} /></div></Modal> : null}
+    {everyone ? <Modal drawer title="みんなの記憶" className="bot-drawer" onClose={onClose}><EveryoneMemory tab={tab === 'conflicts' ? 'conflicts' : 'search'} onTab={onTab} members={memberMap} onSaveMemory={onSaveMemory} onDeleteMemory={onDeleteMemory} onOpenThread={onOpenThread} onOpenBot={onOpenBot} /></Modal> : null}
+    {member ? <Modal key={member.id} drawer className="bot-drawer" onClose={onClose} title={<span className="bot-drawer-title"><span><Avatar member={member} size={36} /></span><span>{member.name}<small>{member.role}</small></span></span>}>
+      <div className="bot-drawer-actions"><button className="button secondary" onClick={() => onDM(member.id)}><ChatIcon size={18} />個別に話す</button>{member.authority !== 'leader' ? member.status === 'sleeping' ? <button className="button secondary" onClick={() => onDormant(member.id, false)}>呼び戻す</button> : <button className="button subtle" onClick={() => setResting(member)}>休ませる</button> : null}</div>
+      <Segmented underline label="Botの情報" className="detail-tabs" options={[{ value: 'profile', label: 'プロフィール' }, { value: 'memory', label: '記憶' }, { value: 'procedures', label: '手順帳' }, { value: 'export', label: 'Botの書き出し' }]} value={tab} onChange={onTab} />
+      <div className="member-detail-scroll" key={`${member.id}-${tab}`}>
         {tab === 'profile' ? <Profile key={member.id} member={member} onSave={patch => onUpdate(member.id, patch)} /> : null}
         {tab === 'procedures' ? <ProcedureBook key={member.id} member={member} /> : null}
         {tab === 'export' ? <BotExport key={member.id} member={member} /> : null}
         {tab === 'memory' ? <MemoryList key={member.id} member={member} onSave={onSaveMemory} onDelete={onDeleteMemory} onOpenThread={onOpenThread} /> : null}
         {tab === 'profile' && member.authority !== 'leader' ? <button className="button subtle" onClick={() => setDeleting(member)}>このBotを削除</button> : null}
-        </div>
-      </section>}
-    </div>
+      </div>
+    </Modal> : null}
     {deleting ? <DeleteMember member={deleting} onClose={() => setDeleting(null)} onDelete={onDelete} /> : null}
     {resting ? <Modal title={`${resting.name}を休ませますか？`} onClose={() => setResting(null)}><div className="modal-body"><p className="muted">進めている仕事は止まり、自分から動く活動もしなくなります。<br />記憶と会話はそのまま残り、いつでも呼び戻せます。</p></div><div className="form-actions"><button type="button" className="button subtle" onClick={() => setResting(null)}>やめる</button><button type="button" className="button primary" onClick={async () => { if (await onDormant(resting.id, true)) setResting(null); }}>休ませる</button></div></Modal> : null}
     {adding ? <AddMemberModal atLimit={atLimit} maxMembers={maxMembers} onClose={() => setAdding(false)} onAdd={async draft => { const error = await onAdd(draft); if (!error) setAdding(false); return error; }} /> : null}

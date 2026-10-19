@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 /** The chosen color theme, shared by every browser that opens Niwa. NULL until someone saves one; each browser keeps its own choice until then. */
-export const THEME_IDS = ['auto', 'garden', 'sand', 'mist', 'lilac', 'night'] as const;
+export const THEME_IDS = ['auto', 'garden', 'sand', 'mist', 'lilac', 'night', 'blossom', 'honey', 'lagoon', 'forest', 'twilight', 'graphite'] as const;
 /** Idempotent: databases rewound for upgrade tests may already carry the column. */
 export function themeSchema(db: DatabaseSync): void {
   const columns = new Set(db.prepare('PRAGMA table_info(settings)').all().map(column => column.name));

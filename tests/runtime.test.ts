@@ -7,6 +7,7 @@ import { Runtime } from '../src/runtime/runtime.ts';
 import { DomainError } from '../src/domain/types.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { businessDefault, currentDefault, firstDefault } from '../src/storage/common-rules-default-schema.ts';
+import { themePaletteSchema } from '../src/storage/theme-palette-schema.ts';
 
 function fixture(t: { after: (fn: () => void) => void }) {
   const path = mkdtempSync(join(tmpdir(), 'niwa-test-'));
@@ -283,4 +284,25 @@ test('the color theme is saved once for every browser and only known themes are 
   assert.equal(f.runtime.settings(f.admin).theme, 'night');
   assert.throws(() => f.runtime.updateSettings(f.admin, { theme: 'neon' }), /Unknown theme/);
   assert.equal(f.runtime.updateSettings(f.admin, { theme: 'auto' }).theme, 'auto');
+});
+
+test('the six added themes save, and an older database is widened to accept them without touching the saved theme', t => {
+  const f = fixture(t);
+  for (const theme of ['blossom', 'honey', 'lagoon', 'forest', 'twilight', 'graphite']) assert.equal(f.runtime.updateSettings(f.admin, { theme }).theme, theme);
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  db.exec('CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id = 1), paused INTEGER NOT NULL DEFAULT 0)');
+  db.exec("ALTER TABLE settings ADD COLUMN theme TEXT CHECK(theme IS NULL OR theme IN ('auto','garden','sand','mist','lilac','night'))");
+  db.exec("INSERT INTO settings (id, theme) VALUES (1, 'night')");
+  assert.throws(() => db.exec("UPDATE settings SET theme='forest'"), /CHECK/);
+  themePaletteSchema(db);
+  themePaletteSchema(db);
+  assert.equal(db.prepare('SELECT theme FROM settings').get()!.theme, 'night');
+  db.exec("UPDATE settings SET theme='forest'");
+  assert.equal(db.prepare('SELECT theme FROM settings').get()!.theme, 'forest');
+  assert.throws(() => db.exec("UPDATE settings SET theme='neon'"), /CHECK/);
+  const odd = new DatabaseSync(':memory:');
+  t.after(() => odd.close());
+  odd.exec("CREATE TABLE settings (id INTEGER PRIMARY KEY, theme TEXT CHECK(theme IN ('garden')))");
+  assert.throws(() => themePaletteSchema(odd), /Unexpected settings schema/);
 });

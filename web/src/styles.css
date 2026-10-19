@@ -3,21 +3,34 @@
 @layer base {
   /* 色・文字・角の丸みは、ここで決めた役割の名前だけを使う。テーマ（themes.css）は同じ名前の値を塗り替えるだけ。 */
   :root {
-    font-family: 'Noto Sans JP Variable', 'Noto Sans JP', sans-serif;
+    font-family: var(--font-body);
     font-synthesis: none;
     color: var(--text);
     background: var(--canvas);
-    /* 地・紙・面・選択・線 */
-    --canvas: #fafaf7; --paper: #fdfdfa; --rail: #fafaf7; --surface: #f0f2eb; --selected: #ebefe5; --border: #e2e5dd; --border-strong: #cfd8c4;
-    /* 文字：本文・主色寄りの見出し・弱い文字・ごく弱い文字 */
-    --text: #202d26; --accent-text: #2c5037; --muted: #667261; --faint: #76816f;
+    /* 書体：見出しとBotの名前は丸みのある書体、本文は Noto Sans JP */
+    --font-body: 'Noto Sans JP Variable', 'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif;
+    --font-display: 'Zen Maru Gothic', 'Hiragino Maru Gothic ProN', 'BIZ UDPGothic', 'Yu Gothic UI', sans-serif;
+    /* 地・紙・面・選択・線（ガーデン：生成りの地と苔の緑） */
+    --canvas: #f4f3ee; --paper: #ffffff; --paper-2: #fafaf7; --rail: #ecebe4; --surface: #ecebe4; --selected: #e4efe7; --border: #e4e3db; --border-strong: #d3d2c8;
+    /* 文字：本文・主色寄りの見出し・弱い文字・ごく弱い文字（どれも地の上で 4.5:1 以上） */
+    --text: #1c2420; --accent-text: #245a41; --muted: #5e6962; --faint: #636d66;
     /* 主色と、その上の文字 */
-    --accent: #46684e; --accent-hover: #35593e; --on-accent: #ffffff;
+    --accent: #2f6b4f; --accent-hover: #245a41; --on-accent: #ffffff;
     /* 状態の色：危険・注意・案内・済み（文字と、薄い地） */
-    --danger: #ad514b; --danger-soft: #f6e1dd; --warn: #9b6a2f; --warn-soft: #f6ead3; --info: #34627a; --info-soft: #dfeaf1; --ok: #36704a; --ok-soft: #e1efe4;
-    /* 文字の大きさ6段・角の丸み3種・余白（4の倍数） */
+    --danger: #a33a35; --danger-soft: #f8e4e2; --warn: #8a5d0b; --warn-soft: #f7edd5; --info: #2d5f86; --info-soft: #e4edf5; --ok: #2f6b4f; --ok-soft: #e4efe7;
+    /* 目を向けてほしいもの（あなたの番・承認待ち）だけに使う柿色 */
+    --attention: #b54f26; --on-attention: #ffffff; --attention-text: #b54f26; --attention-soft: #fbeae1; --attention-line: #edcdbd;
+    /* 重なり3段（置く・持ち上げる・重ねる）と、暗い地で縁を見せる線・窓の後ろの幕 */
+    --e1: 0 1px 2px rgba(28, 36, 32, .06), 0 1px 1px rgba(28, 36, 32, .04);
+    --e2: 0 10px 24px -8px rgba(28, 36, 32, .14), 0 2px 6px rgba(28, 36, 32, .05);
+    --e3: 0 36px 90px -18px rgba(28, 36, 32, .34), 0 14px 30px -12px rgba(28, 36, 32, .18);
+    --ring: rgba(28, 36, 32, .04); --scrim: rgba(22, 30, 26, .36);
+    /* 動き：時間4段とゆるみ3種（すっと・ぽよん・さっと） */
+    --d1: 120ms; --d2: 200ms; --d3: 320ms; --d4: 550ms;
+    --ease-out: cubic-bezier(.22, 1, .36, 1); --ease-spring: cubic-bezier(.34, 1.56, .64, 1); --ease-in: cubic-bezier(.55, 0, 1, .45);
+    /* 文字の大きさ6段・角の丸み4種・余白（4の倍数） */
     --fs-1: 12px; --fs-2: 14px; --fs-3: 16px; --fs-4: 18px; --fs-5: 22px; --fs-6: 28px;
-    --r-s: 6px; --r-m: 10px; --r-l: 16px; --radius: var(--r-m);
+    --r-s: 8px; --r-m: 12px; --r-l: 20px; --r-xl: 26px; --radius: var(--r-m);
     --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px; --space-7: 48px;
   }
   * { box-sizing: border-box; }
