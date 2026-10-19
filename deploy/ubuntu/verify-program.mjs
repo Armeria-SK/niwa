@@ -49,7 +49,9 @@ print(json.dumps({'uid':os.getuid(),'limits':limits,'shared_write':True,'network
     process.stdout.write('PASS: memory limit killed oversized allocation\n');
   }
   const timeout = await run({ command: ['python3', '-c', 'import time;time.sleep(30)'], seconds: 1 }); assert.notEqual(timeout.code, 0);
-  await assert.rejects(run({ command: ['python3', '-c', 'import sys;sys.stdout.write("x"*1048576)'], seconds: 5 }), /interrupted/);
+  // Noisy output finishes and keeps only its last 32 KiB instead of becoming an unknown outcome.
+  const noisy = await run({ command: ['python3', '-c', 'import sys;sys.stdout.write("x"*1048576)'], seconds: 5 });
+  assert.equal(noisy.code, 0, noisy.stderr); assert.equal(noisy.output_truncated, true); assert.equal(noisy.stdout, 'x'.repeat(32768));
   const cancel = new AbortController(); const timer = setTimeout(() => cancel.abort(), 1000);
   try { await assert.rejects(run({ command: ['python3', '-c', 'import time;time.sleep(30)'], seconds: 5 }, cancel.signal)); }
   finally { clearTimeout(timer); }
