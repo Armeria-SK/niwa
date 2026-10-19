@@ -71,13 +71,14 @@ export function sanitizeModelRequestTextFields(request: ModelRequest): Sanitized
   };
   const messages = request.messages.map((message): ModelMessage => {
     // Image bytes are not text and pass through as they are.
-    if (message.role === 'user') return { role: 'user', content: text(message.content), ...(message.images ? { images: message.images } : {}) };
+    if (message.role === 'user') return { role: 'user', content: text(message.content), ...(message.images ? { images: message.images } : {}), ...(message.cache_point ? { cache_point: true } : {}) };
     if (message.role === 'tool') {
       return {
         role: 'tool',
         tool_call_id: message.tool_call_id,
         name: message.name,
         content: text(message.content),
+        ...(message.cache_point ? { cache_point: true } : {}),
       };
     }
     return {

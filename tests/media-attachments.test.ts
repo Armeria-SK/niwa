@@ -97,7 +97,7 @@ for (const seeing of [true, false]) test(`a model that ${seeing ? 'can' : 'canno
     assert.deepEqual(runtime.messageAttachments(admin, room.id)[0]!.unseen_by, [leader.id]);
   }
   // The image is counted by an allowance, not by the length of its base64 text.
-  const plain: ModelRequest = { ...sent[0]!, messages: sent[0]!.messages.map(message => message.role === 'user' ? { role: 'user' as const, content: message.content } : message) };
+  const plain: ModelRequest = { ...sent[0]!, messages: sent[0]!.messages.map(message => { if (message.role !== 'user') return message; const { images: _images, ...rest } = message; return rest; }) };
   const extra = fitContext(sent[0]!, [], undefined).estimated_input_tokens - fitContext(plain, [], undefined).estimated_input_tokens;
   assert.ok(seeing ? extra >= IMAGE_TOKENS && extra < IMAGE_TOKENS + 50 : extra === 0, `extra=${extra}`);
 });
