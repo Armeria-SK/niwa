@@ -101,3 +101,13 @@ test('administrator can delete invalidated artifacts without making their source
  assert.ok(r.deletedContent(admin).some(row=>row.id===derived));
  const reopened=new Runtime(root+'/state');try{assert.throws(()=>reopened.artifact(reopened.administrator(),derived));}finally{reopened.close();}
 });
+
+test('history_read accepts a first page revision sent as the text "null" and the artifact SHA256 from artifact_inspect',t=>{
+ const {r,aa,room,lease}=setup(t);
+ const id=r.createArtifact(aa,room.id,'決め事の手順 第1案','text','人工','提案、異議、合意',lease.task.id);
+ const read=(revision:string|null,op:string)=>executeTurnTool(r,aa,lease,{name:'history_read',tool_call_id:op,arguments:{kind:'artifact',source_id:id,offset:0,revision}},op);
+ const first=read('null','text-null');assert.equal(first.error,undefined);assert.match(String(first.text),/提案、異議、合意/);
+ const sha=createHash('sha256').update('提案、異議、合意').digest('hex');
+ const bySha=read(sha,'by-sha');assert.equal(bySha.error,undefined);assert.equal(bySha.revision,first.revision);
+ assert.equal(read('0'.repeat(64),'stale').error,'conflict');
+});

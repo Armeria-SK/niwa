@@ -1510,6 +1510,11 @@ export class Runtime {
     const allowed = this.rooms(actor).some(room => room.id === record?.room_id && (room.visibility === 'shared' || room.id === roomId));
     check(record && allowed, 'not_found', 'Source unavailable in this conversation');
     const current = historyRevision(kind, sourceId, record.room_id, record.body, record.revision ?? null);
+    // artifact_inspect hands out the artifact SHA256; while the artifact is unchanged it names the version being read.
+    if (kind === 'artifact' && revision !== null && revision !== current) {
+      const stored = this.#db.prepare('SELECT a.content,f.sha256 AS file_sha256 FROM artifacts a LEFT JOIN artifact_files f ON f.artifact_id=a.id WHERE a.id=?').get(sourceId)!;
+      if (revision === (stored.file_sha256 ? String(stored.file_sha256) : createHash('sha256').update(String(stored.content)).digest('hex'))) revision = current;
+    }
     check(revision === null || revision === current, 'conflict', 'Source changed; read it again from the beginning');
     check(offset <= record.body.length, 'invalid', 'Offset exceeds source length');
     const next = Math.min(offset + 20_000, record.body.length);
