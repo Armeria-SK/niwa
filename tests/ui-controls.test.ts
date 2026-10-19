@@ -233,3 +233,12 @@ test('notification sounds chime only for new Bot messages or new things waiting 
  assert.equal(soundCue(base,soundSnapshot(rooms(3,0),[{kind:'approval',id:'t1'}])),'attention');assert.equal(soundCue(asked,soundSnapshot(rooms(2,0),[{kind:'stopped',id:'q1'}])),'attention');
  assert.deepEqual(readSounds(),{message:true,attention:true});
 });
+test('chat messages keep a single newline as a line break, outside code',async()=>{
+ const {remarkChatBreaks}=await ui('markdown-breaks.js');
+ const item:any={type:'listItem',children:[{type:'paragraph',children:[{type:'text',value:'見分けられます。\n収益化は'},{type:'inlineCode',value:'a\nb'}]}]};
+ const tree:any={type:'root',children:[{type:'list',children:[item]},{type:'code',value:'x\ny'},{type:'paragraph',children:[{type:'strong',children:[{type:'text',value:'見出し'}]},{type:'text',value:'\r\n本文\n'}]}]};
+ remarkChatBreaks()(tree);
+ assert.deepEqual(item.children[0].children,[{type:'text',value:'見分けられます。'},{type:'break'},{type:'text',value:'収益化は'},{type:'inlineCode',value:'a\nb'}]);
+ assert.deepEqual(tree.children[1],{type:'code',value:'x\ny'});
+ assert.deepEqual(tree.children[2].children.slice(1),[{type:'break'},{type:'text',value:'本文'},{type:'break'}]);
+});

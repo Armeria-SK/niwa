@@ -122,6 +122,9 @@ export function turnTools(isLeader: boolean, external: ExternalTools = {}, share
 export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease, call: ModelToolCall, operationId: string): JsonObject {
   const definition: { description: string; schema: TSchema } | undefined = definitions[call.name as keyof typeof definitions];
   if (!definition) return { error: 'Unknown tool' };
+  // Models sometimes spell the first page's JSON null as the text "null"; no real revision is spelled that way.
+  if ((call.name === 'history_read' || call.name === 'task_history_read') && (call.arguments.revision === 'null' || call.arguments.revision === ''))
+    call = { ...call, arguments: { ...call.arguments, revision: null } };
   if (!Value.Check(definition.schema, call.arguments)) {
     // Report only schema-owned field names, never invalid values or caller-supplied keys.
     const properties = definition.schema.properties as Record<string, TSchema>;

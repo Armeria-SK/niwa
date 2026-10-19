@@ -141,7 +141,7 @@ function Message({ acknowledgments = [], message, isRoot = false, title, memberM
       {(message.text || message.replyTo || message.artifact || message.attachments?.length) ? <div className="message-bubble">
       {message.reply_to ? <span className="message-reply-label"><ReplyIcon size={13} />{t('conversation.replyTag')}</span> : null}
       {message.replyTo ? <blockquote><span>{memberMap[message.replyTo.author]?.name || t('conversation.you')}</span>{message.replyTo.text}</blockquote> : null}
-      {message.text ? <Markdown text={message.text} members={memberMap} /> : null}
+      {message.text ? <Markdown text={message.text} members={memberMap} breaks /> : null}
       {message.artifact ? <ArtifactLink artifact={message.artifact} artifacts={artifacts} onArtifact={onArtifact} /> : null}
       {message.attachments?.length ? <div className="message-attachments">{message.attachments.map(file => file.media_type?.startsWith('image/')
         ? <figure className="message-image" key={file.id}><button type="button" aria-label={t('conversation.openImage', { name: file.name, size: formatSize(file.size) })} onClick={() => onAttachment(file)}><img src={`/api/attachments/${file.id}?view=1`} alt={file.name} loading="lazy" /></button>
