@@ -112,25 +112,32 @@ export class Tasks {
       const { concurrency_limit } = this.#db.prepare('SELECT concurrency_limit FROM settings WHERE id=1').get()!;
       const { count } = this.#db.prepare("SELECT count(*) AS count FROM tasks WHERE state='running'").get()!;
       if (typeof concurrency_limit === 'number' && Number(count) + unwinding >= concurrency_limit) return undefined;
-      const next = (this.#db.prepare(`SELECT t.id,t.agent_id FROM tasks t JOIN agents a ON a.id=t.agent_id
+      const next = (this.#db.prepare(`SELECT t.id,t.agent_id,t.conversation_reply FROM tasks t JOIN agents a ON a.id=t.agent_id
         WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS (SELECT 1 FROM execution_bindings e WHERE e.task_id=t.id AND e.waiting=1 AND e.state='pending') AND NOT EXISTS
           (SELECT 1 FROM tasks running WHERE running.agent_id=t.agent_id AND running.state='running')
-        ORDER BY t.internal_autonomous,t.updated_at,t.rowid`).all() as { id: string; agent_id: string }[]).find(task => !excludedAgents.has(task.agent_id) && this.#autonomyAllowed(task.id));
+        ORDER BY t.internal_autonomous,t.updated_at,t.rowid`).all() as { id: string; agent_id: string; conversation_reply: number }[]).find(task => !excludedAgents.has(task.agent_id) && this.#autonomyAllowed(task.id));
       if (!next) return undefined;
+      // A Bot finishes what it has started before it starts another Bot's reply: replies it has not started can still be merged into one,
+      // instead of several running side by side from views of the conversation that are already out of date. Requests from the
+      // administrator still come first, as before.
+      const started = next.conversation_reply !== 1 ? undefined : (this.#db.prepare(`SELECT t.id FROM tasks t WHERE t.agent_id=? AND t.state='queued' AND t.paused=0 AND t.attempt>0
+        AND NOT EXISTS (SELECT 1 FROM execution_bindings e WHERE e.task_id=t.id AND e.waiting=1 AND e.state='pending') ORDER BY t.updated_at,t.rowid`).all(next.agent_id) as { id: string }[])
+        .find(task => this.#autonomyAllowed(task.id));
+      const chosen = started ?? next;
       const token = randomUUID();
-      this.#db.prepare("UPDATE tasks SET lease_token=?,attempt=attempt+1 WHERE id=?").run(token, next.id);
-      this.#change(next.id, 'running');
-      return { task: publicTask(this.#read(next.id)), token };
+      this.#db.prepare("UPDATE tasks SET lease_token=?,attempt=attempt+1 WHERE id=?").run(token, chosen.id);
+      this.#change(chosen.id, 'running');
+      return { task: publicTask(this.#read(chosen.id)), token };
     });
   }
-  /** Give another runnable job a turn after a durable model/tool step, without ending this work. */
+  /** Give another runnable job a turn after a durable model/tool step, without ending this work. Replies from other Bots to this Bot wait for it to finish. */
   yieldIfWaiting(actor: Actor, lease: TaskLease): boolean {
     return transaction(this.#db, () => {
       this.#owned(actor, lease);
       const waiting = this.#db.prepare(`SELECT t.id,t.updated_at FROM tasks t JOIN agents a ON a.id=t.agent_id
-        WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND NOT EXISTS (SELECT 1 FROM execution_bindings e WHERE e.task_id=t.id AND e.waiting=1 AND e.state='pending') AND NOT EXISTS
+        WHERE t.state='queued' AND t.paused=0 AND a.status='active' AND (t.agent_id<>? OR t.conversation_reply=0) AND NOT EXISTS (SELECT 1 FROM execution_bindings e WHERE e.task_id=t.id AND e.waiting=1 AND e.state='pending') AND NOT EXISTS
           (SELECT 1 FROM tasks r WHERE r.agent_id=t.agent_id AND r.state='running' AND r.id<>?)
-        ORDER BY t.updated_at,t.rowid`).all(lease.task.id).find(row => this.#autonomyAllowed(row.id as string));
+        ORDER BY t.updated_at,t.rowid`).all(lease.task.agent_id, lease.task.id).find(row => this.#autonomyAllowed(row.id as string));
       if (!waiting) return false;
       this.#change(lease.task.id, 'queued');
       this.#db.prepare('UPDATE tasks SET lease_token=NULL,updated_at=MAX(updated_at,?) WHERE id=?')
