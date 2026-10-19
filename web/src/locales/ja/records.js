@@ -194,6 +194,7 @@ export default {
   branchHere: 'ここから分岐',
   phaseWork: '返答・作業',
   phaseMemoryReview: '記憶の整理',
+  phaseRoomDigest: '会話のまとめ',
   phaseTaskSummarySave: '結果の整理',
   phaseReadRecovery: '調べ方の立て直し',
   phaseReadRecoveryReport: '確認できた範囲のまとめ',

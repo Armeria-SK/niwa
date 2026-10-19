@@ -3,7 +3,7 @@ import { locale, serverText, t } from './i18n.js';
 /** 経過の再生で使う言葉。記録の種類ごとに、見出し・中身・色を決める。表には辞書の文言の名前を置き、出すときに今の言語で引く。 */
 const EVENTS = { queued: 'eventQueued', running: 'eventRunning', completed: 'eventCompleted', failed: 'eventFailed', cancelled: 'eventCancelled', waiting_child: 'eventWaitingChild', waiting_user: 'eventWaitingUser',
   waiting_provider: 'eventWaitingProvider', paused: 'eventPaused', resumed: 'eventResumed', instructed: 'eventInstructed', retried: 'eventRetried', interrupted: 'eventInterrupted' };
-const PHASES = { work: 'phaseWork', memory_review: 'phaseMemoryReview', task_summary_save: 'phaseTaskSummarySave', read_recovery: 'phaseReadRecovery', read_recovery_report: 'phaseReadRecoveryReport' };
+const PHASES = { work: 'phaseWork', memory_review: 'phaseMemoryReview', room_digest: 'phaseRoomDigest', task_summary_save: 'phaseTaskSummarySave', read_recovery: 'phaseReadRecovery', read_recovery_report: 'phaseReadRecoveryReport' };
 const STATUSES = { completed: 'runCompleted', failed: 'runFailed', discarded: 'runDiscarded', unknown: 'runUnknown' };
 const LINKS = { request: 'linkRequest', response: 'linkResponse', progress: 'linkProgress', followup: 'linkFollowup', amend: 'linkAmend', cancel: 'linkCancel' };
 const DECISIONS = { approved: 'decisionApproved', declined: 'decisionDeclined', auto: 'decisionAuto' };
