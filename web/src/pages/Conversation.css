@@ -41,3 +41,25 @@
 .typing-dots span:nth-child(3) { animation-delay: .4s; }
 @keyframes draft-typing { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .typing-dots span { animation: none; opacity: .6; } }
+
+/* 会話のまとめ */
+.digest-drawer.drawer { width: min(640px, calc(100vw - 20px)); }
+.digest-scroll { display: flex; flex-direction: column; gap: 14px; padding-bottom: 20px; }
+.digest-intro { margin: 0; padding: 12px 14px; border-radius: 16px; background: var(--selected); line-height: 1.7; }
+.digest-meta { margin: 0; font-size: 12px; color: var(--muted); }
+.digest-notice { margin: 0; padding: 10px 14px; border-radius: 14px; background: var(--paper-2); box-shadow: inset 0 0 0 1px var(--border); }
+.digest-section h3 { margin: 4px 0 8px; font-size: 14px; }
+.digest-item { padding: 12px 14px; margin-bottom: 8px; border-radius: 16px; background: var(--paper-2); box-shadow: inset 0 0 0 1px var(--border); }
+.digest-item p { margin: 0 0 6px; line-height: 1.7; overflow-wrap: anywhere; }
+.digest-item-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--muted); }
+.digest-edited { padding: 1px 6px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--border); }
+.digest-sources { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.digest-item-actions { display: flex; justify-content: flex-end; gap: 2px; }
+.digest-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.digest-confirm span { flex: 1 1 200px; }
+.digest-edit { display: flex; flex-direction: column; gap: 8px; }
+.digest-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.digest-edit textarea, .digest-edit select { font: inherit; color: inherit; }
+.digest-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.digest-older p, .digest-resolved p { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+.digest-reset { align-self: flex-start; }
