@@ -220,7 +220,7 @@ test('tool calls round-trip with thinking blocks replayed verbatim and the reque
   } finally { await fake.close(); }
 });
 
-test('marked messages become cache breakpoints after the system text; at most three, the newest, and never on the volatile tail', async () => {
+test('marked messages become cache breakpoints after the tools and the system text; at most two, the newest, and never on the volatile tail', async () => {
   const fake = await server((_req, _body, res) => sse(res, [{ type: 'text', text: '了解' }], 'end_turn'));
   try {
     const adapter = new AnthropicAdapter({ apiKey: KEY, fetch: fake.transport }, opus);
@@ -236,7 +236,8 @@ test('marked messages become cache breakpoints after the system text; at most th
     assert.deepEqual(body.system, [{ type: 'text', text: local.system_instructions, cache_control: { type: 'ephemeral' } }]);
     const blocks = (body.messages as { content: Record<string, unknown>[] }[]).flatMap(message => message.content);
     const cached = blocks.filter(block => block.cache_control).map(block => block.text ?? block.type);
-    assert.deepEqual(cached, ['古い2', '会話の最後', 'tool_result'], 'one breakpoint is the system text, so only the newest three marks are kept');
+    assert.deepEqual(cached, ['会話の最後', 'tool_result'], 'the tools and the system text take two of the four breakpoints, so only the newest two marks are kept');
+    assert.deepEqual((body.tools as Record<string, unknown>[]).at(-1)!.cache_control, { type: 'ephemeral' });
     assert.equal(blocks.at(-1)!.text, '{"work_state":{}}'); assert.equal(blocks.at(-1)!.cache_control, undefined);
   } finally { await fake.close(); }
 });
@@ -252,7 +253,15 @@ for (const version of ['legacy-v4', 'structured-v5'] as const) {
     const fake = await server((req, body, res) => {
       if (req.url!.startsWith('/v1/models')) return models(req, res);
       const names = (body!.tools as { name: string }[] | undefined)?.map(tool => tool.name) ?? [];
+      if (names.length === 1 && names[0] === 'task_summary_save') {
+        const blocks = (body!.messages as { content: { type: string; text?: string }[] }[]).at(-1)!.content;
+        const sources = (JSON.parse(blocks.at(-1)!.text!).work_state.summary_sources as { kind: string; source_id: string; revision: string }[]).map(({ kind, source_id, revision }) => ({ kind, source_id, revision }));
+        return sse(res, [{ type: 'tool_use', id: `toolu_${fake.messages().length}`, name: 'task_summary_save', input: { conclusion: '確認した', reason: '検索の結果', unresolved: [], next_steps: [], sources } }], 'tool_use');
+      }
       if (names.length === 1) return sse(res, [{ type: 'text', text: '{"memories":[]}' }], 'end_turn');
+      // A task asked to look things up in the history searches it, which makes an assigned task write a handoff summary.
+      if (JSON.stringify(body!.messages).includes('履歴を調べて') && !JSON.stringify(body!.messages).includes('"name":"history_search"')) return sse(res, [{ type: 'tool_use', id: `toolu_${fake.messages().length}`, name: 'history_search', input: { query: '話題' } }], 'tool_use');
+      if (JSON.stringify(body!.messages).includes('履歴を調べて')) return sse(res, [{ type: 'text', text: '調べて答えました' }], 'end_turn');
       // Each task searches once (its first work step) and then answers; the memory review exchange is already in its history.
       if (!JSON.stringify(body!.messages).includes('"name":"memory_search"')) return sse(res, [{ type: 'tool_use', id: `toolu_${fake.messages().length}`, name: 'memory_search', input: { query: '人工' } }], 'tool_use');
       sse(res, [{ type: 'text', text: '確認して答えました' }], 'end_turn');
@@ -299,6 +308,11 @@ for (const version of ['legacy-v4', 'structured-v5'] as const) {
       assert.deepEqual(next.tools, one.tools); assert.equal(systemText(next), systemText(one));
       const roomPrefix = flat(one).slice(0, breakpoints(one)[0]! + 1);
       assert.deepEqual(flat(next).slice(0, roomPrefix.length), roomPrefix);
+      // A handoff summary call, like a memory review, changes the tools and the system text, so it is sent uncached too.
+      const summarized = await run('履歴を調べて答えてください');
+      const summaries = summarized.filter(body => (body.tools as { name: string }[]).length === 1 && (body.tools as { name: string }[])[0]!.name === 'task_summary_save');
+      assert.equal(summaries.length, 1);
+      assert.ok(!JSON.stringify(summaries[0]).includes('cache_control'));
       // The cache split is stored next to the total.
       const db = new DatabaseSync(join(root, 'control.db'), { readOnly: true });
       try {

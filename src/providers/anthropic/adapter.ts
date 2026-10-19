@@ -184,7 +184,7 @@ export class AnthropicAdapter implements ModelAdapter {
     for (let index = EFFORTS.indexOf(wanted); index >= 0; index--) if (supported.includes(EFFORTS[index]!)) return EFFORTS[index]!;
     return supported[0];
   }
-  #messages(messages: readonly ModelMessage[]): BetaMessageParam[] {
+  #messages(messages: readonly ModelMessage[], slots: number): BetaMessageParam[] {
     const out: BetaMessageParam[] = [];
     const user = (): BetaContentBlockParam[] => {
       const last = out.at(-1);
@@ -192,8 +192,8 @@ export class AnthropicAdapter implements ModelAdapter {
       const content: BetaContentBlockParam[] = []; out.push({ role: 'user', content }); return content;
     };
     let pending = new Set<string>();
-    // The system text takes one of the four cache breakpoints; the newest marked messages take the rest.
-    const marked = new Set(messages.flatMap((message, index) => message.role !== 'assistant' && message.cache_point ? [index] : []).slice(-3));
+    // The newest marked messages take the cache breakpoints left after the tools and the system text.
+    const marked = new Set(messages.flatMap((message, index) => message.role !== 'assistant' && message.cache_point ? [index] : []).slice(slots > 0 ? -slots : messages.length));
     for (const [index, message] of messages.entries()) {
       if (message.role === 'assistant') {
         if (pending.size) pending = this.#answerMissing(user(), pending);
@@ -245,16 +245,18 @@ export class AnthropicAdapter implements ModelAdapter {
     const safe = sanitizeModelRequestTextFields(request).request;
     const model = this.#model.id, effort = this.#effort(request.reasoning_effort), fallback = FALLBACK_MODELS.has(model);
     const betas = [...(this.#model.adaptive ? [BINDING_BETA] : []), ...(fallback ? [FALLBACK_BETA] : [])];
+    const caching = safe.messages.some(message => message.role !== 'assistant' && message.cache_point);
     const body: BetaMessageStreamParams = {
       model, max_tokens: this.#model.max_tokens,
       // Caching happens only where Niwa marks a stable prefix. Automatic caching would put its one breakpoint on the per-call work state
       // at the end, writing (at a premium) a cache entry no later request can read. Unmarked requests are sent uncached at the plain price.
-      system: safe.messages.some(message => message.role !== 'assistant' && message.cache_point) && safe.system_instructions
-        ? [{ type: 'text' as const, text: safe.system_instructions, cache_control: CACHE_POINT }] : safe.system_instructions,
-      messages: this.#messages(safe.messages),
+      system: caching && safe.system_instructions ? [{ type: 'text' as const, text: safe.system_instructions, cache_control: CACHE_POINT }] : safe.system_instructions,
+      messages: this.#messages(safe.messages, 4 - (caching && safe.system_instructions ? 1 : 0) - (caching && safe.tools.length ? 1 : 0)),
       // Forced tool_choice is a 400 on current models, so tools are always offered with `auto`. eager_input_streaming stays off
       // so the API keeps validating tool input before streaming it; Niwa runs a call only after the whole message is checked.
-      ...(safe.tools.length ? { tools: safe.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.input_schema as { type: 'object'; [key: string]: unknown } })), tool_choice: { type: 'auto' as const } } : {}),
+      // The tool definitions come first and change least, so they keep their own breakpoint when the system text changes (a saved memory).
+      ...(safe.tools.length ? { tools: safe.tools.map((tool, index) => ({ name: tool.name, description: tool.description, input_schema: tool.input_schema as { type: 'object'; [key: string]: unknown },
+        ...(caching && index === safe.tools.length - 1 ? { cache_control: CACHE_POINT } : {}) })), tool_choice: { type: 'auto' as const } } : {}),
       // Niwa's history is not append-only (work state and trimming change between steps), so a mismatched thinking block is dropped instead of failing.
       ...(this.#model.adaptive ? { thinking: { type: 'adaptive' as const, ...(this.#summary ? { display: 'summarized' as const } : {}), block_binding: { prefix_mismatch_behavior: 'drop_block' as const } } } : {}),
       ...(effort ? { output_config: { effort } } : {}),
