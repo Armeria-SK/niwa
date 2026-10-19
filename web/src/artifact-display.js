@@ -1,5 +1,12 @@
-export const qualityLabel = status => ({unchecked:'未確認',checking:'確認中',changes_requested:'変更要求',verified:'確認済み',reviewed:'内容の確認済み（実行証拠は別）'})[status] || '未確認';
-export const kindLabel = kind => ({research_and_execution_plan:'調査・実行計画',research_memo:'調査メモ',research:'調査',report:'報告書',plan:'計画',memo:'メモ',code:'コード',markdown:'文書',text:'テキスト',document:'文書',manifest:'ファイル一覧',file:'ファイル'})[kind] || (typeof kind==='string'&&/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(kind)&&!/[\x00-\x1f]/.test(kind)&&kind.length<=60?kind:'その他の資料');
+import {t} from './i18n.js';
+const QUALITY={unchecked:'qualityUnchecked',checking:'qualityChecking',changes_requested:'qualityChangesRequested',verified:'qualityVerified',reviewed:'qualityReviewed'};
+export const qualityLabel = status => t(`artifacts.${QUALITY[status]||'qualityUnchecked'}`);
+const KINDS={research_and_execution_plan:'kindResearchPlan',research_memo:'kindResearchMemo',research:'kindResearch',report:'kindReport',plan:'kindPlan',memo:'kindMemo',code:'kindCode',markdown:'kindDocument',text:'kindText',document:'kindDocument',manifest:'kindManifest',file:'kindFile'};
+// Botが自分の言葉で書いた種類の名前（漢字・かな・ハングル）はそのまま見せ、内部の値らしいものは「その他の資料」にまとめる。
+const ownKind = kind => typeof kind==='string'&&/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(kind)&&!/[\x00-\x1f]/.test(kind)&&kind.length<=60;
+/** 種類で絞り込むときの値。別名（markdown と document）は同じ値にまとめ、言語を切り替えても変わらない。 */
+export const kindGroup = kind => Object.hasOwn(KINDS,kind) ? KINDS[kind] : ownKind(kind) ? kind : 'kindOther';
+export const kindLabel = kind => { const group=kindGroup(kind); return group==='kindOther'||Object.hasOwn(KINDS,kind) ? t(`artifacts.${group}`) : group; };
 // Display only: immutable filenames and downloads retain their original spelling.
 export const documentName = name => name.replace(/(?:[ _-]+|（|\()v\d+(?:\.\d+)*(?:）|\))?(?=\.[a-z]{1,8}$|$)/i,'');
 export function artifactGroups(artifacts) {

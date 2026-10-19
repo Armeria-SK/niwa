@@ -2,6 +2,7 @@ import {setupFailure} from '../providers/shared/setup-error.ts';
 import {retainCompleteExchanges} from './context/retention.ts';
 import {LEGACY_RULES as BASE_RULES} from './context/legacy-rules.ts';
 import {REQUEST_GUIDANCE} from './context/conversation.ts';
+import {replyLanguage} from './context/reply-language.ts';
 import {structuredPrompt, scopedPromptTools, type PromptVersion} from './context/prompt.ts';
 import type { Runtime } from './runtime.ts';
 import type { Agent } from '../domain/types.ts';
@@ -165,6 +166,7 @@ export class TurnRunner {
           else if (phaseTool === 'task_summary_save') request.system_instructions += `\n現在は仕事を完了する前の引継ぎ整理です。保存済みの事実から結論・理由・未解決事項・次の手順を短くまとめ、task_summary_saveだけを呼んでください。proposed_completionはまだ送っていない返答候補であり、実行済みの証拠ではありません。sourcesにはsummary_sourcesで確認できるkind/source_id/revisionを使い、現在の仕事自体を出所にしません。要約は承認や実行記録を置き換えません。ツールがない場合はこの形式に合うJSONだけを返します: ${JSON.stringify(summarySchema)}`;
           const composed=promptVersion==='structured-v5'?structuredPrompt(request,{rules,agent,profile:runtime.profile(actor,agent.id),members,memories:context.memories.slice(-20),memoryRevision:context.revision,environment,state:inputState,phase:phaseTool??'work',repeating}):request;
           if(reportingReads)composed.system_instructions+='\n資料取得の巡回から回復を試みましたが、新しい根拠を十分に得られませんでした。これ以上検索や履歴巡回を続けず、現在の依頼に対して確認できた事実・暫定的な判断・確認できなかった点を本文にまとめ、今回の確認結果をconversation_sendで返してください。未確認の数値や出典は作らず、調査全体の成功を装いません。「調査を続ける」「次にまとめる」だけでは返答になりません。未完了の必須子タスク等により終了できない場合だけ、task_reportで現時点の結果と具体的な再開条件を伝えます。次の自動再確認までは追加の資料取得をしません。';
+          composed.system_instructions+=`\n${replyLanguage(settings.language)}`;
           return composed;
         };
         let fitted: FittedContext;

@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { Sentences } from './components.jsx';
 import { DownloadIcon } from './icons.jsx';
 import { exportSummary, privateNote } from './bot-file.js';
+import { t } from './i18n.js';
 
 /** Botを1つのファイル（JSON）に書き出す。保存する前に、保存する全文をそのまま見せる。 */
 export function BotExport({ member }) {
@@ -28,20 +29,20 @@ export function BotExport({ member }) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   if (error && !options) return <p role="alert">{error}</p>;
-  if (!options) return <p role="status">読み込んでいます…</p>;
+  if (!options) return <p role="status">{t('common.loading')}</p>;
   const note = privateNote(options.private_procedures, options.private_memories);
-  return <section className="bot-export form-stack" aria-label={`${member.name}の書き出し`}>
-    <p className="field-hint"><Sentences>{`${member.name}の人格（名前・役割・人となり）と見た目、覚えた手順を、1つのファイル（JSON）に書き出します。会話・成果物・モデルの接続は入りません。秘密らしい文字は伏せます。保存する前に、保存する全文をここで見せます。`}</Sentences></p>
-    <fieldset><legend>手順帳（{options.procedures.length}件）</legend>
-      {options.procedures.length ? <ul className="bot-file-choices">{options.procedures.map(item => <li key={item.id}><label><input type="checkbox" checked={procedures.has(item.id)} onChange={() => toggle(procedures, setProcedures, item.id)} />{item.title || '題のない手順'}<small>{item.steps}手順{item.enabled ? '' : '・いまは使っていない'}</small></label></li>)}</ul> : <p className="field-hint">書き出せる手順はありません。</p>}
+  return <section className="bot-export form-stack" aria-label={t('bots.exportLabel', { name: member.name })}>
+    <p className="field-hint"><Sentences>{t('bots.exportIntro', { name: member.name })}</Sentences></p>
+    <fieldset><legend>{t('bots.exportProcedures', { count: options.procedures.length })}</legend>
+      {options.procedures.length ? <ul className="bot-file-choices">{options.procedures.map(item => <li key={item.id}><label><input type="checkbox" checked={procedures.has(item.id)} onChange={() => toggle(procedures, setProcedures, item.id)} />{item.title || t('bots.untitledProcedureInFile')}<small>{t(item.enabled ? 'bots.exportSteps' : 'bots.exportStepsUnused', { count: item.steps })}</small></label></li>)}</ul> : <p className="field-hint">{t('bots.noExportableProcedures')}</p>}
     </fieldset>
-    <details className="bot-file-memories"><summary>記憶も入れる（既定では入れません）</summary>
-      {options.memories.length ? <ul className="bot-file-choices">{options.memories.map(item => <li key={item.id}><label><input type="checkbox" checked={memories.has(item.id)} onChange={() => toggle(memories, setMemories, item.id)} />{item.body}</label></li>)}</ul> : <p className="field-hint">共有の会話から生まれた記憶はありません。</p>}
+    <details className="bot-file-memories"><summary>{t('bots.includeMemoriesToo')}</summary>
+      {options.memories.length ? <ul className="bot-file-choices">{options.memories.map(item => <li key={item.id}><label><input type="checkbox" checked={memories.has(item.id)} onChange={() => toggle(memories, setMemories, item.id)} />{item.body}</label></li>)}</ul> : <p className="field-hint">{t('bots.noSharedMemories')}</p>}
     </details>
     {note ? <p className="field-hint">{note}</p> : null}
-    <div className="inline-actions"><button type="button" className="button secondary" disabled={busy} onClick={show}>{busy ? '作っています…' : '書き出す内容を見る'}</button><span className="muted">{exportSummary(procedures.size, memories.size)}</span></div>
+    <div className="inline-actions"><button type="button" className="button secondary" disabled={busy} onClick={show}>{busy ? t('bots.making') : t('bots.showExport')}</button><span className="muted">{exportSummary(procedures.size, memories.size)}</span></div>
     {error ? <p role="alert">{error}</p> : null}
-    {preview ? <div className="form-stack"><h3 className="small-heading">保存する全文（{preview.filename}）</h3><pre className="artifact-document bot-file-preview">{preview.text}</pre>
-      <div className="inline-actions"><button type="button" className="button primary" onClick={save}><DownloadIcon size={17} />この内容で保存する</button></div></div> : null}
+    {preview ? <div className="form-stack"><h3 className="small-heading">{t('bots.exportFullText', { filename: preview.filename })}</h3><pre className="artifact-document bot-file-preview">{preview.text}</pre>
+      <div className="inline-actions"><button type="button" className="button primary" onClick={save}><DownloadIcon size={17} />{t('bots.saveThis')}</button></div></div> : null}
   </section>;
 }

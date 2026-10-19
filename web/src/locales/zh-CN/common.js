@@ -1,0 +1,23 @@
+/** 所有界面都会用到的词。各界面自己的词放在各自的词典里。 */
+export default {
+  save: '保存',
+  saving: '正在保存…',
+  saved: '已保存',
+  cancel: '取消',
+  close: '关闭',
+  delete: '删除',
+  edit: '编辑',
+  back: '返回',
+  retry: '重试',
+  loading: '正在加载…',
+  confirm: '确认',
+  open: '打开',
+  more: '查看更多',
+  none: '无',
+  yes: '是',
+  no: '否',
+  on: '开',
+  off: '关',
+  bots: ({ count }) => `${count} 个`,
+  items: ({ count }) => `${count} 项`,
+};

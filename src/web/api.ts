@@ -21,6 +21,7 @@ import type { Backups } from '../backup/backups.ts';
 import type { WorkspaceRead, WorkspaceDownload } from '../tools/files/client.ts';
 import { SecondOpinions } from '../runtime/second-opinions.ts';
 import { BOT_FILE_MAX_LENGTH } from '../runtime/bot-files.ts';
+import { type NoticeText, noticeText } from './notice-text.ts';
 
 const string = Type.String({ minLength: 1, maxLength: 20_000 });
 const id = Type.String({ pattern: '^[0-9a-f-]{36}$' });
@@ -37,10 +38,10 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 /** Landing page for the cross-site OAuth return. A link, not a redirect, so the Strict session cookie is sent when the person comes back. */
-function sendNotice(res: ServerResponse, status: number, message: string, back = true): void {
+function sendNotice(res: ServerResponse, status: number, text: NoticeText & { lang: string }, message: keyof NoticeText, back = true): void {
   res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" });
-  res.end(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Niwa</title><body style="font-family:sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.7"><p>${message}</p>${back ? '<p><a href="/#settings/mcp">Niwaの画面に戻る</a></p>' : ''}</body></html>`);
+  res.end(`<!doctype html><html lang="${text.lang}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Niwa</title><body style="font-family:sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.7"><p>${text[message]}</p>${back ? `<p><a href="/#settings/mcp">${text.back}</a></p>` : ''}</body></html>`);
 }
 /** Webhook bodies: at most 64 KiB of UTF-8 JSON or plain text. The content stays untrusted data for the next run. */
 async function readHook(req: IncomingMessage): Promise<{ type: string; text: string } | number> {
@@ -240,7 +241,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
         return runtime.submit(admin, b.id as string, m[1]!, b.body as string, (b.agent_ids ?? b.agent_id) as string | string[] | undefined, b.reply_to as string | undefined,b.request_context as SubmissionContext | undefined,b.attachments); } },
     { method: 'PATCH', path: /^\/api\/settings$/, schema: object({ paused: Type.Optional(Type.Boolean()), autonomous: Type.Optional(Type.Boolean()), generatedLimit: Type.Optional(Type.Integer({ minimum: 0 })),
       concurrencyLimit: Type.Optional(Type.Union([Type.Null(), Type.Integer({ minimum: 1 })])), backupDays: Type.Optional(Type.Integer({ minimum: 1 })), backupEnabled: Type.Optional(Type.Boolean()), backupTime: Type.Optional(Type.String({ pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' })),
-        theme: Type.Optional(Type.Union([Type.Null(), Type.String({ maxLength: 20 })])) }),
+        theme: Type.Optional(Type.Union([Type.Null(), Type.String({ maxLength: 20 })])), language: Type.Optional(Type.String({ maxLength: 10 })) }),
       run: (_m, b) => runtime.updateSettings(admin, b as Partial<Settings>) },
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/dormancy$/, schema: object({ dormant: Type.Boolean() }),
       run: (m, b) => { runtime.setDormant(admin, m[1]!, b.dormant as boolean); return { ok: true }; } },
@@ -319,7 +320,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
       // Remote use goes through Tailscale Serve, which names the person. The OAuth return keeps its own single-use proof, like the hooks above.
       if (!(req.method === 'GET' && url.pathname === '/api/mcp/oauth/callback') && !auth.fromTailnet(req)) {
         if (url.pathname.startsWith('/api/')) send(res, 403, { error: 'tailnet_required' });
-        else sendNotice(res, 403, 'このNiwaは、Tailscale Serve を通した接続だけを受け付けます。<br>自分のTailscaleのネットワークにつないだ端末から開いてください。', false);
+        else sendNotice(res, 403, noticeText(runtime.settings(admin).language), 'tailnet', false);
         return;
       }
       if (!url.pathname.startsWith('/api/') && webRoot && serveStatic(webRoot, req, res)) return;
@@ -331,8 +332,9 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
         const params = { state: once('state'), code: once('code'), error: once('error'), iss: once('iss') };
         let done = false;
         if (!Object.values(params).includes(null as never)) try { done = await mcpSettings.oauthFinish(params as Parameters<McpSettings['oauthFinish']>[0]); } catch { done = false; }
-        if (done) sendNotice(res, 200, 'MCPの接続先にログインしました。Niwaの画面に戻って「接続を確認」を押してください。');
-        else sendNotice(res, 400, params.error ? 'ログインが取り消されたか、拒否されました。Niwaの設定から、もう一度ログインしてください。' : 'ログインを完了できませんでした。Niwaの設定から、もう一度ログインしてください。');
+        const text = noticeText(runtime.settings(admin).language);
+        if (done) sendNotice(res, 200, text, 'loggedIn');
+        else sendNotice(res, 400, text, params.error ? 'refused' : 'failed');
         return;
       }
       // There is no login (the owner reaches Niwa over their own network). Every other API request must be sent by Niwa's own page or by a program, never by another site.

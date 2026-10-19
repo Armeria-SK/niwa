@@ -1,4 +1,6 @@
 import { uid } from './data.js';
+import { t } from './i18n.js';
+import { nameList } from './conversationText.js';
 // Same limits as the server. The kind is decided from the bytes (image header, %PDF-, or strict UTF-8 text), not by the file extension.
 export const ATTACHMENT_LIMITS = { count: 5, bytes: 256 * 1024, imageBytes: 3 * 1024 * 1024, pdfBytes: 4 * 1024 * 1024, totalBytes: 8 * 1024 * 1024, name: 120 };
 const BINARY = /[\u0000-\u0008\u000e-\u001a\u001c-\u001f]/u;
@@ -21,24 +23,24 @@ export function attachmentKind(bytes) {
   try { const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); return BINARY.test(text) ? null : 'text'; } catch { return null; }
 }
 
-/** Returns accepted files and a Japanese reason for every rejected file. */
+/** Returns accepted files and a reason (in the current display language) for every rejected file. */
 export async function readAttachments(files, current = 0, currentBytes = 0) {
   const accepted = [], errors = []; let total = currentBytes;
   for (const file of files) {
     const name = attachmentName(file.name);
-    if (current + accepted.length >= ATTACHMENT_LIMITS.count) { errors.push(`「${file.name}」：添付できるのは1回の送信につき${ATTACHMENT_LIMITS.count}件までです。`); continue; }
-    if (!name) { errors.push(`「${file.name}」：ファイル名を確認してください。`); continue; }
-    if (file.size > ATTACHMENT_LIMITS.pdfBytes) { errors.push(`「${name}」：大きすぎるため添付できません（${formatSize(file.size)}）。テキストは256KB、画像は3MB、PDFは4MBまでです。`); continue; }
+    if (current + accepted.length >= ATTACHMENT_LIMITS.count) { errors.push(t('conversation.attachTooMany', { name: file.name, count: ATTACHMENT_LIMITS.count })); continue; }
+    if (!name) { errors.push(t('conversation.attachBadName', { name: file.name })); continue; }
+    if (file.size > ATTACHMENT_LIMITS.pdfBytes) { errors.push(t('conversation.attachTooBig', { name, size: formatSize(file.size) })); continue; }
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const kind = attachmentKind(bytes);
-      if (!kind) { errors.push(`「${name}」：テキスト・画像（PNG・JPEG・GIF・WebP）・PDF以外のファイルは添付できません。`); continue; }
+      if (!kind) { errors.push(t('conversation.attachUnsupported', { name })); continue; }
       const limit = kind === 'image' ? ATTACHMENT_LIMITS.imageBytes : kind === 'pdf' ? ATTACHMENT_LIMITS.pdfBytes : ATTACHMENT_LIMITS.bytes;
-      if (bytes.byteLength > limit) { errors.push(`「${name}」：${({ image: '画像は3MB', pdf: 'PDFは4MB', text: 'テキストは256KB' })[kind]}までです（${formatSize(bytes.byteLength)}）。`); continue; }
-      if (total + bytes.byteLength > ATTACHMENT_LIMITS.totalBytes) { errors.push(`「${name}」：1回の送信で合わせて8MBまでです。`); continue; }
+      if (bytes.byteLength > limit) { errors.push(t(({ image: 'conversation.attachImageTooBig', pdf: 'conversation.attachPdfTooBig', text: 'conversation.attachTextTooBig' })[kind], { name, size: formatSize(bytes.byteLength) })); continue; }
+      if (total + bytes.byteLength > ATTACHMENT_LIMITS.totalBytes) { errors.push(t('conversation.attachTotalTooBig', { name })); continue; }
       total += bytes.byteLength;
       accepted.push({ id: uid('file'), name, size: bytes.byteLength, kind, content: base64(bytes) });
-    } catch { errors.push(`「${name}」：ファイルを読み込めませんでした。`); }
+    } catch { errors.push(t('conversation.attachReadFailed', { name })); }
   }
   return { accepted, errors };
 }
@@ -46,5 +48,5 @@ export async function readAttachments(files, current = 0, currentBytes = 0) {
 /** 画像を見られなかったBotの名前から、会話に出す知らせを作る。だれもいなければ空。 */
 export function unseenNotice(names) {
   const list = (names || []).filter(Boolean);
-  return list.length ? `${list.join('・')}のモデルは画像を見られないため、この画像を認識できませんでした。` : '';
+  return list.length ? t('conversation.unseenNotice', { names: nameList(list), count: list.length }) : '';
 }

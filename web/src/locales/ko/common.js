@@ -1,0 +1,23 @@
+/** 모든 화면에서 쓰는 말. 화면마다의 사전에는 그 화면에서만 쓰는 말을 둔다. */
+export default {
+  save: '저장',
+  saving: '저장하는 중…',
+  saved: '저장했어요',
+  cancel: '취소',
+  close: '닫기',
+  delete: '삭제',
+  edit: '편집',
+  back: '뒤로',
+  retry: '다시 시도',
+  loading: '불러오는 중…',
+  confirm: '확인',
+  open: '열기',
+  more: '더 보기',
+  none: '없음',
+  yes: '예',
+  no: '아니요',
+  on: '켜짐',
+  off: '꺼짐',
+  bots: ({ count }) => `${count}명`,
+  items: ({ count }) => `${count}건`,
+};

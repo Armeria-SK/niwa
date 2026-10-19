@@ -150,3 +150,17 @@ test('prompt runs accept calls without a task after upgrading, and the change re
     assert.equal(db.prepare('PRAGMA quick_check').get()!.quick_check, 'ok');
   } finally { reopened.close(); }
 });
+
+test('the other model is asked to answer in the display language', async t => {
+  const { runtime, admin, leader } = fixture(t);
+  const shared = runtime.createRoom(admin, 'Language');
+  runtime.post(admin, shared.id, 'Where do we meet?');
+  const task = runtime.tasks.create(admin, leader.id, shared.id, 'Where do we meet?');
+  const answer = runtime.post(runtime.agentSession(leader.id), shared.id, 'At the north exit.');
+  runtime.tasks.linkMessage(admin, answer.id, task.id, 'response');
+  runtime.updateSettings(admin, { language: 'ko' });
+  const sent: { selection: unknown; request: ModelRequest }[] = [];
+  await new SecondOpinions(runtime, artificial('북쪽 출구에서 만나요.', sent)).ask(admin, shared.id, answer.id, claude);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.request.system_instructions, /会話への返答や報告は韓国語（한국어）で書いてください。/);
+});

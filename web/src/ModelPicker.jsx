@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { CLAUDE_EFFORTS, PROVIDER_ORDER, groupByProvider, modelLabel, modelListPath, nativeReasoning, providerLabel } from './providers.js';
 import { useAnthropicModels } from './anthropicModels.js';
 import { MODELS_CHANGED, providerModels, readyProviders } from './modelLists.js';
+import { serverText, t } from './i18n.js';
 
 const ALL = PROVIDER_ORDER;
 const key = item => `${item.provider}:${item.model}`;
@@ -16,7 +17,8 @@ export function ModelPicker({ label, value, keep = [], onChange, disabled = fals
   const own = useAnthropicModels(!shared && providers.includes('anthropic'));
   const claude = shared || own;
   const [models, setModels] = useState([]);
-  const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [message, setMessage] = useState('');
+  // 取得できた件数は、言語を切り替えても読めるように、文ではなく接続先と数で覚えておく。
+  const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [fetched, setFetched] = useState(null);
   const [manual, setManual] = useState({ openai_compatible: '', anthropic: '' });
   const [ready, setReady] = useState(null);
   // つながっている接続先の一覧を自動で読む（Claudeは専用の仕組みで読む）。読めなかった接続先は、下のボタンから取り直せる。
@@ -43,11 +45,11 @@ export function ModelPicker({ label, value, keep = [], onChange, disabled = fals
   const efforts = !value ? [] : nativeReasoning(value.provider) ? ['native'] : known(value)?.supported_efforts || (value.provider === 'anthropic' ? ['native', ...CLAUDE_EFFORTS] : [value.reasoning]);
   const pick = item => onChange(item ? { provider: item.provider, model: item.model, ...(reasoning ? { reasoning: firstEffort(item) } : {}) } : null);
   async function load(provider) {
-    setBusy(true); setError(''); setMessage('');
+    setBusy(true); setError(''); setFetched(null);
     try {
       const values = await api(modelListPath(provider));
       setModels(current => [...current.filter(item => item.provider !== provider), ...values.map(item => ({ ...item, provider, model: item.model || item.model_id }))]);
-      setMessage(`${providerLabel(provider)}のモデルを${values.length}件取得しました。`);
+      setFetched({ provider, count: values.length });
     } catch (failure) { setError(failure.message); }
     finally { setBusy(false); }
   }
@@ -61,18 +63,18 @@ export function ModelPicker({ label, value, keep = [], onChange, disabled = fals
   return <div className="model-picker" role="group" aria-label={label}>
     <div className="field-pair">
       <label className="field"><span>{label}</span><select value={value ? key(value) : ''} disabled={off} onChange={event => pick(choices.find(item => key(item) === event.target.value))}>{emptyLabel ? <option value="">{emptyLabel}</option> : null}{groupByProvider(choices).map(group => <optgroup key={group.provider} label={group.label}>{group.items.map(item => <option key={key(item)} value={key(item)}>{modelLabel(item)} · {group.label}</option>)}</optgroup>)}</select></label>
-      {reasoning ? <label className="field"><span>推論の強さ</span><select aria-label={`${label}の推論の強さ`} value={value?.reasoning || ''} disabled={off || !value || nativeReasoning(value.provider)} onChange={event => onChange({ ...value, reasoning: event.target.value })}>{efforts.map(effort => <option key={effort}>{effort}</option>)}</select></label> : null}
+      {reasoning ? <label className="field"><span>{t('settings.reasoningLabel')}</span><select aria-label={t('settings.reasoningAria', { label })} value={value?.reasoning || ''} disabled={off || !value || nativeReasoning(value.provider)} onChange={event => onChange({ ...value, reasoning: event.target.value })}>{efforts.map(effort => <option key={effort}>{effort}</option>)}</select></label> : null}
     </div>
-    <details className="model-picker-more"><summary>ほかのモデルを探す</summary>
+    <details className="model-picker-more"><summary>{t('settings.pickerMore')}</summary>
       <div className="inline-actions">{providers.map(provider => provider === 'anthropic'
-        ? <button key={provider} type="button" className="button subtle" disabled={off || claude.loading} onClick={claude.reload}>Claudeの一覧を取り直す</button>
-        : <button key={provider} type="button" className="button subtle" disabled={off} onClick={() => load(provider)}>{providerLabel(provider)}の一覧を取得</button>)}</div>
-      {typed.map(provider => <div className="inline-actions" key={provider}><label className="field"><span>{providerLabel(provider)}のモデルIDを直接入力</span><input value={manual[provider]} disabled={off} maxLength={256} onChange={event => setManual(current => ({ ...current, [provider]: event.target.value }))} placeholder={provider === 'anthropic' ? '例: claude-opus-5-5' : '例: gpt-4.1-mini'} /></label><button type="button" className="button subtle" disabled={off || !manual[provider].trim()} onClick={() => choose(provider)}>このモデルを選ぶ</button></div>)}
-      <p className="field-hint">一覧の取得ではモデルの名前だけを読み、応答の生成（課金対象）はしません。</p>
+        ? <button key={provider} type="button" className="button subtle" disabled={off || claude.loading} onClick={claude.reload}>{t('settings.claudeReload')}</button>
+        : <button key={provider} type="button" className="button subtle" disabled={off} onClick={() => load(provider)}>{t('settings.providerListFetch', { provider: providerLabel(provider) })}</button>)}</div>
+      {typed.map(provider => <div className="inline-actions" key={provider}><label className="field"><span>{t('settings.manualModelId', { provider: providerLabel(provider) })}</span><input value={manual[provider]} disabled={off} maxLength={256} onChange={event => setManual(current => ({ ...current, [provider]: event.target.value }))} placeholder={t('settings.modelIdExample', { model: provider === 'anthropic' ? 'claude-opus-5-5' : 'gpt-4.1-mini' })} /></label><button type="button" className="button subtle" disabled={off || !manual[provider].trim()} onClick={() => choose(provider)}>{t('settings.chooseModel')}</button></div>)}
+      <p className="field-hint">{t('settings.listFetchHint')}</p>
     </details>
-    {value && ready && !ready.includes(value.provider) ? <p className="field-hint" role="status">{providerLabel(value.provider)}は、まだつながっていません。<br />つながっている接続先のモデルを選ぶか、「設定」の「モデルと接続」でつないでください。</p> : null}
+    {value && ready && !ready.includes(value.provider) ? <p className="field-hint" role="status">{t('settings.providerNotConnected', { provider: providerLabel(value.provider) })}<br />{t('settings.providerNotConnectedHint')}</p> : null}
     {claude.error && providers.includes('anthropic') ? <p className="field-hint" role="status">{claude.error}</p> : null}
-    {error ? <p className="field-error" role="alert">{error}</p> : null}
-    {busy || message ? <p className="saved-inline" role="status">{busy ? '接続先に問い合わせています…' : message}</p> : null}
+    {error ? <p className="field-error" role="alert">{serverText(error)}</p> : null}
+    {busy || fetched ? <p className="saved-inline" role="status">{busy ? t('settings.pickerAsking') : t('settings.pickerFetched', { provider: providerLabel(fetched.provider), count: fetched.count })}</p> : null}
   </div>;
 }

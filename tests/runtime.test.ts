@@ -8,6 +8,7 @@ import { DomainError } from '../src/domain/types.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { businessDefault, currentDefault, firstDefault } from '../src/storage/common-rules-default-schema.ts';
 import { themePaletteSchema } from '../src/storage/theme-palette-schema.ts';
+import { languageSchema } from '../src/storage/language-schema.ts';
 
 function fixture(t: { after: (fn: () => void) => void }) {
   const path = mkdtempSync(join(tmpdir(), 'niwa-test-'));
@@ -284,6 +285,33 @@ test('the color theme is saved once for every browser and only known themes are 
   assert.equal(f.runtime.settings(f.admin).theme, 'night');
   assert.throws(() => f.runtime.updateSettings(f.admin, { theme: 'neon' }), /Unknown theme/);
   assert.equal(f.runtime.updateSettings(f.admin, { theme: 'auto' }).theme, 'auto');
+});
+
+test('the display language is Japanese until saved, is shared by every browser and only the four languages are accepted', t => {
+  const f = fixture(t);
+  assert.equal(f.runtime.settings(f.admin).language, 'ja');
+  for (const language of ['en', 'ko', 'zh-CN', 'ja']) {
+    assert.equal(f.runtime.updateSettings(f.admin, { language }).language, language);
+    assert.equal(f.runtime.settings(f.admin).language, language);
+  }
+  assert.throws(() => f.runtime.updateSettings(f.admin, { language: 'zh-TW' }), /Unknown language/);
+  assert.throws(() => f.runtime.updateSettings(f.admin, { language: 'EN' }), /Unknown language/);
+  denied(() => f.runtime.updateSettings(f.childActor, { language: 'en' }));
+  assert.equal(f.runtime.updateSettings(f.admin, { theme: 'night' }).language, 'ja', 'saving another field keeps the language');
+});
+
+test('an older database gains the language column in place, reads as Japanese and keeps its other settings', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  db.exec("CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id = 1), paused INTEGER NOT NULL DEFAULT 0, theme TEXT)");
+  db.exec("INSERT INTO settings (id, paused, theme) VALUES (1, 1, 'night')");
+  languageSchema(db);
+  languageSchema(db);
+  assert.deepEqual({ ...db.prepare('SELECT paused, theme, language FROM settings').get() }, { paused: 1, theme: 'night', language: 'ja' });
+  db.exec("UPDATE settings SET language='zh-CN'");
+  assert.equal(db.prepare('SELECT language FROM settings').get()!.language, 'zh-CN');
+  assert.throws(() => db.exec("UPDATE settings SET language='fr'"), /CHECK/);
+  assert.throws(() => db.exec('UPDATE settings SET language=NULL'), /NOT NULL/);
 });
 
 test('the six added themes save, and an older database is widened to accept them without touching the saved theme', t => {

@@ -1,4 +1,5 @@
 // OAuth login rules of the MCP settings screen, kept free of React so they can be tested on their own.
+import {serverText,t} from './i18n.js';
 export const hrefOf=value=>{try{return new URL(value).href;}catch{return '';}};
 export const loginEntry=(server,status)=>status?.oauth?.find(o=>o.id===server.id);
 /** Every URL this connection ID has a login for. */
@@ -9,24 +10,25 @@ export const loggedIn=(server,status)=>loginFor(server,status)?.status==='signed
 /** Why a login in the list cannot be used for this card, if it cannot. */
 export const loginNote=(server,status)=>{
  const logins=loginsOf(server,status),mine=loginFor(server,status);
- if(logins.length&&!mine)return 'このIDのログインは別のURLのものです。このURLでもう一度ログインしてください。';
- if(server.savedOAuth&&server.id!==server.savedId)return 'URLか接続IDを変えたため、もう一度ログインが必要です。';
- if(mine?.status==='needs_login')return 'ログインの有効期限が切れたか、取り消されました。もう一度ログインしてください。';
+ if(logins.length&&!mine)return t('connections.loginOtherUrl');
+ if(server.savedOAuth&&server.id!==server.savedId)return t('connections.loginChanged');
+ if(mine?.status==='needs_login')return t('connections.loginExpired');
  return '';
 };
+// Keys of the hint for each failure code; the text is looked up when it is shown, in the language of that moment.
 const failureHints={
- invalid_client:'クライアントIDとシークレットを確認してください。',
- access_denied:'ログインが取り消されたか、拒否されました。',
- state_expired:'ログイン画面を開いてから10分以内に完了してください。',
- discovery_failed:'接続先のログイン情報を取得できませんでした。URLを確認してください。',
- network_error:'接続先に接続できませんでした。',
- token_exchange_failed:'接続先がログインを受け付けませんでした。',
- token_response_invalid:'接続先の返答が正しくありません。',
- pkce_unsupported:'この接続先はログインに必要なPKCEに対応していません。',
- endpoint_insecure:'この接続先のログイン用アドレスがHTTPSではありません。',
- issuer_mismatch:'接続先のログイン情報が一致しません。',
- resource_mismatch:'接続先のログイン情報が一致しません。',
- save_failed:'保存先の空き容量と権限を確認してください。',
+ invalid_client:'loginHintInvalidClient',
+ access_denied:'loginHintAccessDenied',
+ state_expired:'loginHintStateExpired',
+ discovery_failed:'loginHintDiscoveryFailed',
+ network_error:'loginHintNetworkError',
+ token_exchange_failed:'loginHintTokenExchangeFailed',
+ token_response_invalid:'loginHintTokenResponseInvalid',
+ pkce_unsupported:'loginHintPkceUnsupported',
+ endpoint_insecure:'loginHintEndpointInsecure',
+ issuer_mismatch:'loginHintMismatch',
+ resource_mismatch:'loginHintMismatch',
+ save_failed:'checkStorage',
 };
 /** The last failed login, if it was for the URL in the form: a failure of another URL says nothing about this one. */
 export const failureFor=(server,status)=>{const failure=loginEntry(server,status)?.failure;return failure?.resource===hrefOf(server.url)?failure:undefined;};
@@ -34,20 +36,20 @@ export const failureFor=(server,status)=>{const failure=loginEntry(server,status
 export const loginFailure=(server,status)=>{
  const failure=failureFor(server,status);
  if(!failure||failure.code==='client_registration_required'||failure.code==='changed')return '';
- return `ログインに失敗しました（${failure.code}）。${failureHints[failure.code]??'もう一度ログインしてください。'}`;
+ return t('connections.loginFailed',{code:failure.code,hint:t(`connections.${Object.hasOwn(failureHints,failure.code)?failureHints[failure.code]:'loginHintRetry'}`)});
 };
 /** A renewed login that the server could not write to disk yet (it keeps it in memory meanwhile). */
 export const loginUnsaved=(server,status)=>loginEntry(server,status)?.unsaved===true;
 /** State line of an OAuth card. */
-export const loginState=(server,status)=>loggedIn(server,status)?'ログイン済み':loginEntry(server,status)?.pending?'ログインを待っています':'ログインが必要です';
+export const loginState=(server,status)=>t(loggedIn(server,status)?'connections.loginSignedIn':loginEntry(server,status)?.pending?'connections.stateWaitingLogin':'connections.loginNeeded');
 const failedOf=(server,status)=>status?.failed?.find(f=>f.id===server.id);
-export const reasonText=reason=>reason==='login_required'?'ログインが必要です（「ログイン」を押してください）':reason;
+export const reasonText=reason=>reason==='login_required'?t('connections.reasonLoginRequired'):serverText(reason);
 /** Badge at the top of a card. A connection that only waits for its login is "not connected": the OAuth state line already says what to do. */
-export const connectionState=(server,status,dirty)=>dirty?'未保存の変更あり':!server.enabled?'無効':status.connected?.includes(server.id)?'接続済み':failedOf(server,status)?.reason==='login_required'||!failedOf(server,status)?'未接続':'接続失敗（自動で再試行します）';
+export const connectionState=(server,status,dirty)=>t(dirty?'connections.stateUnsaved':!server.enabled?'connections.stateDisabled':status.connected?.includes(server.id)?'connections.stateConnected':failedOf(server,status)?.reason==='login_required'||!failedOf(server,status)?'connections.stateNotConnected':'connections.stateFailedRetrying');
 /** Error line of a card; the login wait of an OAuth card is not repeated here. */
 export const connectionError=(server,status,dirty)=>{
  const failed=failedOf(server,status);
- return !failed||dirty||(server.auth==='oauth'&&failed.reason==='login_required')?'':`接続できません: ${reasonText(failed.reason)}`;
+ return !failed||dirty||(server.auth==='oauth'&&failed.reason==='login_required')?'':t('connections.connectionError',{reason:reasonText(failed.reason)});
 };
 /** Whether the card offers to type a client ID: not needed while the URL is signed in, unless the last failure points at the client. A form that is already open can always be closed. */
 export const clientChoice=(server,status)=>server.needClient===true||!loggedIn(server,status)||['invalid_client','client_registration_required'].includes(failureFor(server,status)?.code);

@@ -53,6 +53,16 @@ test('backup switch API refuses other sites and saves a boolean without deleting
   assert.equal(f.runtime.settings(f.admin).backupEnabled, true);
 });
 
+test('the display language is saved through the settings API and unknown languages are refused', async t => {
+  const f = await fixture(t);
+  assert.equal((await (await f.call('/api/state')).json()).settings.language, 'ja');
+  assert.equal((await f.call('/api/settings', 'PATCH', { language: 'en' }, { origin: 'https://evil.test' })).status, 403);
+  assert.equal((await f.call('/api/settings', 'PATCH', { language: 'fr' })).status, 400);
+  assert.equal((await f.call('/api/settings', 'PATCH', { language: 'a-much-too-long-language' })).status, 400);
+  assert.equal((await f.call('/api/settings', 'PATCH', { language: 'zh-CN' })).status, 200);
+  assert.equal((await (await f.call('/api/state')).json()).settings.language, 'zh-CN');
+});
+
 /** `login` is what Tailscale Serve would name (null: a request that did not come through Serve); `logins` is config/niwa.json `tailscaleLogins`. */
 async function fixture(t: { after: (fn: () => Promise<void>) => void }, includeBackups=false, serve: { login?: string | null; logins?: string[] } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'niwa-web-'));
@@ -164,7 +174,11 @@ test('without the Serve identity the page and API are refused, while schedule ho
   assert.equal(state.status, 403); assert.equal((await state.json()).error, 'tailnet_required');
   assert.equal((await f.call('/api/settings', 'PATCH', { paused: true })).status, 403); assert.equal(f.runtime.settings(f.admin).paused, false);
   const page = await f.call('/');
-  assert.equal(page.status, 403); assert.match(await page.text(), /Tailscale Serve を通した接続だけ/);
+  assert.equal(page.status, 403); assert.match(await page.text(), /<html lang="ja">.*Tailscale Serve を通した接続だけ/s);
+  f.runtime.updateSettings(f.admin, { language: 'en' });
+  const english = await (await f.call('/')).text();
+  assert.match(english, /<html lang="en">.*only accepts connections through Tailscale Serve/s); assert.doesNotMatch(english, /接続/);
+  f.runtime.updateSettings(f.admin, { language: 'ja' });
   const room = f.runtime.createRoom(f.admin, '通知の庭'), id = randomUUID();
   f.runtime.schedules.create(f.admin, { id, agent_id: f.leader.id, room_id: room.id, prompt: '届いた通知を読む', interval_ms: 60_000, next_at: Date.now() + 60_000, max_runs: 5, timeout_ms: 60_000, trigger_kind: 'webhook' });
   const { token } = f.runtime.schedules.issueHookToken(f.admin, id);

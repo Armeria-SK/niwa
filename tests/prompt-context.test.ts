@@ -122,3 +122,27 @@ test('structured rolling context keeps complete exchanges and discards opaque co
  });},{},{promptVersion:'structured-v5'});
  r.tasks.create(admin,a.id,room.id,'続く操作の文脈');await runner.run(r.tasks.claim(admin)!);assert.equal(calls,11);assert.ok(resolves>1);
 });
+for (const version of ['legacy-v4', 'structured-v5'] as const) {
+ test(`${version}: the Bot is asked to reply in the display language, and to follow the administrator's own language`, async t => {
+  const {r,admin,a,room}=fixture(t);
+  r.updateSettings(admin,{autonomous:false});
+  const seen:string[]=[];
+  const runner=new TurnRunner(r,async()=>model(req=>{
+   if(req.tools.length===1&&req.tools[0]!.name==='memory_review'){seen.push(req.system_instructions);return call('memory_review',{memories:[]});}
+   seen.push(req.system_instructions);
+   return call('conversation_send',{body:'artificial reply',recipient_ids:[]});
+  }),{},{promptVersion:version});
+  r.tasks.create(admin,a.id,room.id,'自己紹介をして');await runner.run(r.tasks.claim(admin)!);
+  assert.ok(seen.length>0&&seen.every(text=>text.includes('返答の言語: 会話への返答や報告は日本語で書いてください。管理者が別の言語で書いたときは、その言語で答えてください。')));
+  const japanese=seen.length;
+  r.updateSettings(admin,{language:'en'});
+  r.tasks.create(admin,a.id,room.id,'Introduce yourself');await runner.run(r.tasks.claim(admin)!);
+  assert.ok(seen.length>japanese);
+  for(const text of seen.slice(japanese)){assert.match(text,/会話への返答や報告は英語（English）で書いてください。管理者が別の言語で書いたときは、その言語で答えてください。/);assert.doesNotMatch(text,/は日本語で書いてください/);}
+  for(const [language,name] of [['ko','韓国語（한국어）'],['zh-CN','簡体字の中国語（简体中文）']] as const){
+   const before=seen.length;r.updateSettings(admin,{language});
+   r.tasks.create(admin,a.id,room.id,'こんにちは');await runner.run(r.tasks.claim(admin)!);
+   assert.ok(seen.length>before&&seen.slice(before).every(text=>text.includes(`会話への返答や報告は${name}で書いてください。`)));
+  }
+ });
+}

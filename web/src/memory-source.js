@@ -1,4 +1,6 @@
-const when = value => { const time = Date.parse(value); return Number.isFinite(time) ? new Date(time).toLocaleString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''; };
+import { locale, t, hourStyle } from './i18n.js';
+
+const when = value => { const time = Date.parse(value); return Number.isFinite(time) ? new Date(time).toLocaleString(locale(), { year: 'numeric', month: 'numeric', day: 'numeric', hour: hourStyle(), minute: '2-digit' }) : ''; };
 
 /** 記憶がいつ、どの会話の誰の発言から生まれたかを、画面に出す短い文にする。元の会話が消えていればそう書く。 */
 export function memorySource(item) {
@@ -6,10 +8,10 @@ export function memorySource(item) {
   const said = source?.excerpt !== undefined;
   return {
     created: when(item.created_at),
-    room: source ? source.room_title : '元の会話は削除されています',
+    room: source ? source.room_title : t('bots.sourceDeleted'),
     private: !!source?.private,
     excerpt: said ? source.excerpt : '',
-    author: !said ? '' : source.author_id === 'administrator' ? 'あなた' : source.author_name || '削除したBot',
+    author: !said ? '' : source.author_id === 'administrator' ? t('bots.you') : source.author_name || t('bots.deletedBot'),
     said: said ? when(source.said_at) : '',
     openable: !!source,
   };

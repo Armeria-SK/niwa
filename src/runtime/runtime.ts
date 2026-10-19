@@ -62,6 +62,7 @@ import { Trust, type ApprovalKind } from './trust.ts';
 import { mediaAttachmentSchema } from '../storage/media-attachment-schema.ts';
 import { botImportSchema } from '../storage/bot-import-schema.ts';
 import { themePaletteSchema } from '../storage/theme-palette-schema.ts';
+import { LANGUAGE_IDS, languageSchema } from '../storage/language-schema.ts';
 import { Replays } from './replay.ts';
 import { BotFiles } from './bot-files.ts';
 import { autonomyControlSchema } from '../storage/autonomy-control-schema.ts';
@@ -132,7 +133,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema, mediaAttachmentSchema, botImportSchema, themePaletteSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema, mediaAttachmentSchema, botImportSchema, themePaletteSchema, languageSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -514,15 +515,15 @@ export class Runtime {
   settings(actor: Actor): Settings {
     this.#principal(actor);
     const row = this.#db.prepare('SELECT * FROM settings WHERE id = 1').get() as {
-      paused: number; generated_limit: number; concurrency_limit: number | null; backup_days: number; autonomous: number; backup_time: string; backup_enabled: number; theme: string | null;
+      paused: number; generated_limit: number; concurrency_limit: number | null; backup_days: number; autonomous: number; backup_time: string; backup_enabled: number; theme: string | null; language: string;
     };
     return { paused: row.paused === 1, generatedLimit: row.generated_limit,
-      concurrencyLimit: row.concurrency_limit, backupDays: row.backup_days, autonomous: row.autonomous === 1, backupTime: row.backup_time, backupEnabled: row.backup_enabled === 1, theme: row.theme };
+      concurrencyLimit: row.concurrency_limit, backupDays: row.backup_days, autonomous: row.autonomous === 1, backupTime: row.backup_time, backupEnabled: row.backup_enabled === 1, theme: row.theme, language: row.language };
   }
   updateSettings(actor: Actor, patch: Partial<Settings>): Settings {
     this.#admin(actor);
     check(patch && typeof patch === 'object' && !Array.isArray(patch), 'invalid', 'Expected settings');
-    const allowed = ['paused', 'generatedLimit', 'concurrencyLimit', 'backupDays', 'autonomous', 'backupTime', 'backupEnabled', 'theme'];
+    const allowed = ['paused', 'generatedLimit', 'concurrencyLimit', 'backupDays', 'autonomous', 'backupTime', 'backupEnabled', 'theme', 'language'];
     check(Object.keys(patch).every(key => allowed.includes(key)), 'invalid', 'Unknown setting');
     return transaction(this.#db, () => {
       const next = { ...this.settings(actor), ...patch };
@@ -535,8 +536,9 @@ export class Runtime {
       check(Number.isSafeInteger(next.backupDays) && next.backupDays > 0, 'invalid', 'Invalid backup days');
       check(typeof next.backupTime === 'string' && /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(next.backupTime), 'invalid', 'Invalid backup time');
       check(next.theme === null || (THEME_IDS as readonly string[]).includes(next.theme), 'invalid', 'Unknown theme');
-      this.#db.prepare('UPDATE settings SET paused=?, generated_limit=?, concurrency_limit=?, backup_days=?,autonomous=?,backup_time=?,backup_enabled=?,theme=? WHERE id=1')
-        .run(Number(next.paused), next.generatedLimit, next.concurrencyLimit, next.backupDays, Number(next.autonomous), next.backupTime, Number(next.backupEnabled), next.theme);
+      check((LANGUAGE_IDS as readonly string[]).includes(next.language), 'invalid', 'Unknown language');
+      this.#db.prepare('UPDATE settings SET paused=?, generated_limit=?, concurrency_limit=?, backup_days=?,autonomous=?,backup_time=?,backup_enabled=?,theme=?,language=? WHERE id=1')
+        .run(Number(next.paused), next.generatedLimit, next.concurrencyLimit, next.backupDays, Number(next.autonomous), next.backupTime, Number(next.backupEnabled), next.theme, next.language);
       if (!next.autonomous) this.tasks.suspendAutonomous(actor);
       if (next.paused) this.#interruptTasks();
       return next;

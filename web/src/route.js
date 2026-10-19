@@ -5,7 +5,7 @@ export const BOT_TABS = ['profile', 'memory', 'procedures', 'export'];
 // 「Botの読み込み」も、Botの代わりに import を選んだ形で開く（#bots/import）。こちらに欄はない。
 export const EVERYONE_TABS = ['search', 'conflicts'];
 export const RECORD_TABS = ['recap', 'running', 'approval', 'artifacts', 'schedules', 'watch'];
-export const SETTINGS_TABS = ['theme', 'rules', 'models', 'mcp', 'activity', 'backup'];
+export const SETTINGS_TABS = ['theme', 'language', 'rules', 'models', 'mcp', 'activity', 'backup'];
 // 前の名前のURL（ブックマークや、MCPの認証から戻るページ）もそのまま開けるようにする。
 const OLD_NAMES = { members: 'bots', activity: 'records' };
 const ID = /^[\w-]{1,128}$/;

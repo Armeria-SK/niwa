@@ -1,0 +1,23 @@
+/** どの画面でも使うことば。画面ごとの辞書には、その画面だけのことばを置く。 */
+export default {
+  save: '保存',
+  saving: '保存しています…',
+  saved: '保存しました',
+  cancel: 'キャンセル',
+  close: '閉じる',
+  delete: '削除',
+  edit: '編集',
+  back: '戻る',
+  retry: '再試行',
+  loading: '読み込んでいます…',
+  confirm: '確認',
+  open: '開く',
+  more: 'もっと見る',
+  none: 'なし',
+  yes: 'はい',
+  no: 'いいえ',
+  on: 'オン',
+  off: 'オフ',
+  bots: ({ count }) => `${count}体`,
+  items: ({ count }) => `${count}件`,
+};
