@@ -72,6 +72,8 @@ export function serverText(text) {
   return text;
 }
 
+/** 時刻の「時」の書き方。日本語と中国語は 09:05 のように2けた、英語と韓国語は 9:05 AM・오전 9:05 のように0を付けない。 */
+export function hourStyle() { return current === 'en' || current === 'ko' ? 'numeric' : '2-digit'; }
 /** 数の書き方（区切りなど）を今の言語に合わせる。 */
 export function formatNumber(value, options) { return Number(value).toLocaleString(locale(), options); }
 /** 名前などの並びを今の言語の書き方でつなぐ（日本語は「、」、英語は「, and」など）。 */

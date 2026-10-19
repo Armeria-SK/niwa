@@ -221,7 +221,7 @@ export default {
   envelopeBlocked: '{mention}Work is on hold: {reason}\nWaiting on: {waitingFor}',
   envelopeRequestTo: 'Request for {mention}',
   envelopeHandoff: 'Handing off an output',
-  envelopeRequestBody: 'Request: {request}',
+  envelopeRequestBody: 'Details: {request}',
   envelopeReviewNote: 'This is a request to review the content. It isn’t being handed over as checked yet.',
   thisOutput: 'this output',
   fixedVersionInline: 'the fixed version',

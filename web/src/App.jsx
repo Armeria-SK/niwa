@@ -20,7 +20,7 @@ import { TrashIcon } from './icons.jsx';
 import { CommandPalette } from './CommandPalette.jsx';
 import { useRoomSearch } from './useRoomSearch.js';
 import { useLiveStream } from './useLiveStream.js';
-import { isLanguage, locale, serverText, t } from './i18n.js';
+import { isLanguage, locale, serverText, t, hourStyle } from './i18n.js';
 import { applyLanguage, rememberedLanguage, useLanguage } from './i18n-react.js';
 
 // 名前は今の言語で読む（getter にして、言語を切り替えると変わるようにする）。
@@ -175,7 +175,7 @@ export function App() {
       }
       previousTasks.current = new Map(state.tasks.map(task => [task.id, task.state]));
       // 日時と画面の言葉は、読むたびに今の言語で作る（getter）。言語を切り替えると、読み直しを待たずにすぐ変わる。
-      const time = value => new Date(value).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' });
+      const time = value => new Date(value).toLocaleTimeString(locale(), { hour: hourStyle(), minute: '2-digit' });
       setDeletedMembers((state.deletedAgents || []).map(agent => ({ id: agent.id, get name() { return t('shell.deletedBot'); }, deleted: true, shape: 'pebble', color: '#9a9a91', status: 'sleeping', motion: 'none' })));
       setMembers(state.agents.map(agent => {
         const work = () => memberWork(state.tasks.filter(task => task.agent_id === agent.id), state.settings.paused, agent.status === 'dormant');

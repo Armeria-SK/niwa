@@ -3,7 +3,7 @@ import { Avatar, Switch } from './components.jsx';
 import { ChevronDownIcon } from './icons.jsx';
 import './AutonomyStatus.css';
 import { api } from './api.js';
-import { locale, serverText, t } from './i18n.js';
+import { locale, serverText, t, hourStyle } from './i18n.js';
 
 // サーバーが書く起動の理由のうち、短い言い方で見せるもの（値は文言の名前）。ほかの理由はサーバーの文をそのまま訳す。
 const REASON_LABELS = { '予定なしの起動機会を待機中': 'autonomyReasonQueued', '予定なしの定期判定から起動': 'autonomyReasonStarted', '前回の活動を継続・待機中': 'autonomyReasonContinuing', '活動完了後の間隔': 'autonomyReasonBreak', '失敗後の待機': 'autonomyReasonRetry', '既存の仕事を優先': 'autonomyReasonRequests', '利用できる共有会話がありません': 'autonomyReasonNoRoom' };
@@ -35,7 +35,7 @@ export function AutonomyStatus({ members = [] }) {
   const nextTime = value => {
     if (!value) return '';
     const date = new Date(value), today = new Date().toDateString() === date.toDateString();
-    return t('settings.autonomyNextCheck', { time: `${today ? '' : date.toLocaleDateString(locale(), { month:'numeric', day:'numeric' }) + ' '}${date.toLocaleTimeString(locale(), { hour:'2-digit', minute:'2-digit' })}` });
+    return t('settings.autonomyNextCheck', { time: `${today ? '' : date.toLocaleDateString(locale(), { month:'numeric', day:'numeric' }) + ' '}${date.toLocaleTimeString(locale(), { hour: hourStyle(), minute:'2-digit' })}` });
   };
   return <section className="autonomy-status" aria-label={t('settings.autonomyTitle')}>
     <div className="autonomy-status-heading"><h3>{t('settings.autonomyTitle')}</h3><span>{t('settings.autonomySaved')}</span></div>

@@ -5,7 +5,7 @@ import {groupThreadWork} from '../work-groups.js';
 import {ThreadWorkList} from './ThreadWorkList.jsx';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { locale, serverText, t } from '../i18n.js';
+import { locale, serverText, t, hourStyle } from '../i18n.js';
 import { Avatar, EmptyState, Modal, Segmented } from '../components.jsx';
 import { ActivityIcon, ArrowUpRightIcon, CheckCircleIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
 import { Recap, ArtifactLibrary } from './Productivity.jsx';
@@ -21,7 +21,7 @@ const eventLabels = { queued: 'eventQueued', running: 'eventRunning', completed:
 /** 辞書の文の改行（\n）を <br /> にして並べる。 */
 const lines = text => text.split('\n').map((line, index) => <Fragment key={index}>{index ? <br /> : null}{line}</Fragment>);
 // 時刻は描くときに今の言語で書く（言語を切り替えたらすぐ変わるように）。
-const clock = value => new Date(value).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' });
+const clock = value => new Date(value).toLocaleTimeString(locale(), { hour: hourStyle(), minute: '2-digit' });
 // 待っている理由と仕事の結果はサーバーが書いた文のことがあるので、今の言語に言い換えて出す（辞書に無い文はそのまま）。承認や業務の説明はそのまま。
 const shownDetail = task => task.detail && (task.detail === task.wait_reason || task.detail === task.result) ? serverText(task.detail) : task.detail;
 export function Activity({ taskId, replay = false, onReplay, onBranched, onOpenTask, onCloseTask, onDeleteArtifact, activities, members, paused, onPause, onDecide, onThread, onArtifact, onControl, updates, seen, onRead, artifacts, filter, onFilter, schedules, threads, onScheduleSave, onScheduleToggle, onScheduleDelete, onScheduleToken }) {

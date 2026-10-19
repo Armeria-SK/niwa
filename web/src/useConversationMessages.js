@@ -2,10 +2,10 @@ import {mergeMessages} from './message-order.js';
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import { conversationText, messageArtifact } from './conversationText.js';
-import { locale } from './i18n.js';
+import { locale, hourStyle } from './i18n.js';
 
 const displayMessage = message => message && ({ ...message, author: message.author_id === 'administrator' ? 'you' : message.author_id,
-  text: conversationText(message), artifact: messageArtifact(message), time: new Date(message.created_at).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' }) });
+  text: conversationText(message), artifact: messageArtifact(message), time: new Date(message.created_at).toLocaleTimeString(locale(), { hour: hourStyle(), minute: '2-digit' }) });
 
 export function useConversationMessages(thread) {
   const [data, setData] = useState({ first: null, items: [], next: null });

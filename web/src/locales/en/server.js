@@ -301,7 +301,7 @@ export default {
     // Botの読み込み：できる会話の題と、最初の発言
     [/^ファイルから迎えた(.+)の手順と記憶$/, name => `Procedures and memories from ${name}’s file`],
     [/^ファイルから(.+)を迎えました。\nこのあとの発言は、ファイルにあった手順(\d+)件と記憶(\d+)件です。\n「手順：」で始まる発言が手順で、ほかは記憶です。\n(.+)は、それぞれの発言を出所として覚えます。$/,
-      (name, procedures, memories) => `Welcomed ${name} from a file.\nThe messages that follow are the ${count(procedures, 'procedure', 'procedures')} and ${count(memories, 'memory', 'memories')} from the file.\nMessages that start with “手順：” are procedures; the rest are memories.\n${name} keeps each message as the source of what it remembers.`],
+      (name, procedures, memories) => `Added ${name} from a file.\nThe messages that follow are the ${count(procedures, 'procedure', 'procedures')} and ${count(memories, 'memory', 'memories')} from the file.\nMessages that start with “手順：” are procedures; the rest are memories.\n${name} keeps each message as the source of what it remembers.`],
     // モデルの接続
     [/^モデル一覧の確認に失敗しました \(([A-Z_]+)\)。$/, code => `Couldn’t check the model list (${code}).`],
     // MCP接続：理由つきの文
