@@ -36,7 +36,8 @@ if test "$1" = --check; then
   printf 'Fresh checkout checks passed. No changes made; disk limits and service isolation still require verification.\n'
   exit 0
 fi
-apt-get install -y --no-install-recommends --no-upgrade --no-remove podman uidmap fuse-overlayfs acl
+# systemd-run --user needs the per-user D-Bus; minimal images such as WSL Ubuntu 22.04 omit it.
+apt-get install -y --no-install-recommends --no-upgrade --no-remove podman uidmap fuse-overlayfs acl dbus-user-session
 groupadd niwa-ipc
 useradd --user-group --no-create-home --home-dir "$root/runtime/executor/home" --shell /usr/sbin/nologin niwa-exec
 usermod --append --groups niwa-ipc niwa
