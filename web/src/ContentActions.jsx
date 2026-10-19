@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { Modal } from './components.jsx';
+import { Modal, Sentences } from './components.jsx';
+import { t } from './i18n.js';
 import './ContentActions.css';
 
 export function DeleteContentDialog({ item, onClose, onDelete }) {
   const [busy, setBusy] = useState(false);
-  return <Modal title={`${item.kind === 'room' ? '会話' : '成果物'}を削除`} onClose={() => { if (!busy) onClose(); }}>
-    <div className="modal-body form-stack"><strong>{item.title}</strong><p>{item.kind === 'room' ? 'この会話の発言・成果物と、この会話から生まれたBotの記憶を削除します。進行中の仕事と定期実行も中止します。' : 'この成果物を一覧と保存先から削除します。会話の発言は残ります。'}</p><p className="muted">元に戻せません。<br />過去のバックアップは通常の保存期間で整理されます。</p></div>
-    <div className="form-actions"><button className="button secondary" disabled={busy} onClick={onClose}>やめる</button><button className="button danger" disabled={busy} onClick={async () => { setBusy(true); try { if (await onDelete(item)) onClose(); } finally { setBusy(false); } }}>{busy ? '削除中…' : '削除する'}</button></div>
+  const room = item.kind === 'room';
+  return <Modal title={room ? t('shell.deleteRoomTitle') : t('shell.deleteArtifactTitle')} onClose={() => { if (!busy) onClose(); }}>
+    <div className="modal-body form-stack"><strong>{item.title}</strong><p>{room ? t('shell.deleteRoomBody') : t('shell.deleteArtifactBody')}</p><p className="muted"><Sentences>{t('shell.deleteWarning')}</Sentences></p></div>
+    <div className="form-actions"><button className="button secondary" disabled={busy} onClick={onClose}>{t('shell.cancelAction')}</button><button className="button danger" disabled={busy} onClick={async () => { setBusy(true); try { if (await onDelete(item)) onClose(); } finally { setBusy(false); } }}>{busy ? t('shell.deleting') : t('shell.deleteAction')}</button></div>
   </Modal>;
 }

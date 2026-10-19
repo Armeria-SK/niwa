@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 const at = value => Number(typeof value === 'string' ? Date.parse(value) : value) || 0;
 const RANK = { approval: 0, question: 1, stopped: 2, decisions: 3 };
 
@@ -16,6 +18,6 @@ export function attentionItems({ activities = [], questions = [], decisions = []
   for (const task of activities) if (task.state === 'waiting_user' && task.status !== 'approval' && !task.paused && !asked.has(task.id))
     items.push({ kind: 'stopped', id: task.id, title: task.title, detail: task.reason || '', member: task.member, thread: task.thread, at: at(task.updated_at) });
   const unseen = decisions.filter(decision => !decision.seen);
-  if (unseen.length) items.push({ kind: 'decisions', id: 'decisions', title: `未確認の決まったことが${unseen.length}件あります`, detail: unseen.slice(0, 2).map(decision => decision.title).join('／'), ids: unseen.map(decision => decision.id), at: 0 });
+  if (unseen.length) items.push({ kind: 'decisions', id: 'decisions', title: t('shell.unseenDecisions', { count: unseen.length }), detail: unseen.slice(0, 2).map(decision => decision.title).join(t('shell.decisionsSeparator')), ids: unseen.map(decision => decision.id), at: 0 });
   return items.sort((a, b) => RANK[a.kind] - RANK[b.kind] || b.at - a.at);
 }

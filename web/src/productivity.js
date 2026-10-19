@@ -1,1 +1,14 @@
-export const taskStatus = { running: '進行中', waiting: '待機中', paused: '一時停止中', failed: '再試行待ち', canceled: '中止', approval: '確認を待っています', done: '完了', approved: '承認済み', declined: '見送り' };
+import { t } from './i18n.js';
+
+// 仕事の状態の呼び名。言語を切り替えたときに変わるよう、読むたびに辞書から引く。
+export const taskStatus = {
+  get running() { return t('records.statusRunning'); },
+  get waiting() { return t('records.statusWaiting'); },
+  get paused() { return t('records.statusPaused'); },
+  get failed() { return t('records.statusFailed'); },
+  get canceled() { return t('records.statusCanceled'); },
+  get approval() { return t('records.statusApproval'); },
+  get done() { return t('records.statusDone'); },
+  get approved() { return t('records.statusApproved'); },
+  get declined() { return t('records.statusDeclined'); },
+};

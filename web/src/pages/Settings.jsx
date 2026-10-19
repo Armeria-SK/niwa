@@ -14,20 +14,23 @@ import { NightPreviewSetting } from '../NightPlan.jsx';
 import { LANGUAGES, t } from '../i18n.js';
 import { CheckIcon, GlobeIcon, LanguageIcon, MemoryIcon, PaletteIcon, PauseIcon, PlayIcon, ShieldIcon, SlidersIcon, UsersIcon } from '../icons.jsx';
 
-const TABS = [{ value: 'theme', label: 'テーマ', icon: PaletteIcon }, { value: 'language', label: '言語', icon: LanguageIcon }, { value: 'rules', label: '共通ルール', icon: ShieldIcon }, { value: 'models', label: 'モデルと接続', icon: SlidersIcon }, { value: 'mcp', label: 'MCP接続', icon: GlobeIcon }, { value: 'activity', label: '活動と人数', icon: UsersIcon }, { value: 'backup', label: 'バックアップ', icon: MemoryIcon }];
-const FIELD_TABS = { theme: 'テーマ', language: '言語', rules: '共通ルール', autonomous: '活動と人数', maxMembers: '活動と人数', unlimited: '活動と人数', concurrent: '活動と人数', backupEnabled: 'バックアップ', backupTime: 'バックアップ', backupDays: 'バックアップ' };
+// 欄の名前は、描くたびに今の言語で引く（label は読むときに訳す getter）。
+const tabItem = (value, key, icon) => ({ value, icon, get label() { return t(`settings.${key}`); } });
+const TABS = [tabItem('theme', 'tabTheme', PaletteIcon), tabItem('language', 'tabLanguage', LanguageIcon), tabItem('rules', 'tabRules', ShieldIcon), tabItem('models', 'tabModels', SlidersIcon), tabItem('mcp', 'tabMcp', GlobeIcon), tabItem('activity', 'tabActivity', UsersIcon), tabItem('backup', 'tabBackup', MemoryIcon)];
+/** 下の「設定を保存」で保存する項目が、どの欄にあるか（欄の value）。 */
+const FIELD_TABS = { theme: 'theme', language: 'language', rules: 'rules', autonomous: 'activity', maxMembers: 'activity', unlimited: 'activity', concurrent: 'activity', backupEnabled: 'backup', backupTime: 'backup', backupDays: 'backup' };
 
 /** 上に「いつものモデル」、下に接続先のカード。接続とモデルは、枠ごとにその場で保存する（ページ下の「設定を保存」は使わない）。 */
 function ModelSettings() {
   return <div className="settings-form model-settings">
-    <section className="settings-section"><h2>いつものモデル</h2><p>Botたちが返事に使うモデルです。<br />つないだ接続先のモデルから選べます。<br />枠ごとに、中のボタンで保存します。</p>
+    <section className="settings-section"><h2>{t('settings.defaultModelTitle')}</h2><p>{t('settings.defaultModelLead1')}<br />{t('settings.defaultModelLead2')}<br />{t('settings.defaultModelLead3')}</p>
       <ModelDefaults />
-      <p className="field-hint">Botごとの変更は、Botのプロフィールで行えます。</p>
+      <p className="field-hint">{t('settings.defaultModelHint')}</p>
     </section>
-    <section className="settings-section"><h2>接続先</h2><p>使う接続先を開いて設定します。<br />いくつでも同時につなげます。</p>
+    <section className="settings-section"><h2>{t('settings.connectionsTitle')}</h2><p>{t('settings.connectionsLead1')}<br />{t('settings.connectionsLead2')}</p>
       <div className="connection-grid"><AnthropicConnection /><CompatibleConnection /><LocalLlmConnection /><SubscriptionConnection /></div>
     </section>
-    <details className="settings-more"><summary>直近のモデル接続</summary><ModelRoutes /></details>
+    <details className="settings-more"><summary>{t('settings.recentRoutes')}</summary><ModelRoutes /></details>
   </div>;
 }
 
@@ -45,32 +48,32 @@ export function Settings({ tab = 'theme', onTab, onClose, onPreviewTheme, onPrev
   useEffect(() => { onPreviewLanguage(draft.language); return () => onPreviewLanguage(null); }, [draft.language, onPreviewLanguage]);
   const change = (key, value) => { setDraft(current => ({ ...current, [key]: value })); setTouched(current => new Set(current).add(key)); setSaved(false); };
   // 下の「設定を保存」は、テーマ・共通ルール・活動と人数・バックアップの欄をまとめて保存する。どの欄に未保存の変更があるかを示す。
-  const unsaved = [...new Set([...touched].map(field => FIELD_TABS[field]).filter(Boolean))];
+  const unsaved = [...new Set([...touched].map(field => FIELD_TABS[field]).filter(Boolean))].map(value => TABS.find(item => item.value === value).label);
   async function submit(e) { e.preventDefault(); const ok = await onSave(draft, touched); if (ok) setTouched(new Set()); setSaved(ok); }
   // 設定は今の画面の上に重ねて開く。左に欄を並べ、右でその欄を設定する。
-  return <Modal title="設定" onClose={onClose} className="settings-modal"><div className="settings-layout">
-    <nav className="settings-nav" aria-label="設定の欄"><Segmented label="設定のカテゴリ" options={TABS.map(({ value, label, icon: Icon }) => ({ value, label: <><Icon size={19} />{label}</> }))} value={tab} onChange={value => { onTab(value); setSaved(false); }} /></nav>
+  return <Modal title={t('settings.title')} onClose={onClose} className="settings-modal"><div className="settings-layout">
+    <nav className="settings-nav" aria-label={t('settings.navLabel')}><Segmented label={t('settings.categoryLabel')} options={TABS.map(({ value, label, icon: Icon }) => ({ value, label: <><Icon size={19} />{label}</> }))} value={tab} onChange={value => { onTab(value); setSaved(false); }} /></nav>
     <div className="settings-pane">
     <div className="settings-scroll" key={tab}>
     {tab === 'mcp' ? <McpConnections /> : tab === 'models' ? <ModelSettings /> : <form className="settings-form" onSubmit={submit}>
-      {tab === 'theme' ? <section className="settings-section"><h2>Niwaの色を選ぶ</h2><p>気分に合う配色で、心地よい場所に。</p><div className="theme-picker" role="group" aria-label="配色テーマ">{THEMES.map(theme => <button type="button" key={theme.id} className={`theme-option ${draft.theme === theme.id ? 'selected' : ''}`} aria-pressed={draft.theme === theme.id} onClick={() => change('theme', theme.id)}><ThemePreview theme={theme} /><strong>{theme.name}</strong><small>{theme.description}</small>{draft.theme === theme.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">選ぶとすぐに全画面でプレビューできます。<br />「設定を保存」で、このNiwaを開くすべての端末でこの配色を使います。<br />保存せずに設定画面を離れると元に戻ります。</p></section> : null}
+      {tab === 'theme' ? <section className="settings-section"><h2>{t('settings.themeTitle')}</h2><p>{t('settings.themeLead')}</p><div className="theme-picker" role="group" aria-label={t('settings.themeGroup')}>{THEMES.map(theme => <button type="button" key={theme.id} className={`theme-option ${draft.theme === theme.id ? 'selected' : ''}`} aria-pressed={draft.theme === theme.id} onClick={() => change('theme', theme.id)}><ThemePreview theme={theme} /><strong>{theme.name}</strong><small>{theme.description}</small>{draft.theme === theme.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">{t('settings.themeHint1')}<br />{t('settings.themeHint2')}<br />{t('settings.themeHint3')}</p></section> : null}
       {tab === 'language' ? <section className="settings-section"><h2>{t('settings.languageTitle')}</h2><p>{t('settings.languageLead')}</p><div className="theme-picker language-picker" role="group" aria-label={t('settings.languageGroup')}>{LANGUAGES.map(item => <button type="button" key={item.id} lang={item.id} className={`theme-option language-option ${draft.language === item.id ? 'selected' : ''}`} aria-pressed={draft.language === item.id} onClick={() => change('language', item.id)}><strong>{item.name}</strong><small>{item.sample}</small>{draft.language === item.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">{t('settings.languageHint1')}<br />{t('settings.languageHint2')}<br />{t('settings.languageHint3')}</p></section> : null}
-      {tab === 'rules' ? <section className="settings-section"><h2>みんなが大切にすること</h2><p>全Botに共通して渡す指示です。<br />保存すると、進行中の応答も新しいルールで取り直します。</p><label className="field"><span>共通の指示</span><textarea rows={9} maxLength={20000} value={draft.rules} onChange={e => change('rules', e.target.value)} /></label><p className="field-hint">別の画面で更新された場合は「変更を戻す」で最新の内容を読み直してください。<br />空欄にすると追加の指示を解除します。</p><div className="inline-note"><ShieldIcon size={20} /><span>停止・権限・予算・記憶の分離は本体が管理します。<br />共通の指示や個別の性格設定では上書きできません。</span></div></section> : null}
-      {tab === 'activity' ? <section className="settings-section"><h2>Botたちの活動</h2><p>人数と同時に活動できる数は、別々に設定できます。</p>
-        <div className="pause-setting"><div><strong>{paused ? '活動を一時停止しています' : 'Botたちは活動中です'}</strong><small>一時停止中も、会話や設定を確認できます。</small></div><button className="button secondary" type="button" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? '再開' : '一時停止'}</button></div>
-        <Switch checked={draft.autonomous} onChange={value => change('autonomous', value)} label="自発的な活動を許可する" description="保存すると、予定登録なしでもBotが順番に活動を選べます。必要がなければ休息します。オフでも通常の依頼は続けられます。" />
+      {tab === 'rules' ? <section className="settings-section"><h2>{t('settings.rulesTitle')}</h2><p>{t('settings.rulesLead1')}<br />{t('settings.rulesLead2')}</p><label className="field"><span>{t('settings.rulesField')}</span><textarea rows={9} maxLength={20000} value={draft.rules} onChange={e => change('rules', e.target.value)} /></label><p className="field-hint">{t('settings.rulesHint1')}<br />{t('settings.rulesHint2')}</p><div className="inline-note"><ShieldIcon size={20} /><span>{t('settings.rulesNote1')}<br />{t('settings.rulesNote2')}</span></div></section> : null}
+      {tab === 'activity' ? <section className="settings-section"><h2>{t('settings.activityTitle')}</h2><p>{t('settings.activityLead')}</p>
+        <div className="pause-setting"><div><strong>{paused ? t('settings.activityPaused') : t('settings.activityRunning')}</strong><small>{t('settings.activityPauseHint')}</small></div><button className="button secondary" type="button" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? t('settings.resume') : t('settings.pause')}</button></div>
+        <Switch checked={draft.autonomous} onChange={value => change('autonomous', value)} label={t('settings.autonomousLabel')} description={t('settings.autonomousDescription')} />
         <NightPreviewSetting />
         <AutonomyStatus members={members} />
-        <label className="field narrow-field"><span>リーダーが生成できるBotの数</span><div className="input-with-unit"><input type="number" min="1" max="100" value={draft.maxMembers} onChange={e => change('maxMembers', e.target.value)} required /><span>体</span></div><small>休眠中も含みます。<br />リーダーは別枠です。</small></label>
-        <Switch checked={draft.unlimited} onChange={value => change('unlimited', value)} label="同時実行数を制限しない" description="接続先やマシンの実行上限には従います。" />
-        {!draft.unlimited ? <label className="field narrow-field"><span>同時実行数</span><div className="input-with-unit"><input type="number" min="1" max="100" value={draft.concurrent} onChange={e => change('concurrent', e.target.value)} required /><span>件</span></div></label> : null}
+        <label className="field narrow-field"><span>{t('settings.maxMembersLabel')}</span><div className="input-with-unit"><input type="number" min="1" max="100" value={draft.maxMembers} onChange={e => change('maxMembers', e.target.value)} required /><span>{t('settings.maxMembersUnit')}</span></div><small>{t('settings.maxMembersHint1')}<br />{t('settings.maxMembersHint2')}</small></label>
+        <Switch checked={draft.unlimited} onChange={value => change('unlimited', value)} label={t('settings.unlimitedLabel')} description={t('settings.unlimitedDescription')} />
+        {!draft.unlimited ? <label className="field narrow-field"><span>{t('settings.concurrentLabel')}</span><div className="input-with-unit"><input type="number" min="1" max="100" value={draft.concurrent} onChange={e => change('concurrent', e.target.value)} required /><span>{t('settings.concurrentUnit')}</span></div></label> : null}
       </section> : null}
-      {tab === 'backup' ? <section className="settings-section"><h2>大切な記憶を残す</h2><p>設定・人格・個別記憶・会話履歴のバックアップを設定します。</p>
-        <Switch checked={draft.backupEnabled} onChange={value => change('backupEnabled', value)} label="毎日のバックアップ" description="設定を保存すると反映されます。オフにしても、保存済みのバックアップは残ります。" />
-        <div className="field-pair"><label className="field"><span>実行する時刻（日本時間）</span><input type="time" value={draft.backupTime} onChange={e => change('backupTime', e.target.value)} required /></label><label className="field"><span>保存する日数</span><div className="input-with-unit"><input type="number" min="1" max="365" value={draft.backupDays} onChange={e => change('backupDays', e.target.value)} required /><span>日</span></div></label></div>
+      {tab === 'backup' ? <section className="settings-section"><h2>{t('settings.backupTitle')}</h2><p>{t('settings.backupLead')}</p>
+        <Switch checked={draft.backupEnabled} onChange={value => change('backupEnabled', value)} label={t('settings.backupDailyLabel')} description={t('settings.backupDailyDescription')} />
+        <div className="field-pair"><label className="field"><span>{t('settings.backupTimeLabel')}</span><input type="time" value={draft.backupTime} onChange={e => change('backupTime', e.target.value)} required /></label><label className="field"><span>{t('settings.backupDaysLabel')}</span><div className="input-with-unit"><input type="number" min="1" max="365" value={draft.backupDays} onChange={e => change('backupDays', e.target.value)} required /><span>{t('settings.backupDaysUnit')}</span></div></label></div>
         <BackupStatus enabled={settings.backupEnabled} />
       </section> : null}
-      <div className={`form-actions settings-save ${unsaved.length && !saved ? 'dirty' : ''}`}><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />保存しました</> : unsaved.length ? `保存していない変更：${unsaved.join('・')}` : null}</span><button type="button" className="button subtle" disabled={!touched.size} onClick={() => { setDraft(settings); setTouched(new Set()); setSaved(false); }}>変更を戻す</button><button className="button primary" disabled={!touched.size}>設定を保存</button></div>
+      <div className={`form-actions settings-save ${unsaved.length && !saved ? 'dirty' : ''}`}><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />{t('common.saved')}</> : unsaved.length ? t('settings.unsavedChanges', { tabs: unsaved.join(t('settings.unsavedSeparator')) }) : null}</span><button type="button" className="button subtle" disabled={!touched.size} onClick={() => { setDraft(settings); setTouched(new Set()); setSaved(false); }}>{t('settings.revert')}</button><button className="button primary" disabled={!touched.size}>{t('settings.saveSettings')}</button></div>
     </form>}
     </div>
     </div>

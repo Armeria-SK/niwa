@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './api.js';
 import { providerLabel as providerName } from './providers.js';
+import { locale, serverText, t } from './i18n.js';
 
 export function ModelRoutes() {
   const [routes, setRoutes] = useState([]);
@@ -15,12 +16,12 @@ export function ModelRoutes() {
     void refresh(); return () => { active = false; clearTimeout(timer); };
   }, []);
   return <>
-    <p className="field-hint">応答を試みた接続先です。<br />完了や接続成功を示すものではありません。</p>
+    <p className="field-hint">{t('settings.routesHint1')}<br />{t('settings.routesHint2')}</p>
     {routes.map(route => <div key={route.id}>
       <strong>{route.name}</strong>
-      <p className="field-hint">設定: {providerName(route.configured_provider)} / {route.configured_model}</p>
-      <p className="field-hint">直近: {route.attempted_at ? <>{providerName(route.provider)} / {route.model} · {route.reason === 'quota' ? '利用上限による切替' : '設定モデルを使用'}<br /><time dateTime={new Date(route.attempted_at).toISOString()}>{new Date(route.attempted_at).toLocaleString('ja-JP')}</time></> : 'まだ接続していません'}</p>
+      <p className="field-hint">{t('settings.routeConfigured', { provider: providerName(route.configured_provider), model: route.configured_model })}</p>
+      <p className="field-hint">{route.attempted_at ? <>{t('settings.routeRecent', { provider: providerName(route.provider), model: route.model, reason: t(route.reason === 'quota' ? 'settings.routeQuota' : 'settings.routeConfiguredModel') })}<br /><time dateTime={new Date(route.attempted_at).toISOString()}>{new Date(route.attempted_at).toLocaleString(locale())}</time></> : t('settings.routeNever')}</p>
     </div>)}
-    {error ? <p className="field-error" role="alert">{error}</p> : null}
+    {error ? <p className="field-error" role="alert">{serverText(error)}</p> : null}
   </>;
 }

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { api } from './api.js';
 import { Modal } from './components.jsx';
 import { CheckIcon } from './icons.jsx';
+import { locale, t } from './i18n.js';
+import { rich } from './i18n-react.js';
 
 export function MemoryHistory({ member, memory, onClose }) {
   const [result, setResult] = useState(null);
@@ -11,8 +13,8 @@ export function MemoryHistory({ member, memory, onClose }) {
       .catch(error => { if (active) setResult({ error: error.message }); });
     return () => { active = false; };
   }, [member.id, memory.id, memory.revision]);
-  return <Modal title="訂正の履歴" onClose={onClose}><div className="modal-body">
-    <p className="muted">現在の記憶は、訂正後の内容です。<br />直近100件の訂正の日時と、残していれば直す前の文を表示します。</p>
-    {!result ? <p role="status">履歴を読み込んでいます…</p> : result.error ? <p role="alert">{result.error}</p> : <div className="revision-list">{result.items.map(item => <div key={item.sequence}><CheckIcon size={18} /><span>{item.actor_id === 'administrator' ? 'あなた' : '管理者'}が記憶を訂正しました（第{item.revision}版）</span><time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString('ja-JP')}</time>{item.previous_body ? <blockquote className="revision-previous">直す前：{item.previous_body}</blockquote> : <small className="revision-previous">直す前の文は残していません</small>}</div>)}</div>}
+  return <Modal title={t('bots.historyTitle')} onClose={onClose}><div className="modal-body">
+    <p className="muted">{rich('bots.historyIntro', { br: <br /> })}</p>
+    {!result ? <p role="status">{t('bots.historyLoading')}</p> : result.error ? <p role="alert">{result.error}</p> : <div className="revision-list">{result.items.map(item => <div key={item.sequence}><CheckIcon size={18} /><span>{t(item.actor_id === 'administrator' ? 'bots.historyByYou' : 'bots.historyByAdmin', { revision: item.revision })}</span><time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString(locale())}</time>{item.previous_body ? <blockquote className="revision-previous">{t('bots.previousText', { text: item.previous_body })}</blockquote> : <small className="revision-previous">{t('bots.previousNotKept')}</small>}</div>)}</div>}
   </div></Modal>;
 }

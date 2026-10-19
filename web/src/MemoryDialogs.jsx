@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { api } from './api.js';
 import { Modal } from './components.jsx';
 import { LockIcon } from './icons.jsx';
+import { t } from './i18n.js';
 
 export function MemorySourceLine({ memory, onOpenThread }) {
   const source = memory.source;
   return <div className="memory-source">{source.excerpt ? <q>{source.excerpt}</q> : null}<span>{[source.author, source.room, source.said].filter(Boolean).join(' · ')}</span>
-    {source.private ? <span className="memory-private"><LockIcon size={13} />個別の会話から生まれた記憶（その会話の中でだけ使います）</span> : null}
-    {source.openable ? <button type="button" className="text-button" onClick={() => onOpenThread(memory.source_room_id)}>元の会話へ</button> : null}</div>;
+    {source.private ? <span className="memory-private"><LockIcon size={13} />{t('bots.privateOrigin')}</span> : null}
+    {source.openable ? <button type="button" className="text-button" onClick={() => onOpenThread(memory.source_room_id)}>{t('bots.openSource')}</button> : null}</div>;
 }
 
 /** 訂正・削除の前に、何が変わるかを読む。読めなくても操作は止めない。 */
@@ -22,26 +23,26 @@ function useMemoryImpact(memberId, memoryId) {
 }
 
 function MemoryImpactNote({ impact, name, deleting }) {
-  if (!impact) return <p className="muted" role="status">影響を確かめています…</p>;
+  if (!impact) return <p className="muted" role="status">{t('bots.checkingImpact')}</p>;
   if (impact.error) return null;
-  const titles = impact.procedures.map(item => `「${item.title || '題名のない手順'}」`).join('');
+  const titles = impact.procedures.map(item => t('bots.quoted', { text: item.title || t('bots.untitledProcedure') })).join(t('bots.quotedJoiner'));
   const lines = deleting
-    ? [impact.procedure_count ? `${name}の手順帳（${impact.procedure_count}件）もすべて消えます。` : null, '訂正の履歴に残していた前の文も消します。']
-    : [impact.procedures.length ? `この記憶を出典にした手順${titles}は止まります。` : 'この記憶を出典にした手順はありません。手順帳はそのまま残ります。'];
-  if (impact.open_tasks) lines.push(`進行中の仕事${impact.open_tasks}件は、${deleting ? '残りの記憶' : '直した記憶'}で考え直します。`);
-  return <ul className="memory-impact" aria-label="この操作で変わること">{lines.filter(Boolean).map(line => <li key={line}>{line}</li>)}</ul>;
+    ? [impact.procedure_count ? t('bots.impactProceduresGone', { name, count: impact.procedure_count }) : null, t('bots.impactHistoryGone')]
+    : [impact.procedures.length ? t('bots.impactStops', { titles }) : t('bots.impactNoProcedures')];
+  if (impact.open_tasks) lines.push(t(deleting ? 'bots.impactTasksRemaining' : 'bots.impactTasksCorrected', { count: impact.open_tasks }));
+  return <ul className="memory-impact" aria-label={t('bots.impactLabel')}>{lines.filter(Boolean).map(line => <li key={line}>{line}</li>)}</ul>;
 }
 
 export function MemoryEditModal({ memory, member, onSave, onClose }) {
   const [text, setText] = useState(memory.text);
   const [keep, setKeep] = useState(true);
   const impact = useMemoryImpact(member.id, memory.id);
-  return <Modal title="記憶を訂正" onClose={onClose}><form onSubmit={e => { e.preventDefault(); if (text.trim()) onSave(text.trim(), keep); }}><div className="modal-body form-stack"><p className="muted">{member.name}の記憶に、あなたによる訂正として記録します。</p><label className="field"><span>記憶の内容</span><textarea rows={6} value={text} onChange={e => setText(e.target.value)} autoFocus required /></label>
-    <label className="keep-previous"><input type="checkbox" checked={keep} onChange={e => setKeep(e.target.checked)} /><span>直す前の文を、訂正の履歴に残す<small>私的な内容を消すための訂正なら、外してください。</small></span></label>
-    <MemoryImpactNote impact={impact} name={member.name} /></div><div className="form-actions"><button type="button" className="button subtle" onClick={onClose}>やめる</button><button className="button primary" disabled={!text.trim()}>訂正を保存</button></div></form></Modal>;
+  return <Modal title={t('bots.correctMemory')} onClose={onClose}><form onSubmit={e => { e.preventDefault(); if (text.trim()) onSave(text.trim(), keep); }}><div className="modal-body form-stack"><p className="muted">{t('bots.correctIntro', { name: member.name })}</p><label className="field"><span>{t('bots.memoryText')}</span><textarea rows={6} value={text} onChange={e => setText(e.target.value)} autoFocus required /></label>
+    <label className="keep-previous"><input type="checkbox" checked={keep} onChange={e => setKeep(e.target.checked)} /><span>{t('bots.keepPrevious')}<small>{t('bots.keepPreviousHint')}</small></span></label>
+    <MemoryImpactNote impact={impact} name={member.name} /></div><div className="form-actions"><button type="button" className="button subtle" onClick={onClose}>{t('bots.cancel')}</button><button className="button primary" disabled={!text.trim()}>{t('bots.saveCorrection')}</button></div></form></Modal>;
 }
 
 export function MemoryDeleteModal({ memory, member, onDelete, onClose }) {
   const impact = useMemoryImpact(member.id, memory.id);
-  return <Modal title="この記憶を削除しますか？" onClose={onClose}><div className="modal-body"><p className="muted">{member.name}の記憶から、この内容を取り除きます。</p><blockquote className="delete-preview">{memory.text}</blockquote><MemoryImpactNote impact={impact} name={member.name} deleting /></div><div className="form-actions"><button className="button subtle" onClick={onClose}>やめる</button><button className="button danger" onClick={onDelete}>記憶を削除</button></div></Modal>;
+  return <Modal title={t('bots.deleteMemoryTitle')} onClose={onClose}><div className="modal-body"><p className="muted">{t('bots.deleteMemoryIntro', { name: member.name })}</p><blockquote className="delete-preview">{memory.text}</blockquote><MemoryImpactNote impact={impact} name={member.name} deleting /></div><div className="form-actions"><button className="button subtle" onClick={onClose}>{t('bots.cancel')}</button><button className="button danger" onClick={onDelete}>{t('bots.deleteMemory')}</button></div></Modal>;
 }

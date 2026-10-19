@@ -1,4 +1,5 @@
 import { Avatar } from './components.jsx';
+import { t } from './i18n.js';
 
 /** 庭に置くのは6体まで。並べる位置（左からの割合）と、地面からの高さを順に使う。 */
 const SPOTS = { 1: [50], 2: [30, 66], 3: [18, 48, 78], 4: [16, 38, 60, 84], 5: [12, 31, 50, 69, 88], 6: [10, 26, 42, 58, 74, 90] };
@@ -7,9 +8,9 @@ const MAX_BOTS = 6;
 
 /** Botの今の様子を、短いことばと動きの種類にする。 */
 function botState(member, paused) {
-  if (member.status === 'sleeping') return { kind: 'sleep', text: '休眠中' };
-  if (paused) return { kind: 'still', text: '一時停止中' };
-  const text = (member.activity || '').split(' · ')[0] || '返答待機';
+  if (member.status === 'sleeping') return { kind: 'sleep', text: t('today.botDormant') };
+  if (paused) return { kind: 'still', text: t('today.workPaused') };
+  const text = (member.activity || '').split(' · ')[0] || t('today.botIdle');
   return { kind: member.runtimeMotion === 'work' ? 'work' : member.runtimeMotion === 'wait' ? 'wait' : 'still', text };
 }
 
@@ -50,20 +51,20 @@ export function GardenScene({ members, paused, onMember }) {
       </svg>
     </div>
     <div className="garden-head">
-      <h2 className="glass" id="garden-title">庭の様子</h2>
-      {count('work') ? <span className="attention-chip ok glass">作業中 {count('work')}</span> : null}
-      {count('wait') ? <span className="attention-chip warn glass">返事待ち {count('wait')}</span> : null}
-      {count('still') ? <span className="attention-chip muted glass">{paused ? '一時停止' : '手すき'} {count('still')}</span> : null}
-      {count('sleep') ? <span className="attention-chip muted glass">休眠 {count('sleep')}</span> : null}
+      <h2 className="glass" id="garden-title">{t('today.gardenHeading')}</h2>
+      {count('work') ? <span className="attention-chip ok glass">{t('today.gardenWorking', { count: count('work') })}</span> : null}
+      {count('wait') ? <span className="attention-chip warn glass">{t('today.gardenWaiting', { count: count('wait') })}</span> : null}
+      {count('still') ? <span className="attention-chip muted glass">{t(paused ? 'today.gardenPaused' : 'today.gardenFree', { count: count('still') })}</span> : null}
+      {count('sleep') ? <span className="attention-chip muted glass">{t('today.gardenSleeping', { count: count('sleep') })}</span> : null}
     </div>
     {shown.map(({ member, kind, text }, index) => <div key={member.id} className="garden-spot" style={{ left: `${lefts[index]}%`, bottom: `calc(${HEIGHTS[index]}px * var(--garden-lift, 1))` }}>
-      <button type="button" className="garden-bot" aria-label={`${member.name}：${text}`} onClick={() => onMember(member.id)}>
+      <button type="button" className="garden-bot" aria-label={t('today.gardenBotLabel', { name: member.name, state: text })} onClick={() => onMember(member.id)}>
         <span className={`garden-tag ${kind}`} style={{ animationDelay: `${300 + index * 120}ms` }}><strong>{member.name}</strong><span>{text}</span></span>
         <Avatar member={member} size={60} />
         <span className={`garden-shadow ${kind === 'work' ? 'work' : ''}`} aria-hidden="true" />
         {kind === 'sleep' ? <><span className="garden-z" aria-hidden="true">z</span><span className="garden-z b" aria-hidden="true">z</span></> : null}
       </button>
     </div>)}
-    {states.length > MAX_BOTS ? <span className="garden-more attention-chip muted glass">ほか{states.length - MAX_BOTS}体</span> : null}
+    {states.length > MAX_BOTS ? <span className="garden-more attention-chip muted glass">{t('today.gardenMore', { count: states.length - MAX_BOTS })}</span> : null}
   </section>;
 }

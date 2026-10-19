@@ -4,6 +4,8 @@ import { Avatar, EmptyState, IconButton, Segmented } from './components.jsx';
 import { MemoryDeleteModal, MemoryEditModal, MemorySourceLine } from './MemoryDialogs.jsx';
 import { memorySource } from './memory-source.js';
 import { CheckCircleIcon, CloseIcon, EditIcon, MemoryIcon, SearchIcon, TrashIcon } from './icons.jsx';
+import { serverText, t } from './i18n.js';
+import { rich } from './i18n-react.js';
 
 const asMemory = (item, agentId) => ({ ...item, member: agentId, text: item.body, source: memorySource(item) });
 
@@ -21,7 +23,7 @@ export function EveryoneMemory({ tab = 'search', onTab, members, onSaveMemory, o
   const editing = { onSave: changed(onSaveMemory), onDelete: changed(onDeleteMemory) };
   const count = Array.isArray(conflicts) ? conflicts.length : null;
   return <div className="everyone-memory">
-    <Segmented underline label="みんなの記憶" className="detail-tabs" value={tab} onChange={onTab} options={[{ value: 'search', label: '誰が知っている？' }, { value: 'conflicts', label: '食い違いかもしれない記憶', count }]} />
+    <Segmented underline label={t('bots.everyoneMemory')} className="detail-tabs" value={tab} onChange={onTab} options={[{ value: 'search', label: t('bots.whoKnows') }, { value: 'conflicts', label: t('bots.possibleConflicts'), count }]} />
     <div className="member-detail-scroll">
       {tab === 'conflicts' ? <Conflicts conflicts={conflicts} members={members} editing={editing} onOpenThread={onOpenThread} onDismiss={async pair => { await api('/memories/conflicts/dismiss', 'POST', { pair }); setVersion(value => value + 1); }} />
         : <WhoKnows version={version} members={members} editing={editing} onOpenThread={onOpenThread} onOpenBot={onOpenBot} />}
@@ -41,14 +43,14 @@ function WhoKnows({ version, members, editing, onOpenThread, onOpenBot }) {
   }, [words, version]);
   const current = result?.words === words ? result : null;
   return <div className="memory-view">
-    <p className="field-hint">すべてのBotの記憶から探します。<br />言葉をスペースで区切ると、両方を含む記憶だけに絞ります。</p>
-    <div className="memory-search"><div className="search-field"><SearchIcon size={18} /><input type="search" autoFocus aria-label="すべてのBotの記憶を検索" placeholder="例：読書会 土曜" maxLength={200} value={query} onChange={event => setQuery(event.target.value)} />{query ? <IconButton label="検索をクリア" onClick={() => setQuery('')}><CloseIcon size={16} /></IconButton> : null}</div></div>
-    {!words ? <EmptyState icon={MemoryIcon} title="誰が知っているかを探す">言葉を入れると、それを覚えているBotと、覚えた元の会話が並びます。</EmptyState>
-      : !current ? <p className="memory-count" role="status">探しています…</p>
+    <p className="field-hint">{rich('bots.whoKnowsIntro', { br: <br /> })}</p>
+    <div className="memory-search"><div className="search-field"><SearchIcon size={18} /><input type="search" autoFocus aria-label={t('bots.searchAllMemories')} placeholder={t('bots.whoKnowsPlaceholder')} maxLength={200} value={query} onChange={event => setQuery(event.target.value)} />{query ? <IconButton label={t('bots.clearSearch')} onClick={() => setQuery('')}><CloseIcon size={16} /></IconButton> : null}</div></div>
+    {!words ? <EmptyState icon={MemoryIcon} title={t('bots.whoKnowsEmptyTitle')}>{t('bots.whoKnowsEmptyBody')}</EmptyState>
+      : !current ? <p className="memory-count" role="status">{t('bots.searching')}</p>
       : current.error ? <p role="alert">{current.error}</p>
-      : !current.groups.length ? <EmptyState icon={SearchIcon} title="覚えているBotはいません">別の言葉で探してみてください。</EmptyState>
+      : !current.groups.length ? <EmptyState icon={SearchIcon} title={t('bots.nobodyKnows')}>{t('bots.tryOtherWords')}</EmptyState>
       : current.groups.map(group => <section key={group.agent_id} className="who-knows-group">
-        <button type="button" className="who-knows-bot" onClick={() => onOpenBot(group.agent_id)}><Avatar member={members[group.agent_id]} size={32} /><strong>{group.name}</strong><span>{group.total}件{group.total > group.items.length ? `（新しい${group.items.length}件を表示）` : ''}</span></button>
+        <button type="button" className="who-knows-bot" onClick={() => onOpenBot(group.agent_id)}><Avatar member={members[group.agent_id]} size={32} /><strong>{group.name}</strong><span>{group.total > group.items.length ? t('bots.groupCountNewest', { count: group.total, shown: group.items.length }) : t('bots.groupCount', { count: group.total })}</span></button>
         <MemoryRows items={group.items.map(item => asMemory(item, group.agent_id))} members={members} editing={editing} onOpenThread={onOpenThread} />
       </section>)}
   </div>;
@@ -56,15 +58,15 @@ function WhoKnows({ version, members, editing, onOpenThread, onOpenBot }) {
 
 function Conflicts({ conflicts, members, editing, onOpenThread, onDismiss }) {
   const [busy, setBusy] = useState('');
-  if (!conflicts) return <p className="memory-count" role="status">見比べています…</p>;
+  if (!conflicts) return <p className="memory-count" role="status">{t('bots.comparing')}</p>;
   if (conflicts.error) return <p role="alert">{conflicts.error}</p>;
   return <div className="memory-view">
-    <p className="field-hint">同じことについて、数・日付・曜日や「まだ」「ない」の言い方が違う記憶の組です。<br />言葉だけで見つけているので、本当に食い違っているかはあなたが決めます。<br />AIモデルは使わないので、お金はかかりません。</p>
-    {!conflicts.length ? <EmptyState icon={CheckCircleIcon} title="食い違いかもしれない記憶はありません">記憶が増えると、ここで見比べられます。</EmptyState>
+    <p className="field-hint">{rich('bots.conflictsIntro', { br: <br /> })}</p>
+    {!conflicts.length ? <EmptyState icon={CheckCircleIcon} title={t('bots.noConflicts')}>{t('bots.noConflictsBody')}</EmptyState>
       : conflicts.map(conflict => <article key={conflict.pair} className="conflict-card">
-        <div className="conflict-top"><span className="attention-chip warn">{conflict.same_bot ? '同じBotの中' : 'Bot同士'}</span><ul>{conflict.differences.map(text => <li key={text}>{text}</li>)}</ul></div>
+        <div className="conflict-top"><span className="attention-chip warn">{conflict.same_bot ? t('bots.sameBot') : t('bots.betweenBots')}</span><ul>{conflict.differences.map(text => <li key={text}>{serverText(text)}</li>)}</ul></div>
         <MemoryRows items={conflict.memories.map(item => asMemory(item, item.agent_id))} members={members} editing={editing} onOpenThread={onOpenThread} showOwner />
-        <div className="inline-actions"><button type="button" className="button subtle" disabled={busy === conflict.pair} onClick={async () => { setBusy(conflict.pair); try { await onDismiss(conflict.pair); } finally { setBusy(''); } }}>食い違いではない</button></div>
+        <div className="inline-actions"><button type="button" className="button subtle" disabled={busy === conflict.pair} onClick={async () => { setBusy(conflict.pair); try { await onDismiss(conflict.pair); } finally { setBusy(''); } }}>{t('bots.notConflict')}</button></div>
       </article>)}
   </div>;
 }
@@ -74,9 +76,9 @@ function MemoryRows({ items, members, editing, onOpenThread, showOwner = false }
   return <div className="memory-list">
     {items.map(item => { const owner = members[item.member];
       return <div key={`${item.member}:${item.id}`} className="memory-item">
-        <div className="memory-item-meta">{showOwner ? <span className="memory-owner"><Avatar member={owner} size={20} />{owner?.name}</span> : <span>記憶</span>}<time dateTime={item.created_at}>{item.source.created}</time></div>
+        <div className="memory-item-meta">{showOwner ? <span className="memory-owner"><Avatar member={owner} size={20} />{owner?.name}</span> : <span>{t('bots.memoryKind')}</span>}<time dateTime={item.created_at}>{item.source.created}</time></div>
         <p>{item.text}</p><MemorySourceLine memory={item} onOpenThread={onOpenThread} />
-        <div className="memory-item-bottom"><span /><div className="memory-actions"><IconButton label={`記憶を訂正：${item.text.slice(0, 16)}`} onClick={() => setEdit(item)}><EditIcon size={18} /></IconButton><IconButton label={`記憶を削除：${item.text.slice(0, 16)}`} onClick={() => setRemove(item)}><TrashIcon size={18} /></IconButton></div></div>
+        <div className="memory-item-bottom"><span /><div className="memory-actions"><IconButton label={t('bots.correctMemoryLabel', { text: item.text.slice(0, 16) })} onClick={() => setEdit(item)}><EditIcon size={18} /></IconButton><IconButton label={t('bots.deleteMemoryLabel', { text: item.text.slice(0, 16) })} onClick={() => setRemove(item)}><TrashIcon size={18} /></IconButton></div></div>
       </div>; })}
     {edit ? <MemoryEditModal memory={edit} member={members[edit.member]} onClose={() => setEdit(null)} onSave={async (text, keep) => { if (await editing.onSave(edit, text, keep)) setEdit(null); }} /> : null}
     {remove ? <MemoryDeleteModal memory={remove} member={members[remove.member]} onClose={() => setRemove(null)} onDelete={async () => { if (await editing.onDelete(remove)) setRemove(null); }} /> : null}

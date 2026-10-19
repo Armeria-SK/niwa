@@ -3,6 +3,7 @@ import { SHAPES, PALETTE, MOTIONS } from './data.js';
 import { CloseIcon, UserIcon, CheckIcon, InfoIcon } from './icons.jsx';
 import { splitSentences } from './sentences.js';
 import { avatarMotion, avatarParts, blinkTiming } from './avatar.js';
+import { t } from './i18n.js';
 
 // 形のSVGは、ビルド時に文字列として取り込み、体と目に分けておく。
 const SHAPE_PARTS = Object.fromEntries(Object.entries(import.meta.glob('./avatars/avatar-*.svg', { query: '?raw', import: 'default', eager: true }))
@@ -15,7 +16,7 @@ export function Avatar({ member, shape, color, motion, size = 48, className = ''
   if (!member && !shape) return <span className={`human-avatar ${className}`} style={{ width: size, height: size }} aria-hidden="true"><UserIcon size={size * .8} weight="light" /></span>;
   const parts = SHAPE_PARTS[shape || member?.shape] || SHAPE_PARTS.pebble;
   const animation = motion !== undefined ? avatarMotion({ preference: motion, preview: true })
-    : avatarMotion({ preference: member?.motion || 'auto', runtime: member?.runtimeMotion, sleeping: member?.status === 'sleeping', paused: member?.activity === '一時停止中' });
+    : avatarMotion({ preference: member?.motion || 'auto', runtime: member?.runtimeMotion, sleeping: member?.status === 'sleeping', paused: member?.activity === t('shell.statusPaused') });
   const blink = blinkTiming(member?.id || `${shape}${color}`);
   return <svg className={`bot-avatar ${className}`} data-motion={animation} aria-hidden="true" focusable="false" viewBox="0 0 100 100" width={size} height={size}
     style={{ width: size, height: size, '--blink-period': `${blink.period}s`, '--blink-delay': `${blink.delay}s` }}>
@@ -51,7 +52,7 @@ export function Modal({ title, children, onClose, className = '', drawer = false
     timer.current = setTimeout(() => { timer.current = null; setClosing(false); onClose(); }, drawer ? 260 : 190);
   }
   return <dialog ref={ref} className={`modal ${drawer ? 'drawer' : ''} ${closing ? 'closing' : ''} ${className}`} aria-labelledby={titleId} onCancel={e => { e.preventDefault(); requestClose(); }} onClick={e => { if (e.target === e.currentTarget) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) requestClose(); } }}>
-    <div className="modal-top"><h2 id={titleId}>{title}</h2><IconButton label="閉じる" onClick={requestClose}><CloseIcon size={21} /></IconButton></div>
+    <div className="modal-top"><h2 id={titleId}>{title}</h2><IconButton label={t('common.close')} onClick={requestClose}><CloseIcon size={21} /></IconButton></div>
     {children}
   </dialog>;
 }
@@ -96,7 +97,7 @@ export function Sentences({ children }) {
 }
 
 export function SetupNotice({ notice, onConnect }) {
-  return <div className="inline-notice setup-notice" role="status"><InfoIcon size={20} /><div><strong>{notice.title}</strong><p><Sentences>{notice.body}</Sentences></p><button type="button" className="button primary" onClick={onConnect}>モデルをつなぐ</button></div></div>;
+  return <div className="inline-notice setup-notice" role="status"><InfoIcon size={20} /><div><strong>{notice.title}</strong><p><Sentences>{notice.body}</Sentences></p><button type="button" className="button primary" onClick={onConnect}>{t('shell.connectModel')}</button></div></div>;
 }
 
 export function EmptyState({ icon: Icon = InfoIcon, title, children, action }) {
@@ -109,12 +110,12 @@ export function AppearanceFields({ draft, onChange }) {
   const color = valid ? draft.color : '#61B8A5';
   const chooseColor = value => onChange('color', value.toUpperCase());
   return <div className="appearance-editor">
-    <div className="avatar-preview"><Avatar shape={shape} color={color} motion={motion} size={88} /><div><strong>{draft.name}</strong><span>あなたらしい、かたちと色。</span></div></div>
-    <fieldset><legend>かたち</legend><div className="shape-picker">{SHAPES.map(item => <button key={item.id} type="button" className={shape === item.id ? 'shape-option selected' : 'shape-option'} aria-label={item.name} aria-pressed={shape === item.id} onClick={() => onChange('shape', item.id)}><Avatar shape={item.id} color={color} size={47} /><span>{item.name}</span></button>)}</div></fieldset>
-    <fieldset><legend>動き</legend><MotionPicker value={motion} onChange={value => onChange('motion', value)} /></fieldset>
-    <fieldset><legend>カラー</legend><div className="swatches">{PALETTE.map(item => <button key={item.color} type="button" title={item.name} aria-label={item.name} aria-pressed={color.toLowerCase() === item.color.toLowerCase()} className={color.toLowerCase() === item.color.toLowerCase() ? 'swatch selected' : 'swatch'} style={{ '--swatch': item.color }} onClick={() => chooseColor(item.color)}>{color.toLowerCase() === item.color.toLowerCase() ? <CheckIcon size={16} weight="bold" /> : null}</button>)}</div></fieldset>
-    <label className="field"><span>好きな色を指定</span><div className="color-custom"><input type="color" aria-label="カラーピッカー" value={color} onChange={e => chooseColor(e.target.value)} /><input aria-label="カラーコード" value={draft.color} maxLength={7} spellCheck="false" onChange={e => { onChange('color', e.target.value); }} /></div>{!valid ? <small className="field-error">#と6桁の英数字で指定してください。</small> : null}</label>
-    <p className="field-hint">形・色・動きは、いつでも変更できます。<br />端末で動きを減らす設定をしている場合は静止します。</p>
+    <div className="avatar-preview"><Avatar shape={shape} color={color} motion={motion} size={88} /><div><strong>{draft.name}</strong><span>{t('shell.appearanceTagline')}</span></div></div>
+    <fieldset><legend>{t('shell.shapeLegend')}</legend><div className="shape-picker">{SHAPES.map(item => <button key={item.id} type="button" className={shape === item.id ? 'shape-option selected' : 'shape-option'} aria-label={item.name} aria-pressed={shape === item.id} onClick={() => onChange('shape', item.id)}><Avatar shape={item.id} color={color} size={47} /><span>{item.name}</span></button>)}</div></fieldset>
+    <fieldset><legend>{t('shell.motionLegend')}</legend><MotionPicker value={motion} onChange={value => onChange('motion', value)} /></fieldset>
+    <fieldset><legend>{t('shell.colorLegend')}</legend><div className="swatches">{PALETTE.map(item => <button key={item.color} type="button" title={item.name} aria-label={item.name} aria-pressed={color.toLowerCase() === item.color.toLowerCase()} className={color.toLowerCase() === item.color.toLowerCase() ? 'swatch selected' : 'swatch'} style={{ '--swatch': item.color }} onClick={() => chooseColor(item.color)}>{color.toLowerCase() === item.color.toLowerCase() ? <CheckIcon size={16} weight="bold" /> : null}</button>)}</div></fieldset>
+    <label className="field"><span>{t('shell.customColor')}</span><div className="color-custom"><input type="color" aria-label={t('shell.colorPicker')} value={color} onChange={e => chooseColor(e.target.value)} /><input aria-label={t('shell.colorCode')} value={draft.color} maxLength={7} spellCheck="false" onChange={e => { onChange('color', e.target.value); }} /></div>{!valid ? <small className="field-error">{t('shell.colorInvalid')}</small> : null}</label>
+    <p className="field-hint"><Sentences>{t('shell.appearanceHint')}</Sentences></p>
   </div>;
 }
 
@@ -133,7 +134,7 @@ export function AppearanceEditor({ member, onSave, onCancel }) {
     } finally { working.current = false; setSaving(false); }
   }}>
     <AppearanceFields draft={draft} onChange={(key, value) => setDraft(current => ({ ...current, [key]: value }))} />
-    <div className="form-actions">{onCancel ? <button type="button" className="button subtle" onClick={onCancel}>やめる</button> : null}<button type="button" className="button subtle" onClick={() => setDraft(member)}>最新の内容を読み込む</button><button className="button primary" disabled={!valid || saving}>{saving ? '保存しています…' : '保存'}</button></div>
+    <div className="form-actions">{onCancel ? <button type="button" className="button subtle" onClick={onCancel}>{t('shell.cancelAction')}</button> : null}<button type="button" className="button subtle" onClick={() => setDraft(member)}>{t('shell.loadLatest')}</button><button className="button primary" disabled={!valid || saving}>{saving ? t('common.saving') : t('common.save')}</button></div>
   </form>;
 }
 
@@ -143,17 +144,17 @@ export function Switch({ checked, onChange, label, description, disabled = false
 
 export function StatusLabel({ member, paused = false, showDescription = true }) {
   const sleeping = member.status === 'sleeping';
-  const activity = sleeping ? '休眠中' : paused ? '一時停止中' : (member.activity || '');
+  const activity = sleeping ? t('shell.statusDormant') : paused ? t('shell.statusPaused') : (member.activity || '');
   const separator = activity.indexOf(' · ');
   const status = separator < 0 ? activity : activity.slice(0, separator);
   const description = !showDescription || separator < 0 ? '' : activity.slice(separator + 3).trim();
-  return <span title={activity} className={`status-label ${sleeping || paused ? 'muted-status' : ''}`}><span className="status-dot" /><span className="status-copy"><span className="status-name">{status}{description ? '：' : ''}</span>{description ? <span className="status-description">{description}</span> : null}</span></span>;
+  return <span title={activity} className={`status-label ${sleeping || paused ? 'muted-status' : ''}`}><span className="status-dot" /><span className="status-copy"><span className="status-name">{status}{description ? t('shell.statusColon') : ''}</span>{description ? <span className="status-description">{description}</span> : null}</span></span>;
 }
 
 export function MotionPicker({ value, onChange }) {
   return <>
-    <Segmented label="アイコンの動き" className="motion-picker" value={value} onChange={onChange} options={MOTIONS} />
-    {value === 'auto' ? <p className="field-hint">作業中は、小さく弾みます。<br />返事や承認を待つあいだは、首をかしげます。<br />手が空いているときは止まり、休眠中は目を閉じます。</p> : null}
-    <p className="field-hint">「なし」以外では、ときどき瞬きします。</p>
+    <Segmented label={t('shell.motionLabel')} className="motion-picker" value={value} onChange={onChange} options={MOTIONS} />
+    {value === 'auto' ? <p className="field-hint"><Sentences>{t('shell.motionAutoHint')}</Sentences></p> : null}
+    <p className="field-hint">{t('shell.motionBlinkHint')}</p>
   </>;
 }

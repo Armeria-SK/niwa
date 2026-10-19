@@ -18,6 +18,6 @@ export default {
   no: '아니요',
   on: '켜짐',
   off: '꺼짐',
-  bots: ({ count }) => `${count}개`,
+  bots: ({ count }) => `${count}명`,
   items: ({ count }) => `${count}건`,
 };

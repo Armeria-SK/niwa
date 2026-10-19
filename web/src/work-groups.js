@@ -1,10 +1,12 @@
+import {t} from './i18n.js';
+
 const terminal = task => ['completed','cancelled','failed'].includes(task.state) || ['done','canceled','failed'].includes(task.status);
 export const activityTime = task => Math.max(task.updated_at || 0, task.progress?.last_activity_at || 0);
 export function groupThreadWork(tasks, threads) {
  const rooms=new Map();
  for(const task of tasks.filter(t=>t.business)) {
   const roomId=task.thread||task.room_id,root=task.work_root_id||task.id;
-  if(!rooms.has(roomId))rooms.set(roomId,{id:roomId,title:threads.find(t=>t.id===roomId)?.title||'関連する会話',purposes:new Map()});
+  if(!rooms.has(roomId))rooms.set(roomId,{id:roomId,title:threads.find(thread=>thread.id===roomId)?.title||t('today.relatedConversation'),purposes:new Map()});
   const room=rooms.get(roomId);if(!room.purposes.has(root))room.purposes.set(root,{id:root,tasks:[]});room.purposes.get(root).tasks.push(task);
  }
  return [...rooms.values()].map(room=>{

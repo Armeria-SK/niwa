@@ -10,10 +10,12 @@ body { font-size: 14px; line-height: 1.6; }
 }
 .eyebrow { font-weight: 500; letter-spacing: .06em; }
 ::selection { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+/* 簡体字の中国語の書体は「‘ ’」を全角の幅で描き、英語の文が「Let’ s」のように開いてしまう。この2字だけ日本語の書体（すでに読み込んでいる文字の分）で描く。 */
+@font-face { font-family: 'Niwa Apostrophe'; font-style: normal; font-display: swap; font-weight: 100 900; src: url('../../node_modules/@fontsource-variable/noto-sans-jp/files/noto-sans-jp-latin-wght-normal.woff2') format('woff2-variations'); unicode-range: U+2018-2019; }
 /* 韓国語と簡体字の中国語では、その言葉の字形の書体を先に使う（i18n-react.js が、その言語を選んだときだけ読み込む）。
  * 丸みのある見出しの書体は日本語の字しか持たないので、見出しも本文と同じ書体にする。 */
 :root:lang(ko) { --font-body: 'Noto Sans KR Variable', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans JP Variable', sans-serif; --font-display: var(--font-body); }
-:root:lang(zh-CN) { --font-body: 'Noto Sans SC Variable', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans JP Variable', sans-serif; --font-display: var(--font-body); }
+:root:lang(zh-CN) { --font-body: 'Niwa Apostrophe', 'Noto Sans SC Variable', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans JP Variable', sans-serif; --font-display: var(--font-body); }
 
 /* ── ボタン・入力・小さな部品 ───────────────────── */
 .button { height: 40px; min-height: 40px; padding: 0 16px; border: 0; border-radius: var(--r-m); font-size: 13.5px; line-height: 1; transition: background var(--d2) var(--ease-out), box-shadow var(--d2) var(--ease-out), color var(--d2) var(--ease-out), transform 220ms var(--ease-spring); }
