@@ -175,7 +175,23 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh restart
 - On WSL, run these with `sudo nsenter -t 1 -m -- sh` instead of `sudo sh` ([Using WSL or Ubuntu 22.04](#using-wsl-or-ubuntu-2204)).
 - You don't need to run setup again for daily use.
 - To stop the Bots' activity, do it from the app's screens.
-- Before updating to a new version, make a backup first ([Notes on starting and stopping](guide/advanced.md#起動と停止の注意)).
+
+### Update to a new version
+
+First press **Settings → Backup → Back up now** in the app, then run:
+
+```sh
+sudo sh /home/niwa/niwa/deploy/ubuntu/update.sh
+```
+
+- It pulls the newest commit of your current branch (usually `main`), then stops, builds and starts Niwa. When you see `PASS: Niwa updated to …` at the end, you're done.
+- On WSL you can run this command as is (it uses `nsenter` by itself when needed).
+- In these cases it refuses **without stopping anything**. Check the reason it shows.
+  - There's no backup from the last 24 hours (to go ahead without one, add `--skip-backup-check`)
+  - The checkout has local changes or commits
+  - Your current branch no longer exists on the remote (merged branches are usually deleted, so go back with `git switch main`)
+  - The update changes files that setup installs (service settings or image pins)
+- If the build fails, it restores the previous version and starts it again.
 
 ### View the shared folder from Windows
 
