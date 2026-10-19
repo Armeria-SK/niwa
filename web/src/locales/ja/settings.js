@@ -179,6 +179,9 @@ export default {
   listFetchHint: '一覧の取得ではモデルの名前だけを読み、応答の生成（課金対象）はしません。',
   providerNotConnected: '{provider}は、まだつながっていません。',
   providerNotConnectedHint: 'つながっている接続先のモデルを選ぶか、「設定」の「モデルと接続」でつないでください。',
+  pickerNoConnection: 'つながっている接続先がないため、選べません',
+  pickerNoConnectionHint: 'まだどの接続先もつながっていないので、モデルを選べません。「設定」の「モデルと接続」で接続先を1つつなぐと、ここで選べるようになります。',
+  providerGroupOff: '{provider}（未接続）',
   pickerAsking: '接続先に問い合わせています…',
 
   // Claudeのモデル一覧（anthropicModels）

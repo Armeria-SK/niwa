@@ -179,6 +179,9 @@ export default {
   listFetchHint: '获取列表只读取模型名称，不会生成回复（生成回复会产生费用）。',
   providerNotConnected: '{provider} 还没有连接。',
   providerNotConnectedHint: '请选择已接入的连接所提供的模型，或在“设置”的“模型与连接”中接入。',
+  pickerNoConnection: '还没有连接，无法选择',
+  pickerNoConnectionHint: '还没有接入任何连接，所以无法选择模型。在“设置”的“模型与连接”中接入一个后，就可以在这里选择。',
+  providerGroupOff: '{provider}（未连接）',
   pickerAsking: '正在询问连接…',
 
   // Claude model list (anthropicModels)
