@@ -184,3 +184,23 @@ test('review marks are kept per conversation: a Bot\'s first reply in another co
  assert.equal(log.filter(entry=>entry.task===reply.id&&entry.phase==='memory_review').length,1);
  assert.equal(count(log,b.id,'memory_review'),2);
 });
+
+test('a Bot finishes the reply it started before starting another, so later replies to it keep merging into one',async t=>{
+ const {r,admin,a,aa,b,room}=fixture(t);const c=r.createAgent(aa,'人工の三人目');
+ r.post(admin,room.id,'三人で話して');r.tasks.create(admin,a.id,room.id,'三人で話して');
+ r.respond(aa,r.tasks.claim(admin)!,'どう思う？',[b.id,c.id]);
+ const fromB=r.tasks.claim(admin)!,fromC=r.tasks.claim(admin)!;
+ r.respond(r.agentSession(b.id),fromB,'私はこう思う',[a.id]);
+ const first=r.tasks.claim(admin)!;assert.equal(first.task.agent_id,a.id);
+ r.respond(r.agentSession(c.id),fromC,'私は違う意見です',[a.id]);
+ const queuedForA=()=>r.tasks.list(admin).filter(task=>task.agent_id===a.id&&task.state==='queued');
+ assert.equal(queuedForA().length,1,'the started reply cannot take the new message, so one new reply waits');
+ assert.equal(r.tasks.yieldIfWaiting(aa,first),false,'it does not hand its turn to its own waiting reply');
+ // Another Bot's work makes it yield; when its turn comes back, it resumes the reply it started.
+ const other=r.tasks.create(admin,b.id,room.id,'別の用事');
+ assert.equal(r.tasks.yieldIfWaiting(aa,first),true);
+ const resumed=r.tasks.claim(admin)!;assert.equal(resumed.task.id,first.task.id);
+ const errand=r.tasks.claim(admin)!;assert.equal(errand.task.id,other.id);
+ r.respond(r.agentSession(b.id),errand,'追加の意見',[a.id]);
+ assert.equal(queuedForA().length,1);assert.match(queuedForA()[0]!.prompt,/私は違う意見です[\s\S]*追加の意見/,'the waiting reply took the new message');
+});
