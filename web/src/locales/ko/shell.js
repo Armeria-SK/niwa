@@ -235,7 +235,7 @@ export default {
   // 삭제 창
   deleteRoomTitle: '대화 삭제',
   deleteArtifactTitle: '결과물 삭제',
-  deleteRoomBody: '이 대화의 메시지와 결과물, 그리고 이 대화에서 생긴 봇의 기억을 삭제해요. 진행 중인 작업과 정기 실행도 중지해요.',
+  deleteRoomBody: '이 대화의 메시지와 결과물, 그리고 이 대화에서 생긴 봇의 기억을 삭제해요. 진행 중인 작업과 정기 실행도 중지해요. 봇의 절차서는 남아요.',
   deleteArtifactBody: '이 결과물을 목록과 저장 위치에서 삭제해요. 대화의 메시지는 남아요.',
   deleteWarning: '되돌릴 수 없어요. 이전 백업은 평소 보관 기간에 따라 정리돼요.',
   deleting: '삭제 중…',

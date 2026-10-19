@@ -256,6 +256,7 @@ export function createApiServer(runtime: Runtime, auth: WebAuth, models = new Mo
     { method: 'POST', path: /^\/api\/agents\/import$/, limit: 24 * 1024 * 1024, schema: object({ id, text: Type.String({ maxLength: BOT_FILE_MAX_LENGTH }), procedures: Type.Boolean(), memories: Type.Boolean() }),
       run: (_m, b) => runtime.botFiles.import(admin, b.id as string, b.text as string, { procedures: b.procedures as boolean, memories: b.memories as boolean }) },
     { method: 'PATCH', path: /^\/api\/agents\/([0-9a-f-]{36})\/procedures\/([0-9a-f]{64})$/, schema: object({ enabled: Type.Boolean() }), run: (m, b) => { runtime.setProcedureEnabled(admin, m[1]!, m[2]!, b.enabled as boolean); return { ok: true }; } },
+    { method: 'DELETE', path: /^\/api\/agents\/([0-9a-f-]{36})\/procedures\/([0-9a-f]{64})$/, schema: object({}), run: m => { runtime.deleteProcedure(admin, m[1]!, m[2]!); return { ok: true }; } },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories\/page$/, run: (m, _b, url) => runtime.memoryPageWithSources(admin, m[1]!, url.searchParams.get('q') ?? '', Number(url.searchParams.get('before') ?? Number.MAX_SAFE_INTEGER)) },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories\/([0-9a-f-]{36}|[0-9a-f]{64})\/impact$/, run: m => runtime.memoryImpact(admin, m[1]!, m[2]!) },
     { method: 'GET', path: /^\/api\/agents\/([0-9a-f-]{36})\/memories\/([0-9a-f-]{36}|[0-9a-f]{64})\/corrections$/, run: m => runtime.memoryCorrections(admin, m[1]!, m[2]!) },

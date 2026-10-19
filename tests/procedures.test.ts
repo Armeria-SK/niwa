@@ -105,7 +105,7 @@ test('administrators read the procedure book with use counts and can turn a proc
   f.run('procedure_apply', { id, revision: 1, plan_revision: 0, applicability: '同じ資料の更新' }, 'apply');
   const [entry] = f.runtime.procedureBook(f.admin, f.leader.id);
   assert.deepEqual({ ...entry, saved_at: 0, last_used_at: 0 }, { id, revision: 1, enabled: true, title: '資料確認', conditions: '同じ資料の更新を調べるとき', steps: ['原文を読む', '前回と比較する'],
-    saved_at: 0, uses: 1, last_used_at: 0, disabled_reason: null, room_title: '共有', private: false, imported: false });
+    saved_at: 0, uses: 1, last_used_at: 0, disabled_reason: null, room_title: '共有', private: false, usable: true, imported: false });
   f.runtime.setProcedureEnabled(f.admin, f.leader.id, String(id), false);
   assert.equal(f.runtime.procedureBook(f.admin, f.leader.id)[0]!.enabled, false);
   assert.equal((f.run('procedure_search', { query: '資料確認' }).results as JsonObject[]).length, 0);
@@ -135,4 +135,55 @@ test('a memory correction stops only procedures citing it, keeps the old wording
   f.runtime.deleteMemory(f.admin, f.leader.id, memory.id, 3);
   assert.deepEqual(f.runtime.procedureBook(f.admin, f.leader.id), []);
   assert.ok((f.runtime.memoryAudit(f.admin, f.leader.id) as { previous_body: string | null }[]).every(row => row.previous_body === null));
+});
+
+test('deleting a conversation keeps its procedures: a shared one stays usable everywhere and a private one waits in the book', t => {
+  const f = fixture(t);
+  const id = f.run('procedure_save', { id: null, expected_revision: 0, procedure: f.procedure }, 'create').id as string;
+  f.run('procedure_apply', { id, revision: 1, plan_revision: 0, applicability: '消す会話での理由' }, 'apply');
+  f.runtime.tasks.finish(f.actor, f.lease, '終わり');
+  const privateRoom = f.runtime.createRoom(f.admin, '個別', [f.leader.id]);
+  const privateSource = f.runtime.post(f.admin, privateRoom.id, '個別の人工資料');
+  const privateDone = f.runtime.tasks.create(f.admin, f.leader.id, privateRoom.id, '個別の前の仕事');
+  f.runtime.tasks.finish(f.actor, f.runtime.tasks.claim(f.admin)!, '個別の結果');
+  f.runtime.tasks.create(f.admin, f.leader.id, privateRoom.id, '個別の仕事');
+  const privateLease = f.runtime.tasks.claim(f.admin)!;
+  const privateProcedure = { ...f.procedure, title: '個別の手順', source_task_id: privateDone.id,
+    sources: [{ kind: 'message', source_id: privateSource.id, revision: f.runtime.readHistory(f.actor, privateRoom.id, 'message', privateSource.id).revision }] };
+  const privateId = f.runtime.procedureTool(f.actor, privateLease, 'private', 'procedure_save', { id: null, expected_revision: 0, procedure: privateProcedure }).id as string;
+  f.runtime.tasks.finish(f.actor, privateLease, '個別の終わり');
+  f.runtime.deleteContent(f.admin, 'room', f.room.id);
+  f.runtime.deleteContent(f.admin, 'room', privateRoom.id);
+  const book = new Map(f.runtime.procedureBook(f.admin, f.leader.id).map(entry => [entry.id, entry]));
+  assert.equal(book.size, 2);
+  const kept = book.get(id)!, stranded = book.get(privateId)!;
+  assert.deepEqual([kept.room_title, kept.private, kept.usable, kept.uses, kept.enabled], [null, false, true, 0, true]);
+  assert.deepEqual([stranded.room_title, stranded.private, stranded.usable], [null, true, false]);
+  const other = f.runtime.createRoom(f.admin, '別の共有');
+  const otherSource = f.runtime.post(f.admin, other.id, '別の人工資料');
+  const otherDone = f.runtime.tasks.create(f.admin, f.leader.id, other.id, '別の前の仕事');
+  f.runtime.tasks.finish(f.actor, f.runtime.tasks.claim(f.admin)!, '別の結果');
+  f.runtime.tasks.create(f.admin, f.leader.id, other.id, '別の仕事');
+  const lease = f.runtime.tasks.claim(f.admin)!;
+  const run = (name: string, args: JsonObject, op: string) => f.runtime.procedureTool(f.actor, lease, op, name, args);
+  assert.deepEqual((run('procedure_search', { query: '原文を読む' }, 'search').results as JsonObject[]).map(item => item.id), [id]);
+  assert.deepEqual(run('procedure_read', { id, revision: null }, 'read').uses, []);
+  run('procedure_apply', { id, revision: 1, plan_revision: 0, applicability: '別の会話で使う' }, 'use');
+  assert.throws(() => run('procedure_read', { id: privateId, revision: null }, 'private-read'), /unavailable/);
+  const revised = { ...f.procedure, steps: ['新しい手順'], source_task_id: otherDone.id,
+    sources: [{ kind: 'message', source_id: otherSource.id, revision: f.runtime.readHistory(f.actor, other.id, 'message', otherSource.id).revision }] };
+  assert.deepEqual(run('procedure_save', { id, expected_revision: 1, procedure: revised }, 'revise'), { id, revision: 2 });
+  assert.equal(f.runtime.procedureBook(f.admin, f.leader.id).find(entry => entry.id === id)!.room_title, '別の共有');
+  assert.deepEqual(run('procedure_restore', { id, expected_revision: 2, revision: 1 }, 'restore'), { id, revision: 3 });
+});
+
+test('administrators delete a procedure from the book; bots cannot', t => {
+  const f = fixture(t);
+  const id = f.run('procedure_save', { id: null, expected_revision: 0, procedure: f.procedure }, 'create').id as string;
+  f.run('procedure_apply', { id, revision: 1, plan_revision: 0, applicability: '同じ資料の更新' }, 'apply');
+  assert.throws(() => f.runtime.deleteProcedure(f.actor, f.leader.id, id));
+  f.runtime.deleteProcedure(f.admin, f.leader.id, id);
+  assert.deepEqual(f.runtime.procedureBook(f.admin, f.leader.id), []);
+  assert.throws(() => f.runtime.deleteProcedure(f.admin, f.leader.id, id), /not found/);
+  assert.throws(() => f.run('procedure_read', { id, revision: null }, 'gone'), /unavailable/);
 });

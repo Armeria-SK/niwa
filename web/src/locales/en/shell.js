@@ -235,7 +235,7 @@ export default {
   // Delete window
   deleteRoomTitle: 'Delete conversation',
   deleteArtifactTitle: 'Delete output',
-  deleteRoomBody: 'This deletes the conversation’s messages and outputs, and the Bot memories that came from it. Tasks in progress and scheduled runs for it stop too.',
+  deleteRoomBody: 'This deletes the conversation’s messages and outputs, and the Bot memories that came from it. Tasks in progress and scheduled runs for it stop too. Bot procedures stay.',
   deleteArtifactBody: 'This removes the output from the list and from where it’s stored. The messages in the conversation stay.',
   deleteWarning: 'This can’t be undone. Older backups are cleared on their usual schedule.',
   deleting: 'Deleting…',

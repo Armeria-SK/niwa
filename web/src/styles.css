@@ -244,6 +244,7 @@
   .procedure-item ol { margin: 0; padding-left: 1.4em; font-size: var(--fs-2); line-height: 1.8; }
   .procedure-bottom { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 12px; }
   .procedure-bottom span { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+  .procedure-actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .procedure-bottom .button { min-height: 32px; padding: 5px 10px; font-size: var(--fs-1); }
   .procedure-stopped { font-size: var(--fs-1); color: var(--warn); line-height: 1.7; }
   .keep-previous { display: flex; align-items: flex-start; gap: 10px; font-size: var(--fs-2); cursor: pointer; }
