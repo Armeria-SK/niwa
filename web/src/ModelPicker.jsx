@@ -7,6 +7,7 @@ import { serverText, t } from './i18n.js';
 
 const ALL = PROVIDER_ORDER;
 const key = item => `${item.provider}:${item.model}`;
+const HIDDEN = 'not-connected';
 const firstEffort = item => nativeReasoning(item.provider) ? 'native' : item.reasoning || item.default_effort || item.supported_efforts?.[0] || (item.provider === 'anthropic' ? 'medium' : 'native');
 
 /** モデルを1つ選ぶ部品。Botのプロフィール・リーダー・新しいBotの標準・上限時の切替先で、同じ見た目と動きにする。
@@ -26,9 +27,11 @@ export function ModelPicker({ label, value, keep = [], onChange, disabled = fals
   useEffect(() => {
     let active = true;
     async function refresh() {
-      const connected = await readyProviders().catch(() => null);
-      if (!active || !connected) return;
+      // 読めなかったときは false（つながっているかが分からない）にして、前と同じくすべてのモデルを出す。
+      const connected = await readyProviders().catch(() => false);
+      if (!active) return;
       setReady(connected);
+      if (!connected) return;
       for (const provider of wanted.split(',').filter(item => item !== 'anthropic' && connected.includes(item))) {
         const values = await providerModels(provider).catch(() => null);
         if (active && values) setModels(current => [...current.filter(item => item.provider !== provider), ...values]);
@@ -41,8 +44,15 @@ export function ModelPicker({ label, value, keep = [], onChange, disabled = fals
   const claudeModels = providers.includes('anthropic') ? claude.models : [];
   const listed = [...claudeModels, ...models.filter(item => providers.includes(item.provider) && !claudeModels.some(other => key(other) === key(item)))];
   const known = item => listed.find(other => key(other) === key(item));
-  const choices = [value, ...keep, ...listed].filter(Boolean).filter((item, index, all) => all.findIndex(other => key(other) === key(item)) === index).map(item => ({ ...item, display_name: known(item)?.display_name || item.display_name }));
-  const efforts = !value ? [] : nativeReasoning(value.provider) ? ['native'] : known(value)?.supported_efforts || (value.provider === 'anthropic' ? ['native', ...CLAUDE_EFFORTS] : [value.reasoning]);
+  // つながっていない接続先のモデル（最初から入っている ChatGPT のモデルなど）は、保存されていても名前を出さず、選んだようにも見せない。
+  // つながっているかが分かるまでは何も選ばせない（ready が null の間）。
+  const checked = Array.isArray(ready);
+  const connected = item => !checked || ready.includes(item.provider);
+  const usable = providers.filter(provider => connected({ provider }));
+  const noConnection = checked && !usable.length;
+  const shown = value && connected(value) ? value : null;
+  const choices = [value, ...keep, ...listed].filter(Boolean).filter(connected).filter((item, index, all) => all.findIndex(other => key(other) === key(item)) === index).map(item => ({ ...item, display_name: known(item)?.display_name || item.display_name }));
+  const efforts = !shown ? [] : nativeReasoning(value.provider) ? ['native'] : known(value)?.supported_efforts || (value.provider === 'anthropic' ? ['native', ...CLAUDE_EFFORTS] : [value.reasoning]);
   const pick = item => onChange(item ? { provider: item.provider, model: item.model, ...(reasoning ? { reasoning: firstEffort(item) } : {}) } : null);
   async function load(provider) {
     setBusy(true); setError(''); setFetched(null);
@@ -58,21 +68,24 @@ export function ModelPicker({ label, value, keep = [], onChange, disabled = fals
     setModels(current => [...current.filter(other => key(other) !== key(item)), item]); setManual(current => ({ ...current, [provider]: '' }));
     pick({ ...item, reasoning: provider === 'anthropic' ? 'medium' : 'native' });
   }
-  const typed = providers.filter(provider => provider === 'openai_compatible' || (provider === 'anthropic' && claude.manual));
+  const typed = usable.filter(provider => provider === 'openai_compatible' || (provider === 'anthropic' && claude.manual));
   const off = disabled || busy;
+  // 保存されているモデルの接続先がつながっていないときは、名前の代わりに「選んでください」を出す（選び直すまで保存の中身は変わらない）。
+  const hidden = value && !shown;
+  const selected = shown ? key(shown) : hidden ? HIDDEN : '';
   return <div className="model-picker" role="group" aria-label={label}>
     <div className="field-pair">
-      <label className="field"><span>{label}</span><select value={value ? key(value) : ''} disabled={off} onChange={event => pick(choices.find(item => key(item) === event.target.value))}>{emptyLabel ? <option value="">{emptyLabel}</option> : null}{groupByProvider(choices).map(group => <optgroup key={group.provider} label={group.label}>{group.items.map(item => <option key={key(item)} value={key(item)}>{modelLabel(item)} · {group.label}</option>)}</optgroup>)}</select></label>
-      {reasoning ? <label className="field"><span>{t('settings.reasoningLabel')}</span><select aria-label={t('settings.reasoningAria', { label })} value={value?.reasoning || ''} disabled={off || !value || nativeReasoning(value.provider)} onChange={event => onChange({ ...value, reasoning: event.target.value })}>{efforts.map(effort => <option key={effort}>{effort}</option>)}</select></label> : null}
+      <label className="field"><span>{label}</span><select value={ready === null || noConnection ? '' : selected} disabled={off || ready === null || noConnection} onChange={event => pick(choices.find(item => key(item) === event.target.value))}>{ready === null ? <option value="">{t('common.loading')}</option> : noConnection ? <option value="">{t('settings.pickerNoConnection')}</option> : <>{hidden ? <option value={HIDDEN} disabled>{t('settings.pickerChooseConnected')}</option> : null}{emptyLabel ? <option value="">{emptyLabel}</option> : null}{groupByProvider(choices).map(group => <optgroup key={group.provider} label={group.label}>{group.items.map(item => <option key={key(item)} value={key(item)}>{modelLabel(item)} · {group.label}</option>)}</optgroup>)}</>}</select></label>
+      {reasoning ? <label className="field"><span>{t('settings.reasoningLabel')}</span><select aria-label={t('settings.reasoningAria', { label })} value={shown?.reasoning || ''} disabled={off || !shown || nativeReasoning(shown.provider)} onChange={event => onChange({ ...value, reasoning: event.target.value })}>{efforts.map(effort => <option key={effort}>{effort}</option>)}</select></label> : null}
     </div>
-    <details className="model-picker-more"><summary>{t('settings.pickerMore')}</summary>
-      <div className="inline-actions">{providers.map(provider => provider === 'anthropic'
+    {noConnection ? <p className="field-hint" role="status">{t('settings.pickerNoConnectionHint')}</p> : ready === null ? null : <details className="model-picker-more"><summary>{t('settings.pickerMore')}</summary>
+      <div className="inline-actions">{usable.map(provider => provider === 'anthropic'
         ? <button key={provider} type="button" className="button subtle" disabled={off || claude.loading} onClick={claude.reload}>{t('settings.claudeReload')}</button>
         : <button key={provider} type="button" className="button subtle" disabled={off} onClick={() => load(provider)}>{t('settings.providerListFetch', { provider: providerLabel(provider) })}</button>)}</div>
       {typed.map(provider => <div className="inline-actions" key={provider}><label className="field"><span>{t('settings.manualModelId', { provider: providerLabel(provider) })}</span><input value={manual[provider]} disabled={off} maxLength={256} onChange={event => setManual(current => ({ ...current, [provider]: event.target.value }))} placeholder={t('settings.modelIdExample', { model: provider === 'anthropic' ? 'claude-opus-5-5' : 'gpt-4.1-mini' })} /></label><button type="button" className="button subtle" disabled={off || !manual[provider].trim()} onClick={() => choose(provider)}>{t('settings.chooseModel')}</button></div>)}
       <p className="field-hint">{t('settings.listFetchHint')}</p>
-    </details>
-    {value && ready && !ready.includes(value.provider) ? <p className="field-hint" role="status">{t('settings.providerNotConnected', { provider: providerLabel(value.provider) })}<br />{t('settings.providerNotConnectedHint')}</p> : null}
+    </details>}
+    {hidden && !noConnection ? <p className="field-hint" role="status">{t('settings.providerNotConnected', { provider: providerLabel(value.provider) })}<br />{t('settings.providerNotConnectedHint')}</p> : null}
     {claude.error && providers.includes('anthropic') ? <p className="field-hint" role="status">{claude.error}</p> : null}
     {error ? <p className="field-error" role="alert">{serverText(error)}</p> : null}
     {busy || fetched ? <p className="saved-inline" role="status">{busy ? t('settings.pickerAsking') : t('settings.pickerFetched', { provider: providerLabel(fetched.provider), count: fetched.count })}</p> : null}
