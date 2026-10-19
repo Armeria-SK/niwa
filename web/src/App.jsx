@@ -20,6 +20,8 @@ import { TrashIcon } from './icons.jsx';
 import { CommandPalette } from './CommandPalette.jsx';
 import { useRoomSearch } from './useRoomSearch.js';
 import { useLiveStream } from './useLiveStream.js';
+import { isLanguage } from './i18n.js';
+import { applyLanguage, rememberedLanguage, useLanguage } from './i18n-react.js';
 
 const navItems = [
   { id: 'today', label: 'きょう', icon: TodayIcon },
@@ -61,11 +63,16 @@ export function App() {
   const [celebrating, setCelebrating] = useState({});
   const conversationRequest = useRef(null);
   const [settings, setSettings] = useState(() => {
-    try { const theme = localStorage.getItem('niwa-theme'); return { ...initialSettings, theme: THEMES.some(item => item.id === theme) ? theme : 'auto' }; }
+    try { const theme = localStorage.getItem('niwa-theme'); return { ...initialSettings, theme: THEMES.some(item => item.id === theme) ? theme : 'auto', language: rememberedLanguage() }; }
     catch { return initialSettings; }
   });
   useEffect(() => { try { localStorage.setItem('niwa-theme', settings.theme || 'auto'); } catch { /* Storage can be disabled by the browser. */ } }, [settings.theme]);
   const [previewTheme, setPreviewTheme] = useState(null);
+  // 言語もテーマと同じく、設定で選ぶとすぐ全画面に映し、保存せずに閉じると元に戻す。切り替わると useLanguage が画面全体を描き直す。
+  useLanguage();
+  const [previewLanguage, setPreviewLanguage] = useState(null);
+  const chosenLanguage = (page === 'settings' ? previewLanguage : null) || settings.language || 'ja';
+  useEffect(() => { void applyLanguage(chosenLanguage); }, [chosenLanguage]);
   const [prefersDark, setPrefersDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
   useEffect(() => {
     const query = window.matchMedia?.('(prefers-color-scheme: dark)'); if (!query) return undefined;
@@ -185,6 +192,7 @@ export function App() {
       setArtifacts(savedArtifacts.map(item => ({ ...item, member: item.author_id, thread: item.room_id, scope: state.rooms.find(room => room.id === item.room_id)?.visibility, updated: new Date(item.created_at).toLocaleString('ja-JP') })));
       setPaused(state.settings.paused);
       if (THEMES.some(item => item.id === state.settings.theme)) setSettings(current => current.theme === state.settings.theme ? current : { ...current, theme: state.settings.theme });
+      if (isLanguage(state.settings.language)) setSettings(current => current.language === state.settings.language ? current : { ...current, language: state.settings.language });
       setSchedules(savedSchedules);
       api('/model-ready').then(result => { if (version === refreshVersion.current) setReadyProviders(result.providers); }).catch(() => {});
       setSettings(current => ({ ...current, maxMembers: state.settings.generatedLimit, unlimited: state.settings.concurrencyLimit === null,
@@ -296,9 +304,9 @@ export function App() {
     const patch = { ...(touched.has('maxMembers') ? { generatedLimit: Number(next.maxMembers) } : {}), ...(touched.has('unlimited') || touched.has('concurrent') ? { concurrencyLimit: next.unlimited ? null : Number(next.concurrent) } : {}),
       ...(touched.has('backupDays') ? { backupDays: Number(next.backupDays) } : {}), ...(touched.has('backupTime') ? { backupTime: next.backupTime } : {}),
       ...(touched.has('backupEnabled') ? { backupEnabled: next.backupEnabled } : {}), ...(touched.has('autonomous') ? { autonomous: next.autonomous } : {}),
-      ...(touched.has('theme') ? { theme: next.theme } : {}) };
+      ...(touched.has('theme') ? { theme: next.theme } : {}), ...(touched.has('language') ? { language: next.language } : {}) };
     if (Object.keys(patch).length) await api('/settings', 'PATCH', patch);
-    setSettings(current => ({ ...current, theme: next.theme }));
+    setSettings(current => ({ ...current, theme: next.theme, language: next.language }));
   }); }
   const leader = members.find(member => member.authority === 'leader');
   const setupNotice = modelSetupNotice(readyProviders, leader);
@@ -342,7 +350,7 @@ export function App() {
     {view.page === 'conversation' && thread ? <Conversation notice={threadNotice ? <SetupNotice notice={threadNotice} onConnect={openModelSettings} /> : null} onThreadAction={organizeThread} drafts={Object.values(live.drafts).filter(draft => draft.room_id === thread.id)} thread={thread} artifacts={artifacts} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} onDelete={() => setModal({ type: 'delete-content', kind: 'room', id: thread.id, title: thread.title })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => navigate({ page: 'conversation' })} onArtifact={openArtifact} /> : null}
     {view.page === 'bots' ? <Members memberMap={memberMap} onOpenBot={id => navigate({ page: 'bots', id, tab: 'memory' })} onOpenThread={openThread} onDormant={(id, dormant) => mutate(() => api(`/agents/${id}/dormancy`, 'PATCH', { dormant }), dormant ? '休ませました。記憶と会話はそのままです。' : '呼び戻しました。')} onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), 'Botを削除しました。会話と成果物は残っています。')} onAdd={addMember} onImported={importedBot} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={view.id} tab={view.tab} onSelect={id => navigate({ page: 'bots', id, tab: view.tab })} onClose={() => navigate({ page: 'bots' })} onTab={tab => navigate({ page: 'bots', id: shownBot, tab })} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
     {view.page === 'records' ? <Activity taskId={view.task} replay={!!view.replay} onReplay={(id, on) => navigate({ page: 'records', task: id, ...(on ? { replay: true } : {}) })} onBranched={async id => { await refresh(); notify('分岐して新しい仕事を作りました。元の仕事はそのままです。'); navigate({ page: 'records', task: id }); }} onOpenTask={openTask} onCloseTask={closeTask} onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '定期実行を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '定期実行を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '定期実行を再開しました' : '定期実行を一時停止しました')} onScheduleToken={async id => { let issued = null; await mutate(async () => { issued = await api(`/schedules/${id}/token`, 'POST', {}); }, '受付用の鍵を発行しました'); return issued; }} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={view.tab || recordTab} onFilter={tab => navigate({ page: 'records', tab })} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(async () => { await api(`/approvals/${id}`, 'POST', { approved, version }); closeTask(); }, approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
-    {page === 'settings' ? <Settings tab={route.tab} onTab={tab => navigate({ page: 'settings', tab })} onClose={() => navigate(backRoute.current)} onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} /> : null}
+    {page === 'settings' ? <Settings tab={route.tab} onTab={tab => navigate({ page: 'settings', tab })} onClose={() => navigate(backRoute.current)} onPreviewTheme={setPreviewTheme} onPreviewLanguage={setPreviewLanguage} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} /> : null}
     <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={(id === 'settings' ? page === 'settings' : view.page === id && page !== 'settings') ? 'active' : ''} aria-current={(id === 'settings' ? page === 'settings' : view.page === id && page !== 'settings') ? 'page' : undefined}><Icon size={23} /><span>{label}</span>{id === 'today' && waitingCount ? <span className="nav-badge" aria-label={`あなたの番 ${waitingCount}件`}>{waitingCount}</span> : null}</a>)}</nav>
     {paletteOpen ? <CommandPalette threads={threads} members={animatedMembers} paused={paused} onClose={() => setPaletteOpen(false)} onThread={openThread} onMember={openMember} onNavigate={navigate} onNewThread={() => setModal({ type: 'new-thread' })} onPause={togglePause} /> : null}
     {modal?.type === 'appearance' ? <Modal title={`${memberMap[modal.member].name}のアイコン`} onClose={() => setModal(null)} className="appearance-modal"><AppearanceEditor member={memberMap[modal.member]} onCancel={() => setModal(null)} onSave={async patch => { if (await updateMember(modal.member, patch)) setModal(null); }} /></Modal> : null}

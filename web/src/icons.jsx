@@ -26,6 +26,7 @@ export { Clock as ClockIcon } from '@phosphor-icons/react/dist/csr/Clock';
 export { ShieldCheck as ShieldIcon } from '@phosphor-icons/react/dist/csr/ShieldCheck';
 export { Info as InfoIcon } from '@phosphor-icons/react/dist/csr/Info';
 export { Palette as PaletteIcon } from '@phosphor-icons/react/dist/csr/Palette';
+export { Translate as LanguageIcon } from '@phosphor-icons/react/dist/csr/Translate';
 export { BookOpen as MemoryIcon } from '@phosphor-icons/react/dist/csr/BookOpen';
 export { SlidersHorizontal as SlidersIcon } from '@phosphor-icons/react/dist/csr/SlidersHorizontal';
 export { ArrowCounterClockwise as ResetIcon } from '@phosphor-icons/react/dist/csr/ArrowCounterClockwise';

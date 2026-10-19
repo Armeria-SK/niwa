@@ -1,0 +1,23 @@
+/** Words every screen uses. Each screen's own dictionary holds the words only it uses. */
+export default {
+  save: 'Save',
+  saving: 'Saving…',
+  saved: 'Saved',
+  cancel: 'Cancel',
+  close: 'Close',
+  delete: 'Delete',
+  edit: 'Edit',
+  back: 'Back',
+  retry: 'Try again',
+  loading: 'Loading…',
+  confirm: 'Confirm',
+  open: 'Open',
+  more: 'Show more',
+  none: 'None',
+  yes: 'Yes',
+  no: 'No',
+  on: 'On',
+  off: 'Off',
+  bots: ({ count }) => `${count} ${count === 1 ? 'Bot' : 'Bots'}`,
+  items: ({ count }) => `${count} ${count === 1 ? 'item' : 'items'}`,
+};

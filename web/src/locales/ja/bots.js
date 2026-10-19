@@ -1,0 +1,3 @@
+/** bots */
+export default {
+};

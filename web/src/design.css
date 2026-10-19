@@ -10,6 +10,10 @@ body { font-size: 14px; line-height: 1.6; }
 }
 .eyebrow { font-weight: 500; letter-spacing: .06em; }
 ::selection { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+/* 韓国語と簡体字の中国語では、その言葉の字形の書体を先に使う（i18n-react.js が、その言語を選んだときだけ読み込む）。
+ * 丸みのある見出しの書体は日本語の字しか持たないので、見出しも本文と同じ書体にする。 */
+:root:lang(ko) { --font-body: 'Noto Sans KR Variable', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans JP Variable', sans-serif; --font-display: var(--font-body); }
+:root:lang(zh-CN) { --font-body: 'Noto Sans SC Variable', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans JP Variable', sans-serif; --font-display: var(--font-body); }
 
 /* ── ボタン・入力・小さな部品 ───────────────────── */
 .button { height: 40px; min-height: 40px; padding: 0 16px; border: 0; border-radius: var(--r-m); font-size: 13.5px; line-height: 1; transition: background var(--d2) var(--ease-out), box-shadow var(--d2) var(--ease-out), color var(--d2) var(--ease-out), transform 220ms var(--ease-spring); }
@@ -448,6 +452,13 @@ input:not([type='checkbox']):not([type='color']):not([type='radio']):not([type='
 .theme-option strong { margin-top: 8px; padding: 0 4px; font-size: 13.5px; font-weight: 700; }
 .theme-option small { padding: 0 4px; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
 .theme-option > svg { position: absolute; top: 16px; right: 16px; padding: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--on-accent); animation: nw-pop 450ms var(--ease-spring) both; }
+.language-option { padding: 14px 16px 15px; gap: 4px; }
+.language-option strong { margin-top: 0; padding: 0; font-size: 15px; }
+.language-option small { padding: 0; }
+.language-option > svg { top: 13px; right: 13px; }
+/* 言語の見本は、今の表示の言語にかかわらず、それぞれの言葉の字形で見せる。 */
+.language-option:lang(ko) { font-family: 'Noto Sans KR Variable', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; }
+.language-option:lang(zh-CN) { font-family: 'Noto Sans SC Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
 .theme-preview { position: relative; display: grid; grid-template-columns: 22px 1fr; height: 82px; border-radius: 12px; overflow: hidden; background: var(--p-canvas); box-shadow: inset 0 0 0 1px rgb(0 0 0 / .06); }
 .theme-preview.split { background: linear-gradient(135deg, var(--p-canvas) 50%, var(--p-canvas-2) 50%); }
 .theme-preview > i:first-child { display: flex; flex-direction: column; align-items: center; gap: 5px; padding-top: 8px; background: var(--p-rail); }

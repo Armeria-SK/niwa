@@ -11,10 +11,11 @@ import { ModelDefaults } from '../ModelDefaults.jsx';
 import { ModelRoutes } from '../ModelRoutes.jsx';
 import { McpConnections } from '../McpConnections.jsx';
 import { NightPreviewSetting } from '../NightPlan.jsx';
-import { CheckIcon, GlobeIcon, MemoryIcon, PaletteIcon, PauseIcon, PlayIcon, ShieldIcon, SlidersIcon, UsersIcon } from '../icons.jsx';
+import { LANGUAGES, t } from '../i18n.js';
+import { CheckIcon, GlobeIcon, LanguageIcon, MemoryIcon, PaletteIcon, PauseIcon, PlayIcon, ShieldIcon, SlidersIcon, UsersIcon } from '../icons.jsx';
 
-const TABS = [{ value: 'theme', label: 'テーマ', icon: PaletteIcon }, { value: 'rules', label: '共通ルール', icon: ShieldIcon }, { value: 'models', label: 'モデルと接続', icon: SlidersIcon }, { value: 'mcp', label: 'MCP接続', icon: GlobeIcon }, { value: 'activity', label: '活動と人数', icon: UsersIcon }, { value: 'backup', label: 'バックアップ', icon: MemoryIcon }];
-const FIELD_TABS = { theme: 'テーマ', rules: '共通ルール', autonomous: '活動と人数', maxMembers: '活動と人数', unlimited: '活動と人数', concurrent: '活動と人数', backupEnabled: 'バックアップ', backupTime: 'バックアップ', backupDays: 'バックアップ' };
+const TABS = [{ value: 'theme', label: 'テーマ', icon: PaletteIcon }, { value: 'language', label: '言語', icon: LanguageIcon }, { value: 'rules', label: '共通ルール', icon: ShieldIcon }, { value: 'models', label: 'モデルと接続', icon: SlidersIcon }, { value: 'mcp', label: 'MCP接続', icon: GlobeIcon }, { value: 'activity', label: '活動と人数', icon: UsersIcon }, { value: 'backup', label: 'バックアップ', icon: MemoryIcon }];
+const FIELD_TABS = { theme: 'テーマ', language: '言語', rules: '共通ルール', autonomous: '活動と人数', maxMembers: '活動と人数', unlimited: '活動と人数', concurrent: '活動と人数', backupEnabled: 'バックアップ', backupTime: 'バックアップ', backupDays: 'バックアップ' };
 
 /** 上に「いつものモデル」、下に接続先のカード。接続とモデルは、枠ごとにその場で保存する（ページ下の「設定を保存」は使わない）。 */
 function ModelSettings() {
@@ -31,7 +32,7 @@ function ModelSettings() {
 }
 
 /** 開いている欄はURL（#settings/欄）で決まる。MCPの認証から戻るページと、モデル接続の案内がここへつなぐ。 */
-export function Settings({ tab = 'theme', onTab, onClose, onPreviewTheme, settings, onSave, paused, onPause, members }) {
+export function Settings({ tab = 'theme', onTab, onClose, onPreviewTheme, onPreviewLanguage, settings, onSave, paused, onPause, members }) {
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
   const [touched, setTouched] = useState(() => new Set());
@@ -41,6 +42,7 @@ export function Settings({ tab = 'theme', onTab, onClose, onPreviewTheme, settin
     return Object.keys(next).every(key => next[key] === current[key]) ? current : next;
   }); }, [settings, touched]);
   useEffect(() => { onPreviewTheme(draft.theme); return () => onPreviewTheme(null); }, [draft.theme, onPreviewTheme]);
+  useEffect(() => { onPreviewLanguage(draft.language); return () => onPreviewLanguage(null); }, [draft.language, onPreviewLanguage]);
   const change = (key, value) => { setDraft(current => ({ ...current, [key]: value })); setTouched(current => new Set(current).add(key)); setSaved(false); };
   // 下の「設定を保存」は、テーマ・共通ルール・活動と人数・バックアップの欄をまとめて保存する。どの欄に未保存の変更があるかを示す。
   const unsaved = [...new Set([...touched].map(field => FIELD_TABS[field]).filter(Boolean))];
@@ -52,6 +54,7 @@ export function Settings({ tab = 'theme', onTab, onClose, onPreviewTheme, settin
     <div className="settings-scroll" key={tab}>
     {tab === 'mcp' ? <McpConnections /> : tab === 'models' ? <ModelSettings /> : <form className="settings-form" onSubmit={submit}>
       {tab === 'theme' ? <section className="settings-section"><h2>Niwaの色を選ぶ</h2><p>気分に合う配色で、心地よい場所に。</p><div className="theme-picker" role="group" aria-label="配色テーマ">{THEMES.map(theme => <button type="button" key={theme.id} className={`theme-option ${draft.theme === theme.id ? 'selected' : ''}`} aria-pressed={draft.theme === theme.id} onClick={() => change('theme', theme.id)}><ThemePreview theme={theme} /><strong>{theme.name}</strong><small>{theme.description}</small>{draft.theme === theme.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">選ぶとすぐに全画面でプレビューできます。<br />「設定を保存」で、このNiwaを開くすべての端末でこの配色を使います。<br />保存せずに設定画面を離れると元に戻ります。</p></section> : null}
+      {tab === 'language' ? <section className="settings-section"><h2>{t('settings.languageTitle')}</h2><p>{t('settings.languageLead')}</p><div className="theme-picker language-picker" role="group" aria-label={t('settings.languageGroup')}>{LANGUAGES.map(item => <button type="button" key={item.id} lang={item.id} className={`theme-option language-option ${draft.language === item.id ? 'selected' : ''}`} aria-pressed={draft.language === item.id} onClick={() => change('language', item.id)}><strong>{item.name}</strong><small>{item.sample}</small>{draft.language === item.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">{t('settings.languageHint1')}<br />{t('settings.languageHint2')}<br />{t('settings.languageHint3')}</p></section> : null}
       {tab === 'rules' ? <section className="settings-section"><h2>みんなが大切にすること</h2><p>全Botに共通して渡す指示です。<br />保存すると、進行中の応答も新しいルールで取り直します。</p><label className="field"><span>共通の指示</span><textarea rows={9} maxLength={20000} value={draft.rules} onChange={e => change('rules', e.target.value)} /></label><p className="field-hint">別の画面で更新された場合は「変更を戻す」で最新の内容を読み直してください。<br />空欄にすると追加の指示を解除します。</p><div className="inline-note"><ShieldIcon size={20} /><span>停止・権限・予算・記憶の分離は本体が管理します。<br />共通の指示や個別の性格設定では上書きできません。</span></div></section> : null}
       {tab === 'activity' ? <section className="settings-section"><h2>Botたちの活動</h2><p>人数と同時に活動できる数は、別々に設定できます。</p>
         <div className="pause-setting"><div><strong>{paused ? '活動を一時停止しています' : 'Botたちは活動中です'}</strong><small>一時停止中も、会話や設定を確認できます。</small></div><button className="button secondary" type="button" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? '再開' : '一時停止'}</button></div>
