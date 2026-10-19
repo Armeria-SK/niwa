@@ -177,11 +177,11 @@ export default {
   modelIdExample: 'e.g. {model}',
   chooseModel: 'Choose this model',
   listFetchHint: 'Getting a list only reads model names. It doesn’t generate replies (which cost money).',
-  providerNotConnected: '{provider} isn’t connected yet.',
+  providerNotConnected: 'The saved model uses {provider}, which isn’t connected yet.',
   providerNotConnectedHint: 'Choose a model from a working connection, or connect it in Settings → Models & connections.',
   pickerNoConnection: 'Nothing to choose: no connection yet',
   pickerNoConnectionHint: 'No connection is set up yet, so there are no models to choose. Connect one in Settings → Models & connections, and you can choose a model here.',
-  providerGroupOff: '{provider} (not connected)',
+  pickerChooseConnected: 'Choose a model from a working connection',
   pickerAsking: 'Asking the connection…',
 
   // Claude model list (anthropicModels)

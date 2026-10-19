@@ -177,11 +177,11 @@ export default {
   modelIdExample: '예: {model}',
   chooseModel: '이 모델 선택',
   listFetchHint: '목록을 가져올 때는 모델 이름만 읽고, 응답 생성(요금 발생)은 하지 않아요.',
-  providerNotConnected: '{provider}에 아직 연결되지 않았어요.',
+  providerNotConnected: '저장된 모델이 쓰는 {provider}에 아직 연결되지 않았어요.',
   providerNotConnectedHint: '연결된 곳의 모델을 고르거나, ‘설정’의 ‘모델과 연결’에서 연결해 주세요.',
   pickerNoConnection: '연결된 곳이 없어 고를 수 없어요',
   pickerNoConnectionHint: '아직 연결된 곳이 없어서 모델을 고를 수 없어요. ‘설정’의 ‘모델과 연결’에서 하나를 연결하면 여기서 고를 수 있어요.',
-  providerGroupOff: '{provider} (연결 안 됨)',
+  pickerChooseConnected: '연결된 곳의 모델을 골라 주세요',
   pickerAsking: '연결에 문의하는 중…',
 
   // Claude model list (anthropicModels)
