@@ -39,8 +39,11 @@ export const procedureDefinitions = {
 };
 
 export interface ProcedureContext {
-  db: DatabaseSync; task: Task; rooms: string[];
+  /** `rooms` are where procedures may be used; `orphans` are deleted shared conversations whose procedures this task may also revise. */
+  db: DatabaseSync; task: Task; rooms: string[]; orphans: string[];
   readSource(kind: string, id: string, revision: string | null): { revision: string };
+  /** True when a cited source was removed by a deletion. Only sources of a saved version are excused this way, never ones a Bot cites anew. */
+  sourceGone(kind: string, id: string): boolean;
   taskInfo(id: string): Task;
   updatePlan(revision: number, remaining: string[]): JsonObject;
 }
@@ -61,7 +64,7 @@ export function executeProcedure(context: ProcedureContext, name: string, args: 
     check(row && rooms.includes(String(row.room_id)), 'not_found', 'Procedure unavailable in this conversation');
     const body = JSON.parse(String(row.body)) as unknown;
     check(Value.Check(storedProcedureSchema, body), 'invalid', 'Stored procedure is invalid');
-    try { for (const source of body.sources) context.readSource(source.kind, source.source_id, source.revision); }
+    try { for (const source of body.sources) if (!context.sourceGone(source.kind, source.source_id)) context.readSource(source.kind, source.source_id, source.revision); }
     catch { db.prepare('UPDATE procedures SET enabled=0 WHERE id=?').run(id); throw new DomainError('conflict', 'Procedure source changed; the procedure cannot be used'); }
     return { id, room_id: String(row.room_id), revision: Number(row.revision), latest_revision: Number(row.latest_revision), enabled: row.enabled === 1, ...body };
   };
@@ -104,10 +107,14 @@ export function executeProcedure(context: ProcedureContext, name: string, args: 
           { kind: 'task', source_id: sourceTask.id, revision: source.revision }] };
       }
       check(Value.Check(storedProcedureSchema, body) && JSON.stringify(body).length <= PROCEDURE_MAX_LENGTH, 'invalid', 'Procedure is too large or invalid');
-      for (const source of body.sources) context.readSource(source.kind, source.source_id, source.revision);
+      const restoring = name === 'procedure_restore';
+      for (const source of body.sources) if (!restoring || !context.sourceGone(source.kind, source.source_id)) context.readSource(source.kind, source.source_id, source.revision);
       const id = args.id === null ? createHash('sha256').update(`${task.id}:${operationId}`).digest('hex') : String(args.id);
       const existing = args.id === null ? null : head(id);
-      check(existing === null || existing.room_id === task.room_id, 'forbidden', 'Update a procedure in its original conversation');
+      const adopted = existing !== null && context.orphans.includes(String(existing.room_id));
+      check(existing === null || existing.room_id === task.room_id || adopted, 'forbidden', 'Update a procedure in its original conversation');
+      // A procedure whose shared conversation was deleted moves to the shared conversation that revises it.
+      if (adopted) db.prepare('UPDATE procedures SET room_id=? WHERE id=?').run(task.room_id, id);
       const previous = Number(existing?.revision ?? 0);
       check(previous === args.expected_revision && previous < Number.MAX_SAFE_INTEGER - 1, 'conflict', 'Procedure revision changed');
       if (args.id === null) db.prepare('INSERT INTO procedures(id,room_id,revision,enabled) VALUES (?,?,0,1)').run(id, task.room_id);

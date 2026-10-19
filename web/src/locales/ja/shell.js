@@ -235,7 +235,7 @@ export default {
   // 削除の窓
   deleteRoomTitle: '会話を削除',
   deleteArtifactTitle: '成果物を削除',
-  deleteRoomBody: 'この会話の発言・成果物と、この会話から生まれたBotの記憶を削除します。進行中の仕事と定期実行も中止します。',
+  deleteRoomBody: 'この会話の発言・成果物と、この会話から生まれたBotの記憶を削除します。進行中の仕事と定期実行も中止します。Botの手順帳は残ります。',
   deleteArtifactBody: 'この成果物を一覧と保存先から削除します。会話の発言は残ります。',
   deleteWarning: '元に戻せません。過去のバックアップは通常の保存期間で整理されます。',
   deleting: '削除中…',

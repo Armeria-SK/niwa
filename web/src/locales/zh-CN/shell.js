@@ -235,7 +235,7 @@ export default {
   // 删除窗口
   deleteRoomTitle: '删除对话',
   deleteArtifactTitle: '删除成果',
-  deleteRoomBody: '将删除此对话的消息、成果，以及从此对话中产生的 Bot 记忆。进行中的任务和定时运行也会停止。',
+  deleteRoomBody: '将删除此对话的消息、成果，以及从此对话中产生的 Bot 记忆。进行中的任务和定时运行也会停止。Bot 的操作手册会保留。',
   deleteArtifactBody: '将从列表和存储位置删除此成果。对话中的消息会保留。',
   deleteWarning: '此操作无法撤销。过去的备份会按通常的保留期限清理。',
   deleting: '正在删除…',

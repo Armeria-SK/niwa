@@ -687,15 +687,19 @@ export class Runtime {
     this.#admin(actor);
     for (const record of records) {
       check(['room', 'artifact'].includes(record.kind) && /^[0-9a-f-]{36}$/.test(record.id) && Number.isSafeInteger(record.deleted_at) && record.deleted_at >= 0, 'invalid', 'Invalid content deletion');
-      // Invalidate saved output before deleting its source, including work in other rooms.
+      // Invalidate saved output before deleting its source, including work in other rooms. Procedures are the Bot's own and stay;
+      // the administrator removes the ones no longer wanted from the procedure book. Only the reasons written in this room go.
       for (const agent of this.agents(actor)) {
         const memory = this.#memory(actor, agent.id);
         transaction(memory, () => {
-          if (record.kind === 'room') for (const row of memory.prepare('SELECT id,revision FROM memories WHERE source_room_id=?').all(record.id)) {
-            memory.prepare('DELETE FROM memories WHERE id=?').run(row.id as string);
-            this.#audit(memory, row.id as string, 'deleted', 'administrator', Number(row.revision) + 1);
+          if (record.kind === 'room') {
+            for (const row of memory.prepare('SELECT id,revision FROM memories WHERE source_room_id=?').all(record.id)) {
+              memory.prepare('DELETE FROM memories WHERE id=?').run(row.id as string);
+              this.#audit(memory, row.id as string, 'deleted', 'administrator', Number(row.revision) + 1);
+            }
+            memory.prepare('DELETE FROM procedure_uses WHERE room_id=?').run(record.id);
           }
-          memory.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]'; DELETE FROM procedures;");
+          memory.exec("UPDATE memory_state SET revision=revision+1 WHERE id=1; UPDATE task_steps SET discarded=1,events='[]';");
         });
       }
       transaction(this.#db, () => {
@@ -1279,12 +1283,38 @@ export class Runtime {
       FROM procedures p JOIN procedure_versions v ON v.procedure_id=p.id AND v.revision=p.revision ORDER BY v.created_at DESC LIMIT 200`).all().map(row => {
       let body: { title?: unknown; conditions?: unknown; steps?: unknown; origin?: unknown } = {};
       try { body = JSON.parse(String(row.body)) as typeof body; } catch { /* A damaged record still lists so it can be disabled. */ }
-      const source = this.#liveRoom(String(row.room_id));
+      // A deleted room keeps its visibility, so a procedure from a deleted private conversation still reads as private and is never offered again.
+      const source = this.#liveRoom(String(row.room_id)), room = this.#db.prepare('SELECT visibility FROM rooms WHERE id=?').get(String(row.room_id));
+      const isPrivate = room?.visibility === 'private';
       return { id: String(row.id), revision: Number(row.revision), enabled: row.enabled === 1, title: String(body.title ?? ''), conditions: String(body.conditions ?? ''),
         steps: Array.isArray(body.steps) ? body.steps.map(String) : [], saved_at: Number(row.created_at), uses: Number(row.uses),
-        last_used_at: row.last_used_at === null ? null : Number(row.last_used_at), disabled_reason: row.disabled_reason === null ? null : String(row.disabled_reason), room_title: source ? String(source.title) : null, private: source?.visibility === 'private',
-        imported: body.origin === 'imported' };
+        last_used_at: row.last_used_at === null ? null : Number(row.last_used_at), disabled_reason: row.disabled_reason === null ? null : String(row.disabled_reason), room_title: source ? String(source.title) : null, private: isPrivate,
+        usable: !!source || !isPrivate, imported: body.origin === 'imported' };
     });
+  }
+  /** Administrator only. Removes a procedure with its earlier versions and use records; deleting a conversation never does this by itself. */
+  deleteProcedure(actor: Actor, agentId: string, id: string): void {
+    this.#admin(actor);
+    const db = this.#memory(actor, agentId);
+    check(db.prepare('DELETE FROM procedures WHERE id=?').run(text(id, 100)).changes === 1, 'not_found', 'Procedure not found');
+  }
+  /** Shared conversations that were deleted. Procedures saved in them belong to every shared conversation from then on. */
+  #deletedSharedRooms(): string[] {
+    return this.#db.prepare("SELECT r.id FROM rooms r JOIN deleted_content d ON d.kind='room' AND d.id=r.id WHERE r.visibility='shared'").all().map(row => String(row.id));
+  }
+  /** Whether a source a procedure cites was removed by a deletion, as opposed to changed. A removed source no longer holds the procedure back. */
+  #sourceGone(actor: Actor, agentId: string, kind: string, id: string): boolean {
+    const deletedRoom = (roomId: unknown) => !!this.#db.prepare("SELECT 1 FROM deleted_content WHERE kind='room' AND id=?").get(String(roomId));
+    if (kind === 'message') return !this.#db.prepare('SELECT 1 FROM messages WHERE id=?').get(id);
+    if (kind === 'task') { const row = this.#db.prepare('SELECT room_id FROM tasks WHERE id=?').get(id); return !row || deletedRoom(row.room_id); }
+    if (kind === 'task_reply') {
+      const row = Number.isSafeInteger(Number(id)) ? this.#db.prepare('SELECT t.room_id FROM task_replies r JOIN tasks t ON t.id=r.task_id WHERE r.sequence=?').get(Number(id)) : undefined;
+      return !row || deletedRoom(row.room_id);
+    }
+    if (kind === 'artifact') return !this.#db.prepare('SELECT 1 FROM artifacts WHERE id=?').get(id) || !!this.#db.prepare("SELECT 1 FROM deleted_content WHERE kind='artifact' AND id=?").get(id);
+    if (kind === 'memory') return !this.#memory(actor, agentId).prepare('SELECT 1 FROM memories WHERE id=?').get(id);
+    // Summaries are cleared whenever memory changes, so a missing one means "recheck", not "deleted".
+    return false;
   }
   /** Turning a procedure back on does not vouch for it: the Bot still rechecks its sources before each use and disables it if they changed. */
   setProcedureEnabled(actor: Actor, agentId: string, id: string, enabled: boolean): void {
@@ -1503,10 +1533,14 @@ export class Runtime {
     const principal = this.#bot(actor); this.#running(actor);
     check(this.tasks.active(actor, lease), 'conflict', 'Task is no longer active');
     const task = this.tasks.get(actor, lease.task.id); text(operationId, 180);
+    const visible = this.rooms(actor).filter(room => room.visibility === 'shared' || room.id === task.room_id), orphans = this.#deletedSharedRooms();
+    const shared = visible.some(room => room.id === task.room_id && room.visibility === 'shared');
     return executeProcedure({
       db: this.#memory(actor, principal.id), task,
-      rooms: this.rooms(actor).filter(room => room.visibility === 'shared' || room.id === task.room_id).map(room => room.id),
+      // Like any shared conversation's procedure, one from a deleted shared conversation is usable everywhere, but only a shared conversation may revise it.
+      rooms: [...visible.map(room => room.id), ...orphans], orphans: shared ? orphans : [],
       readSource: (kind, id, revision) => this.readHistory(actor, task.room_id, kind, id, 0, revision),
+      sourceGone: (kind, id) => this.#sourceGone(actor, principal.id, kind, id),
       taskInfo: id => this.tasks.get(actor, id),
       updatePlan: (revision, remaining) => this.tasks.updatePlan(actor, lease, `${operationId}:plan`, revision, remaining),
     }, name, args, operationId);
