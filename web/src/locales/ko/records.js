@@ -196,6 +196,7 @@ export default {
   branchHere: '여기서 분기',
   phaseWork: '답장·작업',
   phaseMemoryReview: '기억 정리',
+  phaseRoomDigest: '대화 요약',
   phaseTaskSummarySave: '결과 정리',
   phaseReadRecovery: '조사 방법 재정비',
   phaseReadRecoveryReport: '확인한 범위 정리',

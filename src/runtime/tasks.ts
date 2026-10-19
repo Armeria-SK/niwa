@@ -23,6 +23,8 @@ type RecordWithLease = Task & { lease_token: string | null };
 const publicTask = ({ lease_token: _token, ...task }: RecordWithLease): Task => task;
 const CONVERSATION_LIMIT_REASON = '会話の継続が16回の区切りに達しました。続ける場合は仕事の詳細から再開してください。';
 const TURN_LIMIT_REASON = 'この仕事の実行区切りに達しました。続行する場合は、新しい依頼として必要な範囲を指定してください。';
+/** Model input lists at most this many open tasks of the conversation, and finished ones only from the last half hour, at most this many. */
+const LEAN_OPEN=20, LEAN_FINISHED=8, LEAN_FINISHED_MS=30*60_000;
 const READ_OBSERVATION=/^(task_history_read|history_read|history_search|memory_search|web_read|web_search|browser_navigate|browser_snapshot|browser_follow|workspace_read|workspace_list)$/;
 function pageEvidence(name:string,result:JsonObject):string|undefined {
   if(name!=='web_read'||typeof result.text!=='string'||!result.text.trim())return;
@@ -239,6 +241,13 @@ export class Tasks {
     });
   }
   /** Reserve before transport; failures and interruptions conservatively consume the reservation. */
+  /** Work that spends an autonomous-wake or schedule allowance; side calls such as a digest refresh are not taken out of it. */
+  budgeted(actor: Actor, lease: TaskLease): boolean {
+    const task = this.#owned(actor, lease);
+    return !!this.#db.prepare(`WITH RECURSIVE ancestors(id,parent_id,internal_autonomous) AS (
+      SELECT id,parent_id,internal_autonomous FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id,t.internal_autonomous FROM tasks t JOIN ancestors a ON t.id=a.parent_id)
+      SELECT 1 FROM ancestors a WHERE a.internal_autonomous=1 OR EXISTS(SELECT 1 FROM schedule_runs r WHERE r.task_id=a.id) LIMIT 1`).get(task.id);
+  }
   reserveModelCall(actor: Actor, lease: TaskLease): boolean {
     return transaction(this.#db, () => {
       const task = this.#owned(actor, lease); this.#access.room(actor, task.room_id);
@@ -294,14 +303,33 @@ export class Tasks {
   /** Fresh task-local facts for model input; never a replacement for lease/approval checks. */
   /** Same room only; child_results remains explicitly local to its parent task. */
   controlRevision(actor:Actor,id:string):number {this.get(actor,id);return Number(this.#db.prepare('SELECT coalesce(max(sequence),0) AS revision FROM task_events WHERE task_id=?').get(id)!.revision);}
-  conversationState(actor:Actor,roomId:string,exclude?:string) {
+  /**
+   * Other work in the conversation. The status reply lists up to 40 tasks; model input (lean) lists what is still open and what finished
+   * recently, and only counts the rest, which coordination_read and history_search reach. A long conversation would otherwise send its
+   * whole recent history of finished tasks on every call.
+   */
+  conversationState(actor:Actor,roomId:string,exclude?:string,lean=false) {
     this.#access.room(actor,roomId);
-    const rows=this.#db.prepare(`SELECT t.id,t.parent_id,t.agent_id,a.name,t.prompt,t.state,t.paused,t.internal_autonomous,t.updated_at,t.attempt
+    const now=Date.now();
+    const select=`SELECT t.id,t.parent_id,t.agent_id,a.name,t.prompt,t.state,t.paused,t.internal_autonomous,t.updated_at,t.attempt
       FROM tasks t JOIN agents a ON a.id=t.agent_id WHERE t.room_id=? AND t.id<>?
-      AND NOT EXISTS(SELECT 1 FROM task_context c WHERE c.task_id=t.id AND c.kind='status')
-      ORDER BY CASE WHEN t.state IN ('completed','cancelled','failed') THEN 1 ELSE 0 END,t.updated_at DESC LIMIT 41`).all(roomId,exclude??'') as unknown as {id:string;parent_id:string|null;agent_id:string;name:string;prompt:string;state:string;paused:number;internal_autonomous:number;updated_at:number;attempt:number}[];
-    return {scope:'current_conversation',checked_at:Date.now(),truncated:rows.length>40,tasks:rows.slice(0,40).map(({attempt,...t})=>({...t,run_count:attempt,control_revision:this.controlRevision(actor,t.id),
-      prompt:redactSecrets(String(t.prompt)).slice(0,240),progress:(({label,state,kind,waiting_for,retry_at,last_activity_at,model_responses_completed,provider_failures})=>({label,state,kind,waiting_for,retry_at,last_activity_at,model_responses_completed,provider_failures}))(this.progress(actor,String(t.id),true))}))};
+      AND NOT EXISTS(SELECT 1 FROM task_context c WHERE c.task_id=t.id AND c.kind='status')`;
+    type Row={id:string;parent_id:string|null;agent_id:string;name:string;prompt:string;state:string;paused:number;internal_autonomous:number;updated_at:number;attempt:number};
+    const rows=(lean
+      ? [...this.#db.prepare(`${select} AND t.state NOT IN ('completed','cancelled','failed') ORDER BY t.updated_at DESC LIMIT ${LEAN_OPEN+1}`).all(roomId,exclude??''),
+        ...this.#db.prepare(`${select} AND t.state IN ('completed','cancelled','failed') AND t.updated_at>=? ORDER BY t.updated_at DESC LIMIT ${LEAN_FINISHED}`).all(roomId,exclude??'',now-LEAN_FINISHED_MS)]
+      : this.#db.prepare(`${select} ORDER BY CASE WHEN t.state IN ('completed','cancelled','failed') THEN 1 ELSE 0 END,t.updated_at DESC LIMIT 41`).all(roomId,exclude??'')) as unknown as Row[];
+    const open=rows.filter(t=>!['completed','cancelled','failed'].includes(t.state));
+    const shown=lean?[...open.slice(0,LEAN_OPEN),...rows.filter(t=>['completed','cancelled','failed'].includes(t.state))]:rows.slice(0,40);
+    const tasks=shown.map(({attempt,...t})=>({...t,run_count:attempt,control_revision:this.controlRevision(actor,t.id),
+      prompt:redactSecrets(String(t.prompt)).slice(0,lean?160:240),progress:(({label,state,kind,waiting_for,retry_at,last_activity_at,model_responses_completed,provider_failures})=>({label,state,kind,waiting_for,retry_at,last_activity_at,model_responses_completed,provider_failures}))(this.progress(actor,String(t.id),true))}));
+    if(!lean)return {scope:'current_conversation',checked_at:now,truncated:rows.length>40,tasks};
+    const all=this.#db.prepare(`SELECT coalesce(sum(t.state='completed'),0) AS finished,coalesce(sum(t.state IN ('cancelled','failed')),0) AS failed FROM tasks t
+      WHERE t.room_id=? AND t.id<>? AND t.state IN ('completed','cancelled','failed')
+      AND NOT EXISTS(SELECT 1 FROM task_context c WHERE c.task_id=t.id AND c.kind='status')`).get(roomId,exclude??'')!;
+    const listed=(states:string[])=>shown.filter(t=>states.includes(t.state)).length;
+    return {scope:'current_conversation',checked_at:now,truncated:open.length>LEAN_OPEN,tasks,
+      older:{finished:Number(all.finished)-listed(['completed']),failed:Number(all.failed)-listed(['cancelled','failed']),note:'一覧にない終わった仕事はcoordination_readやhistory_search(kind=task)で確認できます。'}};
   }
   linkMessage(actor:Actor,messageId:string,taskId:string,kind:string) {
     const task=this.get(actor,taskId);
@@ -357,7 +385,7 @@ export class Tasks {
     const memory = this.#access.memory(actor, task.agent_id);
     const plan = memory.prepare('SELECT revision,remaining FROM task_plans WHERE task_id=? AND memory_revision=(SELECT revision FROM memory_state WHERE id=1)').get(task.id);
     return {
-      conversation_scope: this.conversationState(actor,task.room_id,task.id),
+      conversation_scope: this.conversationState(actor,task.room_id,task.id,true),
       request_context: this.#db.prepare('SELECT kind,related_task_id FROM task_context WHERE task_id=?').get(task.id)??null,
       request_brief: this.requestBrief(actor, lease),
       observations: this.#db.prepare("SELECT operation_id,json_extract(output,'$.url') AS url,json_extract(output,'$.source_id') AS source_id FROM tool_receipts WHERE task_id=? AND (json_extract(output,'$.fetched_at') IS NOT NULL OR json_extract(output,'$.revision') IS NOT NULL)").all(task.id).map(row=>({...row,step:/^\d+:\d+$/.test(String(row.operation_id))?Number(String(row.operation_id).split(':')[0]):null})),
@@ -602,7 +630,7 @@ export class Tasks {
     }
     const kind=task.paused||this.#paused()?'paused':['waiting_provider','waiting_user'].includes(task.state)&&waiting!=='unknown'?String(waiting):task.state;
     const labels:Record<string,string>={running:'作業中',paused:'停止中',queued:'順番待ち',waiting_child:'仲間の結果待ち',waiting_provider:'理由未確認の待機',waiting_user:'対応待ち（理由未確認）',user_input:'管理者の入力待ち',member_input:'仲間の対応待ち',approval:'承認の判断待ち',invalid_output:'応答形式の確認待ち',budget:'自発活動の利用枠待ち',schedule_budget:'予定の利用枠待ち',network:task.provider_retry_at?'接続の再試行待ち':'接続の確認待ち',authentication:'認証の確認待ち',configuration:'モデル設定の確認待ち',provider_quota:'接続先の利用枠待ち',unknown:'理由未確認の待機',stalled:'進展がないため再確認待ち',completed:'完了',failed:'失敗',cancelled:'中止'};
-    const phases:Record<string,string>={resolve:'接続を準備中',model:'返答を考え中',read_recovery:'調査方法と確認結果を整理中',read_recovery_report:'確認できた範囲をまとめ中',memory_review:'記憶を整理中',task_summary_save:'結果を整理中',read:'資料を確認中',execute:'コードを実行中',tool:'操作中'};
+    const phases:Record<string,string>={resolve:'接続を準備中',model:'返答を考え中',read_recovery:'調査方法と確認結果を整理中',read_recovery_report:'確認できた範囲をまとめ中',memory_review:'記憶を整理中',room_digest:'会話のまとめを更新中',task_summary_save:'結果を整理中',read:'資料を確認中',execute:'コードを実行中',tool:'操作中'};
     const waitingTasks=task.state==='waiting_child'?this.#db.prepare(`SELECT t.id,t.agent_id,a.name,t.prompt,t.state FROM tasks t JOIN agents a ON a.id=t.agent_id
       LEFT JOIN task_child_dependencies d ON d.task_id=t.id WHERE t.parent_id=? AND t.room_id=? AND t.state NOT IN ('completed','failed','cancelled') AND coalesce(d.required,1)=1`).all(id,task.room_id):[];
     const summary=this.#summaries.get(id);

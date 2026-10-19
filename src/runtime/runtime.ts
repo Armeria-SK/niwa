@@ -54,6 +54,8 @@ import { THEME_IDS, themeSchema } from '../storage/theme-schema.ts';
 import { memoryConflictSchema } from '../storage/memory-conflict-schema.ts';
 import { memoryReviewMarkSchema } from '../storage/memory-review-mark-schema.ts';
 import { promptCacheSchema } from '../storage/prompt-cache-schema.ts';
+import { roomDigestSchema } from '../storage/room-digest-schema.ts';
+import { RoomDigests } from './room-digests.ts';
 import { findMemoryConflicts } from './memory-conflicts.ts';
 import { nightSchema } from '../storage/night-schema.ts';
 import { NightPlans } from './night-plans.ts';
@@ -132,6 +134,7 @@ export class Runtime {
   readonly replays: Replays;
   readonly botFiles: BotFiles;
   readonly artifactVersions: ArtifactVersions;
+  readonly digests: RoomDigests;
   readonly schedules: Schedules;
   readonly providerLimits: ProviderLimits;
   /** Memory-only drafts and viewer notifications; never persisted or given to models. */
@@ -144,7 +147,7 @@ export class Runtime {
 
   constructor(stateDirectory: string) {
     this.#root = resolve(stateDirectory);
-    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema, mediaAttachmentSchema, botImportSchema, themePaletteSchema, languageSchema, memoryReviewMarkSchema, promptCacheSchema]);
+    this.#db = openDatabase(join(this.#root, 'control.db'), [controlSchema, taskSchema, submissionSchema, modelSchema, profileMigration, conversationSchema, organizationSchema, taskControlSchema, productivitySchema, deletionSchema, fallbackSchema, externalSchema, historySearchSchema, scheduleSchema, scheduleBudgetSchema, scheduleTriggerSchema, scheduleDeletionSchema, autonomySchema, providerLimitSchema, modelRouteSchema, providerRetrySchema, commonRulesSchema, autonomyControlSchema, backupTimeSchema, generatedModelSchema, conversationReplySchema, agentDeletionSchema, contentManagementSchema, actionApprovalSchema, userActionsSchema, restoreSafetySchema, coordinationSchema, artifactVersionSchema, handoffSchema, workNoteSchema, autonomousWakeSchema, autonomousContinuitySchema, workareasSchema, executionSchema, initiativeSchema, artifactQualitySchema, promptSchema, activitySchema, responseProgressSchema, agentAutonomySchema, backupEnabledSchema, commonRulesDefaultSchema, modelParallelSchema, attachmentSchema, openaiCompatibleSchema, scheduleSourceSchema, anthropicSchema, localLlmSchema, commonRulesGeneralDefaultSchema, themeSchema, memoryConflictSchema, nightSchema, secondOpinionSchema, trustSchema, mediaAttachmentSchema, botImportSchema, themePaletteSchema, languageSchema, memoryReviewMarkSchema, promptCacheSchema, roomDigestSchema]);
     try { for (const record of this.#db.prepare('SELECT id FROM deleted_agents').all()) this.#purgeAgent(record.id as string); }
     catch (error) { this.#db.close(); throw error; }
     this.providerLimits = new ProviderLimits(this.#db, actor => this.#admin(actor));
@@ -174,6 +177,7 @@ export class Runtime {
     this.autonomousWakes = new AutonomousWakes(this.#db,this.tasks,actor=>this.#admin(actor),actor=>this.createRoom(actor,'自発活動').id,this.initiatives,now=>this.nights.gate(now));
     this.quality = new ArtifactQuality(this.#db,this,actor=>this.#principal(actor));
     this.artifactVersions = new ArtifactVersions(this.#db,this,actor=>this.#principal(actor));
+    this.digests = new RoomDigests(this.#db,this,actor=>this.#principal(actor));
     this.schedules = new Schedules(this.#db, this.tasks, actor => this.#admin(actor), (actor, agentId, roomId) => {
       this.#room(actor, roomId);
       check(!this.roomPreferences(actor, roomId).archived, 'conflict', 'Restore the archived room before scheduling');
@@ -721,6 +725,7 @@ export class Runtime {
           this.#db.prepare('DELETE FROM artifacts WHERE room_id=?').run(record.id);
           this.#db.prepare('DELETE FROM submissions WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)').run(record.id);
           this.#db.prepare('DELETE FROM message_attachments WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)').run(record.id);
+          this.digests.purge(record.id);
           this.#db.prepare('DELETE FROM messages WHERE room_id=?').run(record.id);
           this.#db.prepare('UPDATE workareas SET deleted=1 WHERE room_id=?').run(record.id);
           this.#db.prepare("UPDATE rooms SET title='' WHERE id=?").run(record.id);
@@ -730,6 +735,9 @@ export class Runtime {
           for (const table of ['autonomous_boundaries', 'work_notes', 'task_replies', 'tool_receipts', 'business_tasks', 'approval_requests', 'approval_history']) this.#db.prepare('DELETE FROM ' + table + ' WHERE task_id IN (SELECT id FROM tasks WHERE room_id=?)').run(record.id);
         } else {
           this.#db.prepare('DELETE FROM updates WHERE artifact_id=?').run(record.id);
+          // The digest may retell the deleted artifact; it is rebuilt from the conversation instead.
+          const artifactRoom = this.#db.prepare('SELECT room_id FROM artifacts WHERE id=?').get(record.id);
+          if (artifactRoom) this.digests.purge(String(artifactRoom.room_id));
           this.#db.prepare('DELETE FROM artifacts WHERE id=?').run(record.id);
         }
         this.#db.prepare('INSERT OR IGNORE INTO deleted_content VALUES (?,?,?)').run(record.kind, record.id, record.deleted_at);

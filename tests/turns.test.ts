@@ -705,7 +705,8 @@ test('one bot can search, read a source and save a sourced artifact through the 
         assert.equal(latest.role, 'user');
         const state = JSON.parse(latest.content!).work_state;
         assert.equal(state.artifacts[0].name, '調査.md');
-        assert.equal(state.task.prompt, '出典付き資料を作る');
+        assert.equal(state.task.prompt, undefined, 'the request travels once, as 現在の依頼');
+        assert.ok(request.messages.some(message => message.role === 'user' && message.content === '現在の依頼: 出典付き資料を作る'));
         assert.equal(state.saved_model_steps, 3);
         return complete('出典付き資料を保存しました');
       }

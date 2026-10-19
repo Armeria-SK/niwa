@@ -197,6 +197,7 @@ export default {
   branchHere: 'Branch from here',
   phaseWork: 'Reply & work',
   phaseMemoryReview: 'Organizing memories',
+  phaseRoomDigest: 'Conversation digest',
   phaseTaskSummarySave: 'Organizing results',
   phaseReadRecovery: 'Rethinking how to look things up',
   phaseReadRecoveryReport: 'Summary of what could be confirmed',

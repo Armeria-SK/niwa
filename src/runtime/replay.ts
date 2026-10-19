@@ -20,7 +20,7 @@ const ORDER: Record<ReplayItem['type'], number> = { event: 0, instruction: 1, me
 const cut = (value: unknown, max: number) => { const textValue = redactSecrets(typeof value === 'string' ? value : JSON.stringify(value) ?? ''); return textValue.length > max ? `${textValue.slice(0, max)}…` : textValue; };
 const EVENTS: Record<string, string> = { queued: '実行待ち', running: '実行を開始', completed: '完了', failed: '失敗', cancelled: '中止', waiting_child: 'ほかのBotの結果を待機', waiting_user: '確認・回答を待機',
   waiting_provider: '接続・モデルの回復を待機', paused: '一時停止', resumed: '再開', instructed: '追加指示を保存', retried: '再試行', interrupted: '中断' };
-const PHASES: Record<string, string> = { work: '返答・作業', memory_review: '記憶の整理', task_summary_save: '結果の整理', read_recovery: '調べ方の立て直し', read_recovery_report: '確認できた範囲のまとめ', second_opinion: '聞き比べ', model_check: '点検' };
+const PHASES: Record<string, string> = { work: '返答・作業', memory_review: '記憶の整理', room_digest: '会話のまとめ', task_summary_save: '結果の整理', read_recovery: '調べ方の立て直し', read_recovery_report: '確認できた範囲のまとめ', second_opinion: '聞き比べ', model_check: '点検' };
 const STATUSES: Record<string, string> = { completed: '完了', failed: '失敗', discarded: '使わなかった', unknown: '結果不明' };
 const clock = (at: number) => new Date(at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 

@@ -92,6 +92,7 @@ const exact = {
   '調査方法と確認結果を整理中': 'Sorting out methods and findings…',
   '確認できた範囲をまとめ中': 'Summarizing what was confirmed…',
   '記憶を整理中': 'Organizing memories…',
+  '会話のまとめを更新中': 'Updating the conversation digest…',
   '結果を整理中': 'Organizing results…',
   '資料を確認中': 'Reading sources…',
   'コードを実行中': 'Running code…',

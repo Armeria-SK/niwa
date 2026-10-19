@@ -81,7 +81,7 @@ export async function startService(root: string, resolve?: ResolveAdapter, portO
         workspace: configuredWorkspaceReader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid),
         workspaceWrite: configuredWorkspaceWriter(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid),
       } : {}),
-    },{promptVersion:config.promptVersion??'legacy-v4'}), Date.now, resolve ? undefined : () => models.readyProviders());
+    },{promptVersion:config.promptVersion??'legacy-v4',roomMode:config.roomContext??'full'}), Date.now, resolve ? undefined : () => models.readyProviders());
     server = createApiServer(runtime, auth, models, fileURLToPath(new URL('../client/', import.meta.url)), backups,
       config.workspaceExecutorUid ? { read: configuredWorkspaceReader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid),
         download: configuredWorkspaceDownloader(join(paths.runtime, 'sockets', 'workspace.sock'), config.workspaceExecutorUid) } : undefined, workareas, undefined, mcpSettings);
