@@ -709,7 +709,8 @@ export class Tasks {
     // The text itself is dropped so it cannot become a future model context after a memory correction.
     this.#access.memory(actor, task.agent_id).prepare("UPDATE task_steps SET discarded=1,events='[]' WHERE task_id=? AND step=?").run(lease.task.id, step);
   }
-  delegate(actor: Actor, lease: TaskLease, agentId: string, prompt: string): Task {
+  /** Without wait, the parent keeps working; its required children still gate completion. */
+  delegate(actor: Actor, lease: TaskLease, agentId: string, prompt: string, wait = true): Task {
     return transaction(this.#db, () => {
       const parent = this.#owned(actor, lease);
       if (this.independentActivity(actor,lease)) {
@@ -724,8 +725,18 @@ export class Tasks {
       this.#db.prepare(`INSERT OR IGNORE INTO initiative_tasks SELECT ?,l.initiative_id FROM initiative_tasks l JOIN initiatives i ON i.id=l.initiative_id WHERE l.task_id=? AND EXISTS(SELECT 1 FROM json_each(i.body,'$.participants') WHERE value=?)`).run(child.id,parent.id,agentId);
       const messageId = this.#access.announceDelegation(actor, parent.room_id, agentId, prompt);
       this.#db.prepare('UPDATE tasks SET source_message_id=? WHERE id=?').run(messageId, child.id);
-      this.#change(parent.id, 'waiting_child');
+      if (wait) this.#change(parent.id, 'waiting_child');
       return publicTask(this.#read(child.id));
+    });
+  }
+  /** Parks the parent until required children finish; children already done let it continue. */
+  waitForChildren(actor: Actor, lease: TaskLease): JsonObject {
+    return transaction(this.#db, () => {
+      const task = this.#owned(actor, lease);
+      if (!this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id=? AND state NOT IN ('completed','failed','cancelled') AND id NOT IN(SELECT task_id FROM task_child_dependencies WHERE required=0)").get(task.id))
+        return { waiting: false, children_done: true };
+      this.#change(task.id, 'waiting_child');
+      return { waiting: true };
     });
   }
   address(actor: Actor, lease: TaskLease, agentId: string, prompt: string, sourceMessageId?: string): void {

@@ -105,7 +105,8 @@ const definitions = {
   agents_create: { description: '新しいBotを1体登録する。リーダーだけが利用できる。希望された役割・性格・見た目をprofileへ渡す。roleは説明であり権限ではない。モデルと上限は管理者設定を使う。', schema: object({ name: short(), profile: Type.Optional(creationProfileSchema) }) },
   agents_sleep: { description: 'Botを休眠させる。リーダーだけが利用できる。', schema: object({ agent_id: short() }) },
   agents_recall: { description: '休眠Botを同じ記憶で再招集する。リーダーだけが利用できる。', schema: object({ agent_id: short() }) },
-  task_delegate: { description: 'この会話を読める別Botへ仕事を依頼し、結果を待つ。宛先と依頼全文は自動でこのチャットに投稿される。同じ依頼をconversation_sendで重ねて送らない。この呼び出しは単独で行う。', schema: object({ agent_id: short(), prompt: Type.String({ minLength: 1, maxLength: 19_000 }) }) },
+  task_delegate: { description: 'この会話を読める別Botへ仕事を依頼する。宛先と依頼全文は自動でこのチャットに投稿される。同じ依頼をconversation_sendで重ねて送らない。wait省略またはtrueなら結果が届くまで自分の仕事を保留する。結果を待たずに進められる独立した作業が残っていればwait:falseで依頼して作業を続け、結果はwork_state.child_resultsで確認する。子の結果が必要になったらtask_children_waitで待つ。この呼び出しは単独で行う。', schema: object({ agent_id: short(), prompt: Type.String({ minLength: 1, maxLength: 19_000 }), wait: Type.Optional(Type.Boolean()) }) },
+  task_children_wait: { description: 'wait:falseで依頼した必須の子の結果が届くまで自分の仕事を保留する。結果待ちの間に進められる作業を終えてから使う。すべて終わっていればchildren_done:trueが返り、そのまま続けられる。この呼び出しは単独で行う。', schema: object({}) },
   ask_user: { description: '管理者へ質問し、回答を待つ。この呼び出しは単独で行う。', schema: object({ question: body() }) },
   memory_remember: { description: '現在の会話で読んだメッセージを出所に、自分の記憶を保存する。', schema: object({ source_message_id: short(), body: body() }) },
   memory_review: { description: '会話のうち今後も役立つ好み・合意・経験・関心を出所付きで選び、自分の記憶として保存する。既存記憶と重なる情報や挨拶は省き、保存不要ならmemoriesを空配列にする。', schema: object(memoryReviewSchema.properties) },
@@ -207,8 +208,10 @@ export function executeTurnTool(runtime: Runtime, actor: Actor, lease: TaskLease
         case 'approval_request': runtime.requestApproval(actor, lease, args.title!, args.detail!); return { waiting_for_approval: true };
         case 'business_task_register': runtime.registerBusinessTask(actor, lease, args.title!, args.detail!); return { registered: true };
         case 'task_delegate': {
-          const child = runtime.tasks.delegate(actor, lease, args.agent_id!, args.prompt!); return { task_id: child.id };
+          const waiting = call.arguments.wait !== false;
+          const child = runtime.tasks.delegate(actor, lease, args.agent_id!, args.prompt!, waiting); return { task_id: child.id, waiting };
         }
+        case 'task_children_wait': return runtime.tasks.waitForChildren(actor, lease);
         case 'ask_user':
           runtime.post(actor, lease.task.room_id, args.question!);
           runtime.reportUpdate(actor, lease.task.room_id, 'question', args.question!.slice(0, 200), args.question!, lease.task.id);

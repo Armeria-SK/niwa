@@ -139,7 +139,7 @@ export class TurnRunner {
         const repeating = observations.repeated_reads>=3 || recentCalls.length === 3 && recentCalls.every(calls => calls === recentCalls[0]);
         const RULES = `${BASE_RULES}\n管理者が設定した共通の指示（権限と停止・予算の制約は引き続き守る）: ${rules.body}\n${REQUEST_GUIDANCE}${repeating ? '\n操作の繰り返しや資料取得の失敗が続いています。直近の結果を確認し、新しい根拠がなければ別の方法か確認できた範囲の回答へ進んでください。' : ''}`;
         const sharedRoom = runtime.rooms(actor).find(room => room.id === lease.task.room_id)?.visibility === 'shared';
-        let configuredTools = turnTools(agent.role === 'leader', external, sharedRoom, workState.autonomous || workState.task.conversation_reply === 1, !!this.#runtime.workareas.settings(actor).enabled).filter(tool=>tool.name!=='task_child_disposition'||workState.child_results.length>0);
+        let configuredTools = turnTools(agent.role === 'leader', external, sharedRoom, workState.autonomous || workState.task.conversation_reply === 1, !!this.#runtime.workareas.settings(actor).enabled).filter(tool=>!['task_child_disposition','task_children_wait'].includes(tool.name)||workState.child_results.length>0);
         if(promptVersion==='structured-v5')configuredTools=scopedPromptTools(configuredTools,workState, runtime.initiatives.enabled());
         const settings = runtime.settings(actor);
         const environment = { conversation: sharedRoom ? 'shared' : 'private', model_supports_tools: adapter.capabilities.supports_tool_calls,
@@ -254,7 +254,9 @@ export class TurnRunner {
           return;
         }
         try {runtime.tasks.assertCompletion(actor,lease);} catch {
-          history.push({role:'user',content:'必要な子タスクが未完了です。途中報告はtask_report、依存の明示的な変更はtask_child_dispositionを使い、完了したと報告しないでください。'});
+          // A rejected early answer must not be replayed as the final reply once the children finish.
+          runtime.tasks.discardStep(actor,lease,step.step);
+          history.push({role:'user',content:'必要な子タスクが未完了です。結果を待つならtask_children_wait、途中報告はtask_report、依存の明示的な変更はtask_child_dispositionを使い、完了したと報告しないでください。'});
           continue;
         }
         runtime.tasks.once(actor, lease, `final:${step.step}`, { content }, () => {
@@ -264,7 +266,7 @@ export class TurnRunner {
         return;
       }
       history.push({ role: 'assistant', content, tool_calls: calls });
-      const mixedWait = calls.length > 1 && calls.some(call => ['task_report', 'execution_wait', 'activity_checkpoint', 'task_handoff', 'task_delegate', 'ask_user', 'approval_request', 'browser_form_submit', 'browser_request_submit', 'task_status_update', 'conversation_ack', 'task_rest', 'conversation_send'].includes(call.name));
+      const mixedWait = calls.length > 1 && calls.some(call => ['task_report', 'execution_wait', 'activity_checkpoint', 'task_handoff', 'task_delegate', 'task_children_wait', 'ask_user', 'approval_request', 'browser_form_submit', 'browser_request_submit', 'task_status_update', 'conversation_ack', 'task_rest', 'conversation_send'].includes(call.name));
       for (const [index, call] of calls.entries()) {
         const phase=/^(program_|environment_|execution_)/.test(call.name)?'execute':/(read|navigate|snapshot|search|list)$/.test(call.name)?'read':'tool';
         runtime.tasks.activity(actor,lease,`${step.step}:${index}`,phase);
