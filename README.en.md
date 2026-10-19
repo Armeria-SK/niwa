@@ -7,17 +7,17 @@
 Niwa is an app where you talk, research, and make things together with several AIs (Bots), each with its own personality and memory.
 It runs on your own PC, and the Bots keep working even after you close the browser.
 
-*Niwa's screens are currently in Japanese only. The detailed guide this README links to is also in Japanese.*
+*Niwa's screens can be shown in English, Japanese, Korean or Simplified Chinese (**Settings → Language**). The detailed guide this README links to is in Japanese.*
 
-![Niwa's shared conversation screen](assets/readme-conversation.png)
+![Niwa's shared conversation screen in English](assets/readme-conversation.en.png)
 
-*The current screen, showing a made-up example conversation. It is not real user data or real model output.*
+*The current screen in English, showing a made-up example conversation. It is not real user data or real model output.*
 
 ## What Niwa can do
 
 - **Talk as a group, or one-on-one**: In the shared conversation, you can see the requests Bots make of each other and how the work is going. You can also talk things over with a single Bot.
 - **Remembers and picks up where it left off**: Niwa saves the last goal, what was made, and what to do next. Bots can pick up where they left off even after you restart your PC.
-- **Acts on its own**: Turn on **Allow autonomous activity (自発的な活動を許可する)** in Settings, and Bots choose what to do on their own, even with nothing scheduled and no one asking. When there is nothing to do, they rest.
+- **Acts on its own**: Turn on **Let Bots act on their own** in Settings, and Bots choose what to do on their own, even with nothing scheduled and no one asking. When there is nothing to do, they rest.
 - **Checks what was made**: Niwa doesn't trust a Bot just because it says "Done." For important artifacts, it keeps the completion criteria linked to the results of checking them.
 - **Stops before anything goes out**: Actions that send something outside, such as submitting a form, don't run until you have looked at the content and approved it.
 - **Runs inside a closed box**: Programs that Bots write run in an isolated place. They can't reach memories, passwords, or similar secrets.
@@ -51,6 +51,7 @@ Niwa is a **trial release**. All the features above work, but some need setup an
 - **No guarantee of correctness**: In the end, a person should check whether a Bot's artifacts are correct.
 - **Long autonomous runs are still being checked**: We are still evaluating how useful Bots are when running on their own overnight or working together on long-term projects.
 - **Works from a smartphone**: We have confirmed that Niwa works from a real smartphone via Tailscale.
+- **Four display languages**: In **Settings → Language**, you can switch the screens between 日本語, English, 한국어 and 简体中文. The Bots reply in the chosen language too (if you write to them in another language, they answer in that one).
 
 ### Still being checked
 
@@ -106,17 +107,17 @@ Opening it at `127.0.0.1` is for **a PC that only you use**. To make it availabl
 
 ### 4. Connect an AI model
 
-In **Settings (設定) → Models & connections (モデルと接続)**, connect at least one model to use. Then talk to the leader Bot.
-Until you connect one, Bots don't reply and don't start acting on their own either (a notice appears on the **Today (きょう)** and **Conversation (会話)** screens).
+In **Settings → Models & connections**, connect at least one model to use. Then talk to the leader Bot.
+Until you connect one, Bots don't reply and don't start acting on their own either (a notice appears on the **Today** and **Chats** screens).
 
 | Option | How you pay | Good for |
 | --- | --- | --- |
-| **Sign in with ChatGPT (experimental)**<br>(ChatGPTで接続（試験対応）) | Within your ChatGPT subscription | People with a paid ChatGPT plan |
+| **Connect with ChatGPT (experimental)** | Within your ChatGPT subscription | People with a paid ChatGPT plan |
 | **Claude (Anthropic API)** | Pay for what you use (Claude Max and Team plans include monthly credits) | People who want to use Claude |
-| **OpenAI-compatible API (OpenAI互換API)** | Pay for what you use, billed by the service you connect to | People with an API key for OpenAI, OpenRouter, or similar |
+| **OpenAI-compatible API** | Pay for what you use, billed by the service you connect to | People with an API key for OpenAI, OpenRouter, or similar |
 | **Local LLM** | Free (performance depends on your PC) | People who want to run models on their own PC |
 
-- **Signing in with ChatGPT is not a method officially provided for third-party apps.** It may suddenly stop working, so it's safer to also connect one other option and pick one of its models under **When the usage limit is reached (利用上限に達したとき)** in the ChatGPT card.
+- **Connecting with ChatGPT is not a method officially provided for third-party apps.** It may suddenly stop working, so it's safer to also connect one other option and pick one of its models under **When usage limits are reached** in the ChatGPT card.
 - API keys are never shown on screen again. They aren't included in backups either.
 - For details on how it behaves (how it waits after errors, reasoning effort, and more), see [Advanced settings](guide/advanced.md#openai互換apiの詳細).
 
@@ -145,7 +146,7 @@ The folder you share with Bots is `/home/niwa/niwa/workspace`. If your default W
 
 ## Backup
 
-In **Settings (設定) → Backup (バックアップ)**, you can turn on daily automatic backups. There is also a **Back up now (今すぐバックアップ)** button.
+In **Settings → Backup**, you can turn on daily automatic backups. There is also a **Back up now** button.
 
 | Protected | Not protected |
 | --- | --- |
@@ -178,10 +179,10 @@ All of these are **optional**. Set up and enable them only when you want to use 
 
 ### Approval for actions that go outside
 
-The following actions run only **after you approve the content of each one**. Items waiting for approval are listed under **Awaiting approval (承認待ち)** on screen.
+The following actions run only **after you approve the content of each one**. Items waiting for approval are listed under **Records → Awaiting approval**.
 
 - Form submissions in the browser, and data sent from pages
-- MCP write tools that you have set to **Write, with approval every time (書き込みあり（毎回承認）)**
+- MCP write tools that you have set to **Writes (approve each time)**
 
 Reviewing and freezing an artifact is a quality check. It is separate from approval to send something outside.
 
@@ -192,8 +193,8 @@ Reviewing and freezing an artifact is a quality check. It is separate from appro
 | Setup stopped | Check the last step shown and its error. Don't try to move on by deleting the file that caused it to stop. |
 | You see `interactive authentication is required` | Run the setup command with sudo in your own Ubuntu terminal. |
 | The screen won't open | Check `services.sh status` and `sudo journalctl -u niwa.service -u niwa-workspace.service -n 80 --no-pager`. |
-| Programs won't run | Use `services.sh status` to check the state of the executor. For project runs, also check the workspace, which environment version is in use (採用中), and whether it is waiting for resources to free up. |
-| A Bot doesn't reply | On screen, check the model connection, the model selection, whether activity is stopped, and **Awaiting approval (承認待ち)**. |
+| Programs won't run | Use `services.sh status` to check the state of the executor. For project runs, also check the workspace, which environment version is marked **In use**, and whether it is waiting for resources to free up. |
+| A Bot doesn't reply | On screen, check the model connection, the model selection, whether activity is stopped, and **Records → Awaiting approval**. |
 
 > Conversations, memories, and settings are stored in `/home/niwa/niwa/`. **Don't delete this folder.**
 
