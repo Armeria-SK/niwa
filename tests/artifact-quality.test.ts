@@ -109,5 +109,6 @@ test('history_read accepts a first page revision sent as the text "null" and the
  const first=read('null','text-null');assert.equal(first.error,undefined);assert.match(String(first.text),/提案、異議、合意/);
  const sha=createHash('sha256').update('提案、異議、合意').digest('hex');
  const bySha=read(sha,'by-sha');assert.equal(bySha.error,undefined);assert.equal(bySha.revision,first.revision);
+ assert.equal(first.artifact_sha256,sha,'the read names the fixed version it came from');
  assert.equal(read('0'.repeat(64),'stale').error,'conflict');
 });
