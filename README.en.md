@@ -62,7 +62,7 @@ Niwa is a **trial release**. All the features above work, but some need setup an
 
 ### What you need
 
-- **Ubuntu** (64-bit Intel/AMD, systemd, cgroup v2). On Windows, you can use Ubuntu on WSL.
+- **Ubuntu** (64-bit Intel/AMD, systemd, cgroup v2). On Windows, you can use Ubuntu on WSL2. WSL and Ubuntu 22.04 need a few extra steps ([Using WSL or Ubuntu 22.04](#using-wsl-or-ubuntu-2204)).
 - **An internet connection and permission to use sudo**
 - **At least 26 GiB of free space** (to reserve 8 GiB for the shared workspace plus 16 GiB for the execution area)
 
@@ -77,8 +77,44 @@ sudo apt-get update
 sudo apt-get install -y git
 # Run only if the niwa user doesn't exist yet
 sudo adduser niwa
-sudo -u niwa git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa
+# Download with permissions that other users can't modify
+sudo -u niwa sh -c 'umask 022 && git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa'
 ```
+
+### Using WSL or Ubuntu 22.04
+
+On a regular Ubuntu 24.04 or later, you can skip this section.
+
+**On WSL**
+
+- Turn on systemd. Add the following to `/etc/wsl.conf`, run `wsl --shutdown` in PowerShell, then open Ubuntu again.
+
+  ```ini
+  [boot]
+  systemd=true
+  ```
+
+- Your terminal and systemd may see different mounts. From here on, run `setup.sh` and `services.sh` with `sudo nsenter -t 1 -m -- sh` instead of `sudo sh`.
+
+  ```sh
+  sudo nsenter -t 1 -m -- sh /home/niwa/niwa/deploy/ubuntu/setup.sh
+  ```
+
+**On Ubuntu 22.04**
+
+On 22.04, the dedicated user that runs programs (`niwa-exec`) must be given CPU limits. If setup stops with `Podman isolation prerequisites are not satisfied`, run the following, then run setup again.
+
+```sh
+uid=$(id -u niwa-exec)
+sudo mkdir -p /etc/systemd/system/user@$uid.service.d
+sudo sh -c "printf '[Service]\nDelegate=cpu cpuset io memory pids\n' > /etc/systemd/system/user@$uid.service.d/niwa-delegate.conf"
+sudo systemctl daemon-reload
+sudo systemctl restart user@$uid.service
+# Done when the output includes cpu
+systemctl show user@$uid.service -p DelegateControllers
+```
+
+If the restart fails with `219/CGROUP`, wait a few seconds and run `sudo systemctl start user@$uid.service`.
 
 ### 2. Set up (one command)
 
@@ -136,6 +172,7 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh start
 sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh restart
 ```
 
+- On WSL, run these with `sudo nsenter -t 1 -m -- sh` instead of `sudo sh` ([Using WSL or Ubuntu 22.04](#using-wsl-or-ubuntu-2204)).
 - You don't need to run setup again for daily use.
 - To stop the Bots' activity, do it from the app's screens.
 - Before updating to a new version, make a backup first ([Notes on starting and stopping](guide/advanced.md#起動と停止の注意)).
@@ -192,6 +229,9 @@ Reviewing and freezing an artifact is a quality check. It is separate from appro
 |---|---|
 | Setup stopped | Check the last step shown and its error. Don't try to move on by deleting the file that caused it to stop. |
 | You see `interactive authentication is required` | Run the setup command with sudo in your own Ubuntu terminal. |
+| Setup stopped at `Group/other writable: /home/niwa/niwa` | Run `sudo -u niwa chmod -R go-w /home/niwa/niwa`, then run setup again. |
+| Setup stopped at `Podman isolation prerequisites are not satisfied` | On Ubuntu 22.04, [give CPU limits to the executor](#using-wsl-or-ubuntu-2204), then run setup again. |
+| On WSL, setup stopped at `Expected mounted ext4` or a `findmnt` error | Run setup again with `sudo nsenter -t 1 -m -- sh /home/niwa/niwa/deploy/ubuntu/setup.sh`. |
 | The screen won't open | Check `services.sh status` and `sudo journalctl -u niwa.service -u niwa-workspace.service -n 80 --no-pager`. |
 | Programs won't run | Use `services.sh status` to check the state of the executor. For project runs, also check the workspace, which environment version is marked **In use**, and whether it is waiting for resources to free up. |
 | A Bot doesn't reply | On screen, check the model connection, the model selection, whether activity is stopped, and **Records → Awaiting approval**. |

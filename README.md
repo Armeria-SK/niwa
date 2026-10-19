@@ -60,7 +60,7 @@ xAIの **Grok Bot**（2026年8月に試験提供開始）と、OpenAIの **Dots*
 
 ### 必要なもの
 
-- **Ubuntu**（Intel/AMDの64ビット、systemd、cgroup v2）。WindowsではWSLのUbuntuで使えます。
+- **Ubuntu**（Intel/AMDの64ビット、systemd、cgroup v2）。WindowsではWSL2のUbuntuで使えます。WSLやUbuntu 22.04では、追加の手順があります（[WSLやUbuntu 22.04で使うとき](#wslやubuntu-2204で使うとき)）。
 - **インターネット接続と、sudoを使える権限**
 - **空き容量26 GiB以上**（共有作業場8 GiB＋実行領域16 GiBを予約するため）
 
@@ -75,8 +75,44 @@ sudo apt-get update
 sudo apt-get install -y git
 # niwaユーザーがまだない場合だけ実行
 sudo adduser niwa
-sudo -u niwa git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa
+# ほかのユーザーから書き換えられない権限で取ってくる
+sudo -u niwa sh -c 'umask 022 && git clone https://github.com/Armeria-SK/niwa.git /home/niwa/niwa'
 ```
+
+### WSLやUbuntu 22.04で使うとき
+
+ふつうのUbuntu 24.04以降なら、この節は飛ばして構いません。
+
+**WSLの場合**
+
+- systemdを有効にします。`/etc/wsl.conf` に次を書き、PowerShellで `wsl --shutdown` を実行してからUbuntuを開き直します。
+
+  ```ini
+  [boot]
+  systemd=true
+  ```
+
+- 端末とsystemdで、見えているマウントが違うことがあります。このあとの `setup.sh` と `services.sh` は、`sudo sh` の代わりに `sudo nsenter -t 1 -m -- sh` で実行してください。
+
+  ```sh
+  sudo nsenter -t 1 -m -- sh /home/niwa/niwa/deploy/ubuntu/setup.sh
+  ```
+
+**Ubuntu 22.04の場合**
+
+22.04では、プログラムを動かす専用ユーザー（`niwa-exec`）にCPUの制限を渡す設定が要ります。セットアップが `Podman isolation prerequisites are not satisfied` で止まったら、次を実行してから、セットアップをもう一度実行します。
+
+```sh
+uid=$(id -u niwa-exec)
+sudo mkdir -p /etc/systemd/system/user@$uid.service.d
+sudo sh -c "printf '[Service]\nDelegate=cpu cpuset io memory pids\n' > /etc/systemd/system/user@$uid.service.d/niwa-delegate.conf"
+sudo systemctl daemon-reload
+sudo systemctl restart user@$uid.service
+# cpu が含まれていれば完了
+systemctl show user@$uid.service -p DelegateControllers
+```
+
+再起動が `219/CGROUP` で失敗したときは、数秒待ってから `sudo systemctl start user@$uid.service` を実行します。
 
 ### 2. セットアップする（1コマンド）
 
@@ -134,6 +170,7 @@ sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh start
 sudo sh /home/niwa/niwa/deploy/ubuntu/services.sh restart
 ```
 
+- WSLでは、`sudo sh` の代わりに `sudo nsenter -t 1 -m -- sh` で実行してください（[WSLやUbuntu 22.04で使うとき](#wslやubuntu-2204で使うとき)）。
 - 毎日の操作で、セットアップをやり直す必要はありません。
 - Botの活動を止めたいときは、画面から止めます。
 - 新しい版に更新するときは、先にバックアップを取ってください（[起動と停止の注意](guide/advanced.md#起動と停止の注意)）。
@@ -190,6 +227,9 @@ sudo -u niwa npm run restore -- --root 今の製品フォルダー --backup バ�
 |---|---|
 | セットアップが止まった | 最後に表示された工程とエラーを確認します。止まった原因のファイルを消して進めようとしないでください。 |
 | `interactive authentication is required` と出る | 自分のUbuntuの端末で、sudo付きのセットアップコマンドを実行します。 |
+| `Group/other writable: /home/niwa/niwa` で止まった | `sudo -u niwa chmod -R go-w /home/niwa/niwa` を実行してから、セットアップをもう一度実行します。 |
+| `Podman isolation prerequisites are not satisfied` で止まった | Ubuntu 22.04なら、[CPUの制限を渡す設定](#wslやubuntu-2204で使うとき)をしてから、もう一度実行します。 |
+| WSLで `Expected mounted ext4` や `findmnt` のエラーで止まった | `sudo nsenter -t 1 -m -- sh /home/niwa/niwa/deploy/ubuntu/setup.sh` で、もう一度実行します。 |
 | 画面が開かない | `services.sh status` と `sudo journalctl -u niwa.service -u niwa-workspace.service -n 80 --no-pager` を確認します。 |
 | プログラムが動かない | `services.sh status` で実行担当（executor）の状態を確認します。案件の実行なら、作業場所・環境の採用状態・資源の空き待ちも見ます。 |
 | Botが返事をしない | 画面で、モデルの接続・モデルの選択・活動停止・承認待ちを確認します。 |
