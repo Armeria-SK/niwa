@@ -21,7 +21,7 @@ export function EveryoneMemory({ tab = 'search', onTab, members, onSaveMemory, o
   const editing = { onSave: changed(onSaveMemory), onDelete: changed(onDeleteMemory) };
   const count = Array.isArray(conflicts) ? conflicts.length : null;
   return <div className="everyone-memory">
-    <Segmented label="みんなの記憶" className="detail-tabs" value={tab} onChange={onTab} options={[{ value: 'search', label: '誰が知っている？' }, { value: 'conflicts', label: '食い違いかもしれない記憶', count }]} />
+    <Segmented underline label="みんなの記憶" className="detail-tabs" value={tab} onChange={onTab} options={[{ value: 'search', label: '誰が知っている？' }, { value: 'conflicts', label: '食い違いかもしれない記憶', count }]} />
     <div className="member-detail-scroll">
       {tab === 'conflicts' ? <Conflicts conflicts={conflicts} members={members} editing={editing} onOpenThread={onOpenThread} onDismiss={async pair => { await api('/memories/conflicts/dismiss', 'POST', { pair }); setVersion(value => value + 1); }} />
         : <WhoKnows version={version} members={members} editing={editing} onOpenThread={onOpenThread} onOpenBot={onOpenBot} />}

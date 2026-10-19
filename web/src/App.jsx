@@ -3,7 +3,7 @@ import { stateMotion } from './avatar.js';
 import { useEffect, useRef, useState } from 'react';
 import { initialSettings, THEMES } from './data.js';
 import { api } from './api.js';
-import { AppearanceEditor, IconButton, Modal, Segmented, EmptyState, SetupNotice, Sentences } from './components.jsx';
+import { AppearanceEditor, Avatar, IconButton, Modal, Segmented, EmptyState, SetupNotice, Sentences } from './components.jsx';
 import { modelSetupNotice } from './providers.js';
 import { markSeen, readSeen, startSeen, unreadOf, writeSeen } from './unread.js';
 import { ChatIcon, UsersIcon, SettingsIcon, SearchIcon, PlusIcon, LockIcon, CloseIcon, InfoIcon, CheckCircleIcon, PinIcon, TodayIcon, RecordsIcon } from './icons.jsx';
@@ -17,6 +17,7 @@ import { ArtifactPreview } from './pages/Productivity.jsx';
 import { Settings } from './pages/Settings.jsx';
 import { DeleteContentDialog } from './ContentActions.jsx';
 import { TrashIcon } from './icons.jsx';
+import { CommandPalette } from './CommandPalette.jsx';
 import { useRoomSearch } from './useRoomSearch.js';
 import { useLiveStream } from './useLiveStream.js';
 
@@ -27,11 +28,17 @@ const navItems = [
   { id: 'records', label: '記録', icon: RecordsIcon },
   { id: 'settings', label: '設定', icon: SettingsIcon },
 ];
+/** 会話の一覧の小さなアイコンの置き方。参加しているBotの数（1〜3体）ごとに決める。 */
+const MINI_POSITIONS = { 1: [{ left: 5, top: 5, size: 28 }], 2: [{ left: 2, top: 3, size: 20 }, { left: 16, top: 15, size: 20 }], 3: [{ left: 1, top: 2, size: 19 }, { left: 18, top: 2, size: 19 }, { left: 9.5, top: 17, size: 19 }] };
 
 export function App() {
   // 今いる画面はURL（#のあと）で決まる。戻る・進むや、URLの共有でも同じ画面が開く。
   const [route, setRoute] = useState(() => parseRoute(window.location.hash));
   const page = route.page;
+  // 設定は今の画面の上に重ねて開く。後ろに見せるのは、設定を開く前にいた画面。
+  const backRoute = useRef(page === 'settings' ? { page: 'today' } : route);
+  if (page !== 'settings') backRoute.current = route;
+  const view = page === 'settings' ? backRoute.current : route;
   const [members, setMembers] = useState([]);
   const [deletedMembers, setDeletedMembers] = useState([]);
   const [threads, setThreads] = useState([]);
@@ -70,33 +77,35 @@ export function App() {
   const resolvedTheme = chosenTheme === 'auto' ? (prefersDark ? 'night' : 'garden') : chosenTheme;
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--canvas').trim() || '#fafaf7');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--canvas').trim() || '#f4f3ee');
   }, [resolvedTheme]);
   const [selectedThread, setSelectedThread] = useState(() => { try { return sessionStorage.getItem('niwa-thread') || ''; } catch { return ''; } });
   // スマートフォンでは、URLに会話のIDがあるときだけ一覧ではなく会話そのものを出す。
-  const mobileDetail = page === 'conversation' && !!route.id;
+  const mobileDetail = view.page === 'conversation' && !!view.id;
   const [scope, setScope] = useState('all');
   const [search, setSearch] = useState('');
   const roomSearch = useRoomSearch(search, threads);
   const [paused, setPaused] = useState(false);
   const [modal, setModal] = useState(null);
-  const [toast, setToast] = useState('');
-  const toastTimer = useRef(null);
-  const threadId = mobileDetail ? route.id : selectedThread;
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [toastOut, setToastOut] = useState(false);
+  const toastTimers = useRef([]);
+  const threadId = mobileDetail ? view.id : selectedThread;
   const thread = threads.find(item => item.id === threadId) || threads[0];
   const [seenMessages, setSeenMessages] = useState(readSeen);
   // The open conversation is read as messages arrive; on a phone only while it is actually shown, not behind the list.
   useEffect(() => {
     if (!ready) return;
     let next = startSeen(threads, seenMessages);
-    const showing = page === 'conversation' && thread && document.visibilityState === 'visible' && (mobileDetail || window.matchMedia('(min-width: 701px)').matches);
+    const showing = view.page === 'conversation' && thread && document.visibilityState === 'visible' && (mobileDetail || window.matchMedia('(min-width: 701px)').matches);
     if (showing) next = markSeen(next, thread);
     if (next !== seenMessages) { setSeenMessages(next); writeSeen(next); }
-  }, [ready, threads, page, thread, mobileDetail, seenMessages]);
+  }, [ready, threads, view.page, thread, mobileDetail, seenMessages]);
   const animatedMembers = members.map(member => ({ ...member, runtimeMotion: celebrating[member.id] ? 'celebrate' : member.runtimeMotion, activity: paused ? '一時停止中' : member.activity }));
   const memberMap = Object.fromEntries([...deletedMembers, ...animatedMembers].map(item => [item.id, item]));
   const attention = attentionItems({ activities, questions, decisions: updates });
-  const waitingOnYou = attention.some(item => item.kind !== 'decisions');
+  const waitingCount = attention.filter(item => item.kind !== 'decisions').length;
 
   useEffect(() => { const onHash = () => setRoute(parseRoute(window.location.hash)); window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash); }, []);
   // 前の名前（#activity など）や読めない部分は、今の形のURLに置き換える（履歴は増やさない）。
@@ -107,8 +116,14 @@ export function App() {
   useEffect(() => { if (route.page === 'conversation' && route.id) setSelectedThread(route.id); }, [route.page, route.id]);
   useEffect(() => { if (route.page === 'records' && route.tab) setRecordTab(route.tab); }, [route.page, route.tab]);
   useEffect(() => { document.title = `Niwa · ${navItems.find(item => item.id === page)?.label || 'きょう'}`; }, [page]);
-  useEffect(() => () => { clearTimeout(toastTimer.current); for (const timer of celebrationTimers.current.values()) clearTimeout(timer); }, []);
+  useEffect(() => () => { for (const timer of toastTimers.current) clearTimeout(timer); for (const timer of celebrationTimers.current.values()) clearTimeout(timer); }, []);
   useEffect(() => { try { sessionStorage.setItem('niwa-thread', selectedThread); } catch { /* Optional browser state. */ } }, [selectedThread]);
+  // Ctrl / ⌘ + K で、どの画面からでも「探す」窓を開く。
+  useEffect(() => {
+    const onKey = event => { if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k') { event.preventDefault(); setPaletteOpen(open => !open); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const pushed = useRef({ busy: false, again: false, timer: null, last: 0 });
   // Pushed hints are coalesced: one refresh at a time, at most about once per 0.8 seconds.
   function requestRefresh() {
@@ -187,18 +202,24 @@ export function App() {
     try { await work(); await refresh(); notify(message); return true; } catch (error) { notify(error.message); return false; }
   }
 
-  function notify(text) { clearTimeout(toastTimer.current); setToast(text); toastTimer.current = setTimeout(() => setToast(''), 4500); }
+  // 知らせは弾んで現れ、細い線で残り時間を見せてから、さっと下がる。
+  function notify(text) {
+    for (const timer of toastTimers.current) clearTimeout(timer);
+    setToast({ text, key: Date.now() }); setToastOut(false);
+    toastTimers.current = [setTimeout(() => setToastOut(true), 4300), setTimeout(() => { setToast(null); setToastOut(false); }, 4560)];
+  }
+  function dismissToast() { for (const timer of toastTimers.current) clearTimeout(timer); setToastOut(true); toastTimers.current = [setTimeout(() => { setToast(null); setToastOut(false); }, 260)]; }
   function navigate(next) { const hash = routeHash(next); setRoute(parseRoute(hash)); if (window.location.hash !== hash) window.location.hash = hash; }
   function openModelSettings() { navigate({ page: 'settings', tab: 'models' }); }
   function openThread(id) { setScope(threads.find(item => item.id === id)?.archived ? 'archived' : 'all'); setSearch(''); setSelectedThread(id); navigate({ page: 'conversation', id }); }
   // 仕事の詳細は記録の上に脇の欄で出す。ほかの画面から開いたときは、閉じるとその画面へ戻る。
-  function openTask(id) { taskReturn.current = page === 'records' ? null : route; navigate({ page: 'records', task: id }); }
+  function openTask(id) { taskReturn.current = view.page === 'records' ? null : view; navigate({ page: 'records', task: id }); }
   function closeTask() {
     // 承認のあとは決めた側と窓の側の両方から呼ばれる。もう仕事を開いていなければ何もしない。
     if (!parseRoute(window.location.hash).task) return;
     const back = taskReturn.current; taskReturn.current = null; navigate(back || { page: 'records', tab: recordTab });
   }
-  const shownBot = route.id === 'everyone' ? 'everyone' : (members.find(item => item.id === route.id) || members[0])?.id;
+  const shownBot = view.id === 'everyone' ? 'everyone' : (members.find(item => item.id === view.id) || members[0])?.id;
   function organizeThread(id, field) {
     const value = !threads.find(item => item.id === id)[field];
     return mutate(() => api(`/rooms/${id}/organization`, 'PATCH', { [field]: value }), field === 'pinned' ? (value ? '会話をピン留めしました' : 'ピン留めを解除しました') : (value ? '保管しました。中身はそのまま残っています。' : '会話を保管から戻しました'));
@@ -285,37 +306,51 @@ export function App() {
   const threadNotice = thread ? modelSetupNotice(readyProviders, thread.scope === 'private' ? memberMap[thread.members[0]] : leader) : null;
   const unreadCounts = new Map(threads.map(item => [item.id, unreadOf(item, seenMessages)]));
   const visibleThreads = threads.filter(item => (scope === 'archived' ? item.archived : !item.archived) && (scope === 'all' || scope === 'archived' || item.scope === scope) && (roomSearch.ids?.has(item.id) || `${item.title} ${item.members.map(id => memberMap[id]?.name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivity - a.lastActivity);
-  if (!ready) return <main className="login-page">{loadError ? <div><p role="alert">{loadError}</p><button className="button secondary" onClick={() => { setLoadError(''); void refresh(); }}>再試行</button></div> : <p role="status">庭を読み込んでいます…</p>}</main>;
+  if (!ready) return <main className="login-page">{loadError ? <div><p role="alert">{loadError}</p><button className="button secondary" onClick={() => { setLoadError(''); void refresh(); }}>再試行</button></div> : <p role="status" className="loading-garden">庭を読み込んでいます…</p>}</main>;
+  const pinnedThreads = visibleThreads.filter(item => item.pinned && scope !== 'archived'), otherThreads = visibleThreads.filter(item => !item.pinned || scope === 'archived');
+  const threadRow = item => <div key={item.id} className="thread-row"><button type="button" className={`thread-item ${selectedThread === item.id && view.page === 'conversation' ? 'selected' : ''}`} aria-current={selectedThread === item.id && view.page === 'conversation' ? 'true' : undefined} onClick={() => openThread(item.id)}>
+    <span className="thread-avatars" aria-hidden="true">{item.members.slice(0, 3).map((id, index, list) => { const at = MINI_POSITIONS[list.length][index]; return memberMap[id] ? <span key={id} style={{ left: at.left, top: at.top }}><Avatar member={memberMap[id]} motion="none" size={at.size} /></span> : null; })}</span>
+    <span className="thread-item-main">
+      <span className="thread-item-top"><strong>{item.pinned ? <PinIcon size={13} aria-label="ピン留め" /> : null}{item.title}{item.scope === 'private' ? <LockIcon size={14} /> : null}</strong><time>{item.time}</time></span>
+      <span className="thread-item-bottom"><span>{item.scope === 'private' ? '個別' : '共有'} · {item.members.slice(0, 3).map(id => memberMap[id]?.name).join(' / ')}</span>{unreadCounts.get(item.id) > 0 ? <span className="unread-count" aria-label={`${unreadCounts.get(item.id)}件の未読`}>{unreadCounts.get(item.id)}</span> : <span className="reply-count">{Math.max(0, item.message_count - 1)}</span>}</span>
+    </span>
+  </button><div className="thread-quick-actions"><IconButton label={item.pinned ? `${item.title}のピン留めを解除` : `${item.title}をピン留め`} onClick={() => organizeThread(item.id, 'pinned')}><PinIcon size={16} /></IconButton><IconButton label={`${item.title}を削除`} onClick={() => setModal({ type: 'delete-content', kind: 'room', id: item.id, title: item.title })}><TrashIcon size={16} /></IconButton></div></div>;
 
-  return <div className={`app-shell page-${page} ${mobileDetail ? 'mobile-detail' : ''}`} >
+  return <div className={`app-shell page-${view.page} ${mobileDetail ? 'mobile-detail' : ''} ${page === 'settings' ? 'settings-open' : ''}`} >
     <a className="skip-link" href="#main-content">メインコンテンツへ</a>
-    <aside className="sidebar" aria-label="ナビゲーションと会話">
-      <a href="#today" className="wordmark" aria-label="Niwa きょうへ">Niwa</a>
-      <nav className="main-nav" aria-label="メインナビゲーション">{navItems.filter(item => item.id !== 'settings').map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={`nav-link ${page === id ? 'active' : ''}`} aria-current={page === id ? 'page' : undefined}><Icon size={25} /><span>{label}</span>{id === 'today' && waitingOnYou ? <span className="nav-notice" title="あなたの番があります" /> : null}</a>)}</nav>
+    <nav className="rail" aria-label="メインナビゲーション">
+      <a href="#today" className="rail-logo" aria-label="Niwa きょうへ"><Avatar shape="pebble" color="currentColor" size={34} /><span>Niwa</span></a>
+      {navItems.filter(item => item.id !== 'settings').map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={`rail-item ${view.page === id ? 'active' : ''}`} aria-current={view.page === id ? 'page' : undefined} aria-label={id === 'today' && waitingCount ? `${label}（あなたの番 ${waitingCount}件）` : undefined}><Icon size={22} /><span>{label}</span>{id === 'today' && waitingCount ? <span className="rail-badge" aria-hidden="true">{waitingCount}</span> : null}</a>)}
+      <span className="rail-gap" />
+      <button type="button" className="rail-item" onClick={() => setPaletteOpen(true)} aria-label="探す（Ctrl K）" title="探す（Ctrl K）"><SearchIcon size={22} /><span>探す</span></button>
+      <button type="button" className={`rail-orb ${paused ? 'paused' : ''}`} onClick={togglePause} aria-pressed={paused} aria-label={paused ? 'Botの活動を再開する' : 'Botの活動を一時停止する'} title={paused ? 'Botの活動を再開する' : 'Botの活動を一時停止する'}><span className="rail-orb-dot" aria-hidden="true" /><span>{paused ? '停止中' : '活動中'}</span></button>
+      <a href="#settings" className={`rail-item ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined}><SettingsIcon size={22} /><span>設定</span></a>
+    </nav>
+    {view.page === 'conversation' ? <aside className="sidebar" aria-label="会話の一覧">
       <div className="thread-navigation">
         <div className="sidebar-section-heading"><h2>会話</h2><IconButton label="新しい会話" onClick={() => setModal({ type: 'new-thread' })}><PlusIcon size={22} /></IconButton></div>
-        <div className="search-field"><SearchIcon size={20} /><input type="search" aria-label="会話を検索" placeholder="会話を検索" value={search} maxLength={200} onChange={e => setSearch(e.target.value)} />{search ? <IconButton label="検索をクリア" onClick={() => setSearch('')}><CloseIcon size={16} /></IconButton> : null}</div>
+        <div className="search-field"><SearchIcon size={18} /><input type="search" aria-label="会話を検索" placeholder="会話を検索" value={search} maxLength={200} onChange={e => setSearch(e.target.value)} />{search ? <IconButton label="検索をクリア" onClick={() => setSearch('')}><CloseIcon size={16} /></IconButton> : <button type="button" className="kbd-hint" onClick={() => setPaletteOpen(true)} aria-label="探す窓を開く（Ctrl K）">Ctrl K</button>}</div>
         <Segmented label="会話の公開範囲" options={[{ value: 'all', label: 'すべて' }, { value: 'shared', label: '共有' }, { value: 'private', label: '個別' }, { value: 'archived', label: '保管' }]} value={scope} onChange={setScope} />
-        {roomSearch.loading ? <p role="status">検索中…</p> : roomSearch.error ? <p role="alert">会話の検索に失敗しました。{roomSearch.error}</p> : null}<div className="thread-list">{visibleThreads.length ? visibleThreads.map(item => <div key={item.id} className="thread-row"><button type="button" className={`thread-item ${selectedThread === item.id && page === 'conversation' ? 'selected' : ''}`} aria-current={selectedThread === item.id && page === 'conversation' ? 'true' : undefined} onClick={() => openThread(item.id)}>
-          <span className="thread-item-top"><strong>{item.pinned ? <PinIcon size={13} aria-label="ピン留め" /> : null}{item.title}{item.scope === 'private' ? <LockIcon size={15} /> : null}</strong><time>{item.time}</time></span>
-          <span className="thread-item-bottom"><span>{item.scope === 'private' ? '個別' : '共有'} · {item.members.slice(0, 3).map(id => memberMap[id]?.name).join(' / ')}</span>{unreadCounts.get(item.id) > 0 ? <span className="unread-count" aria-label={`${unreadCounts.get(item.id)}件の未読`}>{unreadCounts.get(item.id)}</span> : <span className="reply-count">{Math.max(0, item.message_count - 1)}</span>}</span>
-        </button><div className="thread-quick-actions"><IconButton label={item.pinned ? `${item.title}のピン留めを解除` : `${item.title}をピン留め`} onClick={() => organizeThread(item.id, 'pinned')}><PinIcon size={16} /></IconButton><IconButton label={`${item.title}を削除`} onClick={() => setModal({ type: 'delete-content', kind: 'room', id: item.id, title: item.title })}><TrashIcon size={16} /></IconButton></div></div>) : roomSearch.loading || roomSearch.error ? null : <ThreadListEmpty search={search} scope={scope} onClear={() => { setSearch(''); setScope('all'); }} onShowAll={() => setScope('all')} onCreate={() => setModal({ type: 'new-thread' })} />}</div>
+        {roomSearch.loading ? <p role="status">検索中…</p> : roomSearch.error ? <p role="alert">会話の検索に失敗しました。{roomSearch.error}</p> : null}<div className="thread-list">{visibleThreads.length ? <>
+          {pinnedThreads.length ? <><h2 className="thread-group">ピン留め</h2>{pinnedThreads.map(threadRow)}</> : null}
+          {otherThreads.length ? <><h2 className="thread-group">{scope === 'archived' ? '保管した会話' : '最近'}</h2>{otherThreads.map(threadRow)}</> : null}
+        </> : roomSearch.loading || roomSearch.error ? null : <ThreadListEmpty search={search} scope={scope} onClear={() => { setSearch(''); setScope('all'); }} onShowAll={() => setScope('all')} onCreate={() => setModal({ type: 'new-thread' })} />}</div>
       </div>
-      <div className="sidebar-bottom"><a href="#settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined}><SettingsIcon size={23} /><span>設定</span></a></div>
-    </aside>
-    {page === 'today' ? <Today notice={setupNotice ? <SetupNotice notice={setupNotice} onConnect={openModelSettings} /> : null} paused={paused} onPause={togglePause} attention={attention} members={animatedMembers} memberMap={memberMap} activities={activities} artifacts={artifacts} decisions={updates} threads={threads} onOpenTask={openTask} onThread={openThread} onRead={readUpdates} onRecap={() => navigate({ page: 'records', tab: 'recap' })} onArtifact={openArtifact} onMember={openMember} onNewThread={() => setModal({ type: 'new-thread' })} onConflicts={() => navigate({ page: 'bots', id: 'everyone', tab: 'conflicts' })} onTrust={() => navigate({ page: 'records', tab: 'approval' })} /> : null}
-    {page === 'conversation' && !thread ? <main className="conversation" id="main-content">{setupNotice ? <EmptyState title={setupNotice.title} action={<button className="button primary" onClick={openModelSettings}>モデルをつなぐ</button>}>{setupNotice.body}</EmptyState> : <EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState>}</main> : null}
-    {page === 'conversation' && thread ? <Conversation notice={threadNotice ? <SetupNotice notice={threadNotice} onConnect={openModelSettings} /> : null} onThreadAction={organizeThread} drafts={Object.values(live.drafts).filter(draft => draft.room_id === thread.id)} thread={thread} artifacts={artifacts} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => navigate({ page: 'conversation' })} onArtifact={openArtifact} /> : null}
-    {page === 'bots' ? <Members memberMap={memberMap} onOpenBot={id => navigate({ page: 'bots', id, tab: 'memory' })} onOpenThread={openThread} onDormant={(id, dormant) => mutate(() => api(`/agents/${id}/dormancy`, 'PATCH', { dormant }), dormant ? '休ませました。記憶と会話はそのままです。' : '呼び戻しました。')} onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), 'Botを削除しました。会話と成果物は残っています。')} onAdd={addMember} onImported={importedBot} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={route.id} tab={route.tab} onSelect={id => navigate({ page: 'bots', id, tab: route.tab })} onTab={tab => navigate({ page: 'bots', id: shownBot, tab })} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
-    {page === 'records' ? <Activity taskId={route.task} replay={!!route.replay} onReplay={(id, on) => navigate({ page: 'records', task: id, ...(on ? { replay: true } : {}) })} onBranched={async id => { await refresh(); notify('分岐して新しい仕事を作りました。元の仕事はそのままです。'); navigate({ page: 'records', task: id }); }} onOpenTask={openTask} onCloseTask={closeTask} onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '定期実行を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '定期実行を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '定期実行を再開しました' : '定期実行を一時停止しました')} onScheduleToken={async id => { let issued = null; await mutate(async () => { issued = await api(`/schedules/${id}/token`, 'POST', {}); }, '受付用の鍵を発行しました'); return issued; }} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={route.tab || recordTab} onFilter={tab => navigate({ page: 'records', tab })} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(async () => { await api(`/approvals/${id}`, 'POST', { approved, version }); closeTask(); }, approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
-    {page === 'settings' ? <Settings tab={route.tab} onTab={tab => navigate({ page: 'settings', tab })} onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} /> : null}
-    <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined}><Icon size={23} /><span>{label}</span>{id === 'today' && waitingOnYou ? <span className="nav-notice" /> : null}</a>)}</nav>
+    </aside> : null}
+    {view.page === 'today' ? <Today notice={setupNotice ? <SetupNotice notice={setupNotice} onConnect={openModelSettings} /> : null} paused={paused} onPause={togglePause} attention={attention} members={animatedMembers} memberMap={memberMap} activities={activities} artifacts={artifacts} decisions={updates} threads={threads} onOpenTask={openTask} onThread={openThread} onRead={readUpdates} onRecap={() => navigate({ page: 'records', tab: 'recap' })} onArtifact={openArtifact} onMember={openMember} onDM={openDM} onNewThread={() => setModal({ type: 'new-thread' })} onConflicts={() => navigate({ page: 'bots', id: 'everyone', tab: 'conflicts' })} onTrust={() => navigate({ page: 'records', tab: 'approval' })} /> : null}
+    {view.page === 'conversation' && !thread ? <main className="conversation" id="main-content">{setupNotice ? <EmptyState title={setupNotice.title} action={<button className="button primary" onClick={openModelSettings}>モデルをつなぐ</button>}>{setupNotice.body}</EmptyState> : <EmptyState title="最初の会話を始めましょう" action={<button className="button primary" onClick={() => setModal({ type: 'new-thread' })}>会話を始める</button>}>リーダーと名前や好きなことを話してみてください。</EmptyState>}</main> : null}
+    {view.page === 'conversation' && thread ? <Conversation notice={threadNotice ? <SetupNotice notice={threadNotice} onConnect={openModelSettings} /> : null} onThreadAction={organizeThread} drafts={Object.values(live.drafts).filter(draft => draft.room_id === thread.id)} thread={thread} artifacts={artifacts} tasks={activities.filter(task => task.thread === thread.id)} onNewSession={() => setModal({ type: 'new-thread', scope: thread.scope, member: thread.members[0] })} onDelete={() => setModal({ type: 'delete-content', kind: 'room', id: thread.id, title: thread.title })} members={animatedMembers} memberMap={memberMap} paused={paused} onPause={togglePause} onSend={sendMessage} onAppearance={id => setModal({ type: 'appearance', member: id })} onMember={openMember} onBack={() => navigate({ page: 'conversation' })} onArtifact={openArtifact} /> : null}
+    {view.page === 'bots' ? <Members memberMap={memberMap} onOpenBot={id => navigate({ page: 'bots', id, tab: 'memory' })} onOpenThread={openThread} onDormant={(id, dormant) => mutate(() => api(`/agents/${id}/dormancy`, 'PATCH', { dormant }), dormant ? '休ませました。記憶と会話はそのままです。' : '呼び戻しました。')} onDelete={(id, version) => mutate(() => api('/agents/' + id, 'DELETE', { version }), 'Botを削除しました。会話と成果物は残っています。')} onAdd={addMember} onImported={importedBot} maxMembers={Math.max(1, Number(settings.maxMembers) || 10)} members={animatedMembers} selected={view.id} tab={view.tab} onSelect={id => navigate({ page: 'bots', id, tab: view.tab })} onClose={() => navigate({ page: 'bots' })} onTab={tab => navigate({ page: 'bots', id: shownBot, tab })} onUpdate={updateMember} onSaveMemory={saveMemory} onDeleteMemory={deleteMemory} onDM={openDM} paused={paused} /> : null}
+    {view.page === 'records' ? <Activity taskId={view.task} replay={!!view.replay} onReplay={(id, on) => navigate({ page: 'records', task: id, ...(on ? { replay: true } : {}) })} onBranched={async id => { await refresh(); notify('分岐して新しい仕事を作りました。元の仕事はそのままです。'); navigate({ page: 'records', task: id }); }} onOpenTask={openTask} onCloseTask={closeTask} onDeleteArtifact={id => { const item = artifacts.find(item => item.id === id); if (item) setModal({ type: 'delete-content', kind: 'artifact', id, title: item.name }); }} onScheduleDelete={id => mutate(() => api(`/schedules/${id}`, 'DELETE'), '定期実行を削除しました')} schedules={schedules} threads={threads} onScheduleSave={({ id, version, ...body }) => mutate(() => version ? api(`/schedules/${id}`, 'PUT', { ...body, version }) : api('/schedules', 'POST', { ...body, id }), '定期実行を保存しました')} onScheduleToggle={(id, enabled) => mutate(() => api(`/schedules/${id}`, 'PATCH', { enabled }), enabled ? '定期実行を再開しました' : '定期実行を一時停止しました')} onScheduleToken={async id => { let issued = null; await mutate(async () => { issued = await api(`/schedules/${id}/token`, 'POST', {}); }, '受付用の鍵を発行しました'); return issued; }} updates={updates} seen={seen} onRead={readUpdates} artifacts={artifacts} filter={view.tab || recordTab} onFilter={tab => navigate({ page: 'records', tab })} onControl={controlTask} activities={activities} members={memberMap} paused={paused} onPause={togglePause} onDecide={(id, approved, version) => mutate(async () => { await api(`/approvals/${id}`, 'POST', { approved, version }); closeTask(); }, approved ? '承認して仕事を再開しました' : 'この仕事を見送りました')} onThread={openThread} onArtifact={openArtifact} /> : null}
+    {page === 'settings' ? <Settings tab={route.tab} onTab={tab => navigate({ page: 'settings', tab })} onClose={() => navigate(backRoute.current)} onPreviewTheme={setPreviewTheme} settings={settings} onSave={saveSettings} paused={paused} onPause={togglePause} members={animatedMembers} /> : null}
+    <nav className="mobile-nav" aria-label="モバイルナビゲーション">{navItems.map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} className={(id === 'settings' ? page === 'settings' : view.page === id && page !== 'settings') ? 'active' : ''} aria-current={(id === 'settings' ? page === 'settings' : view.page === id && page !== 'settings') ? 'page' : undefined}><Icon size={23} /><span>{label}</span>{id === 'today' && waitingCount ? <span className="nav-badge" aria-label={`あなたの番 ${waitingCount}件`}>{waitingCount}</span> : null}</a>)}</nav>
+    {paletteOpen ? <CommandPalette threads={threads} members={animatedMembers} paused={paused} onClose={() => setPaletteOpen(false)} onThread={openThread} onMember={openMember} onNavigate={navigate} onNewThread={() => setModal({ type: 'new-thread' })} onPause={togglePause} /> : null}
     {modal?.type === 'appearance' ? <Modal title={`${memberMap[modal.member].name}のアイコン`} onClose={() => setModal(null)} className="appearance-modal"><AppearanceEditor member={memberMap[modal.member]} onCancel={() => setModal(null)} onSave={async patch => { if (await updateMember(modal.member, patch)) setModal(null); }} /></Modal> : null}
     {modal?.type === 'delete-content' ? <DeleteContentDialog item={modal} onClose={() => setModal(null)} onDelete={item => mutate(() => api(`/${item.kind === 'room' ? 'rooms' : 'artifacts'}/${item.id}`, 'DELETE', {}), '削除しました')} /> : null}
     {modal?.type === 'artifact' ? <ArtifactPreview key={modal.artifact.id} onOpen={openArtifact} onDelete={() => setModal({ type: 'delete-content', kind: 'artifact', id: modal.artifact.id, title: modal.artifact.name })} artifact={modal.artifact} members={memberMap} onClose={() => setModal(null)} onThread={openThread} /> : null}
     {modal?.type === 'new-thread' ? <NewThreadModal members={animatedMembers} initialScope={modal.scope} initialMember={modal.member} onClose={() => setModal(null)} onCreate={createThread} /> : null}
     {offline ? <div className="offline-notice" role="alert">サーバーに接続できません。<br />つながるまで自動で再試行します。</div> : null}
-    <div className={`toast ${toast ? 'visible' : ''}`} role="status" aria-live="polite">{toast ? <><CheckCircleIcon size={20} /><span><Sentences>{toast}</Sentences></span><IconButton label="通知を閉じる" onClick={() => setToast('')}><CloseIcon size={16} /></IconButton></> : null}</div>
+    <div className="toast-region" role="status" aria-live="polite">{toast ? <div key={toast.key} className={`toast ${toastOut ? 'out' : ''}`}><CheckCircleIcon size={20} /><span><Sentences>{toast.text}</Sentences></span><IconButton label="通知を閉じる" onClick={dismissToast}><CloseIcon size={16} /></IconButton><span className="toast-timer" aria-hidden="true" /></div> : null}</div>
   </div>;
 }
 
@@ -333,10 +368,10 @@ function NewThreadModal({ members, initialScope = 'shared', initialMember, onCre
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  return <Modal title="新しい会話" onClose={onClose}><form onSubmit={async e => { e.preventDefault(); if (busy || !title.trim() || !text.trim()) return; setBusy(true); try { await onCreate({ title: title.trim(), text: text.trim(), scope, member }); } finally { setBusy(false); } }}>
-    <div className="modal-body form-stack"><Segmented label="新しい会話の公開範囲" options={[{ value: 'shared', label: 'みんなと共有' }, { value: 'private', label: '個別に話す' }]} value={scope} onChange={setScope} />
-      {scope === 'private' ? <label className="field"><span>話す相手</span><select value={member} onChange={e => setMember(e.target.value)}>{members.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
+  return <Modal title="新しい会話" onClose={onClose} className="new-thread-modal"><form onSubmit={async e => { e.preventDefault(); if (busy || !title.trim() || !text.trim()) return; setBusy(true); try { await onCreate({ title: title.trim(), text: text.trim(), scope, member }); } finally { setBusy(false); } }}>
+    <div className="modal-body form-stack"><Segmented label="新しい会話の公開範囲" className="wide" options={[{ value: 'shared', label: 'みんなと共有' }, { value: 'private', label: '個別に話す' }]} value={scope} onChange={setScope} />
       <p className="scope-note">{scope === 'private' ? <LockIcon size={16} /> : <UsersIcon size={16} />}{scope === 'private' ? 'あなたと選んだBotだけが参加する会話です。' : 'すべてのBotが読んで、自由に参加できます。'}</p>
+      {scope === 'private' ? <fieldset className="partner-picker"><legend>話す相手</legend><div className="partner-options">{members.map(item => <label key={item.id} className={`partner-option ${member === item.id ? 'selected' : ''}`}><input type="radio" name="partner" value={item.id} checked={member === item.id} onChange={() => setMember(item.id)} /><Avatar member={item} size={38} /><span>{item.name}</span></label>)}</div></fieldset> : null}
       <label className="field"><span>話題</span><input autoFocus placeholder="何について話しますか？" maxLength={80} value={title} onChange={e => setTitle(e.target.value)} required /></label>
       <label className="field"><span>最初のメッセージ</span><textarea rows={4} placeholder="気になること、試してみたいことなど…" value={text} onChange={e => setText(e.target.value)} required /></label>
     </div><div className="form-actions"><button type="button" className="button subtle" onClick={onClose}>やめる</button><button className="button primary" disabled={busy || !title.trim() || !text.trim()}>会話を始める</button></div>

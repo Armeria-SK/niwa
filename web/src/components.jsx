@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { SHAPES, PALETTE, MOTIONS } from './data.js';
 import { CloseIcon, UserIcon, CheckIcon, InfoIcon } from './icons.jsx';
 import { splitSentences } from './sentences.js';
@@ -28,27 +28,65 @@ export function IconButton({ label, children, className = '', ...props }) {
   return <button type="button" className={`icon-button ${className}`} aria-label={label} title={label} {...props}>{children}</button>;
 }
 
-/** 重ねて出す窓。drawer は画面の右から出る脇の欄（スマートフォンでは全面）で、後ろの画面を見失わずに詳しく読むためのもの。 */
+/** 動きを減らす設定の端末では、出し入れの動きを待たずに閉じる。 */
+export const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+/** 重ねて出す窓。drawer は画面の右から出る脇の欄（スマートフォンでは全面）で、後ろの画面を見失わずに詳しく読むためのもの。
+ * 閉じる・Esc・外側を押したときは、さっと下がる動きを見せてから閉じる（呼び出し側が直接閉じたときは、すぐに消える）。 */
 export function Modal({ title, children, onClose, className = '', drawer = false }) {
   const ref = useRef(null);
   const titleId = useId();
+  const [closing, setClosing] = useState(false);
+  const timer = useRef(null);
   useEffect(() => {
     const dialog = ref.current;
     const previous = document.activeElement;
     dialog.showModal();
-    return () => { dialog.close(); previous?.focus?.(); };
+    return () => { clearTimeout(timer.current); dialog.close(); previous?.focus?.(); };
   }, []);
-  return <dialog ref={ref} className={`modal ${drawer ? 'drawer' : ''} ${className}`} aria-labelledby={titleId} onCancel={e => { e.preventDefault(); onClose(); }} onClick={e => { if (e.target === e.currentTarget) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) onClose(); } }}>
-    <div className="modal-top"><h2 id={titleId}>{title}</h2><IconButton label="閉じる" onClick={onClose}><CloseIcon size={21} /></IconButton></div>
+  function requestClose() {
+    if (timer.current) return;
+    if (reducedMotion()) { onClose(); return; }
+    setClosing(true);
+    timer.current = setTimeout(() => { timer.current = null; setClosing(false); onClose(); }, drawer ? 260 : 190);
+  }
+  return <dialog ref={ref} className={`modal ${drawer ? 'drawer' : ''} ${closing ? 'closing' : ''} ${className}`} aria-labelledby={titleId} onCancel={e => { e.preventDefault(); requestClose(); }} onClick={e => { if (e.target === e.currentTarget) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) requestClose(); } }}>
+    <div className="modal-top"><h2 id={titleId}>{title}</h2><IconButton label="閉じる" onClick={requestClose}><CloseIcon size={21} /></IconButton></div>
     {children}
   </dialog>;
 }
 
-export function Segmented({ label, options, value, onChange, className = '' }) {
-  return <div className={`segmented ${className}`} role="group" aria-label={label}>{options.map(option => {
-    const item = typeof option === 'string' ? { value: option, label: option } : option;
-    return <button key={item.value} type="button" aria-pressed={item.value === value} className={value === item.value ? 'selected' : ''} onClick={() => onChange(item.value)}>{item.label}{item.count != null ? <span className="segment-count">{item.count}</span> : null}</button>;
-  })}</div>;
+/** 選んだものの印が、次の選択肢へすべって移る切り替え。underline は下線の印（タブ）、それ以外は面の印。 */
+export function Segmented({ label, options, value, onChange, className = '', underline = false }) {
+  const ref = useRef(null);
+  const [pill, setPill] = useState(null);
+  const shape = options.map(option => typeof option === 'string' ? option : `${option.value}:${option.label}:${option.count ?? ''}`).join('|');
+  useLayoutEffect(() => {
+    const root = ref.current;
+    if (!root) return undefined;
+    let frame = 0;
+    const measure = () => {
+      const button = root.querySelector('button[aria-pressed="true"]');
+      if (!button) { setPill(null); return; }
+      setPill(current => {
+        const next = { x: button.offsetLeft, y: button.offsetTop + (underline ? button.offsetHeight - 3 : 0), w: button.offsetWidth, h: underline ? 3 : button.offsetHeight, ready: current?.ready ?? false };
+        return current && ['x', 'y', 'w', 'h'].every(key => current[key] === next[key]) ? current : next;
+      });
+      frame = requestAnimationFrame(() => setPill(current => current && !current.ready ? { ...current, ready: true } : current));
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    observer?.observe(root);
+    document.fonts?.ready.then(measure).catch(() => {});
+    return () => { observer?.disconnect(); cancelAnimationFrame(frame); };
+  }, [value, shape, underline]);
+  return <div ref={ref} className={`segmented ${underline ? 'underline' : ''} ${className}`} role="group" aria-label={label}>
+    {pill ? <span className={`segmented-pill ${pill.ready ? 'ready' : ''}`} aria-hidden="true" style={{ width: pill.w, height: pill.h, transform: `translate(${pill.x}px, ${pill.y}px)` }} /> : null}
+    {options.map(option => {
+      const item = typeof option === 'string' ? { value: option, label: option } : option;
+      return <button key={item.value} type="button" aria-pressed={item.value === value} className={value === item.value ? 'selected' : ''} onClick={() => onChange(item.value)}>{item.label}{item.count != null ? <span className="segment-count">{item.count}</span> : null}</button>;
+    })}
+  </div>;
 }
 
 /** 文ごとに改行して読みやすくする。文字列でない中身はそのまま出す。 */

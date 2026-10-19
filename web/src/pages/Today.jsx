@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { AttentionList } from '../AttentionList.jsx';
+import { GardenScene } from '../GardenScene.jsx';
 import { MorningBasket, NightPreview, useNight } from '../NightPlan.jsx';
 import { Avatar, StatusLabel, Sentences } from '../components.jsx';
 import { documentName, kindLabel, qualityLabel } from '../artifact-display.js';
@@ -35,6 +36,7 @@ export function Today({ onConflicts, onTrust, notice, paused, onPause, attention
     <div className="today-scroll">
       {notice}
       {paused ? <div className="inline-notice"><PauseIcon size={18} /><p>Botの活動を一時停止しています。<br />再開するまで、仕事も自分から動く活動も進みません。</p></div> : null}
+      {members.length ? <GardenScene members={[...awake, ...sleeping]} paused={paused} onMember={onMember} /> : null}
       {threads.length ? null : <section className="today-card today-start"><h2>最初の会話を始めましょう</h2><p>リーダーに、名前や好きなことを話してみてください。<br />話した内容から、少しずつ記憶が育ちます。</p><button className="button primary" onClick={onNewThread}><ChatIcon size={17} />会話を始める</button></section>}
       <div className="today-grid">
         <div className="today-main">
@@ -51,10 +53,10 @@ export function Today({ onConflicts, onTrust, notice, paused, onPause, attention
           </section>
         </div>
         <aside className="today-side">
-          <section className="today-card" aria-labelledby="today-garden">
-            <h2 id="today-garden">庭の様子</h2>
+          {members.length > 6 ? <section className="today-card" aria-labelledby="today-garden">
+            <h2 id="today-garden">庭のBot</h2>
             <ul className="today-garden">{[...awake, ...sleeping].map(member => <li key={member.id}><button type="button" onClick={() => onMember(member.id)}><Avatar member={member} size={36} /><span className="today-garden-name"><strong>{member.name}</strong><StatusLabel member={member} paused={paused} showDescription={false} /></span><ChevronRightIcon size={15} /></button></li>)}</ul>
-          </section>
+          </section> : null}
           <section className="today-card" aria-labelledby="today-usage">
             <h2 id="today-usage">直近24時間のモデルの使用量</h2>
             {!usage ? <p className="today-empty" role="status">読み込んでいます…</p> : usage.error ? <p className="today-empty">使用量を読み込めませんでした。</p> : usage.calls ? <><dl className="today-usage"><div><dt>呼び出し</dt><dd>{usage.calls.toLocaleString('ja-JP')}回</dd></div><div><dt>入力</dt><dd>{usage.input.toLocaleString('ja-JP')}</dd></div><div><dt>出力</dt><dd>{usage.output.toLocaleString('ja-JP')}</dd></div></dl><p className="field-hint">入力・出力の単位はトークン（モデルが文字を数える単位）です。</p>{usage.estimated ? <p className="field-hint">うち{usage.estimated}回は接続先から量の報告がなく、入力は送る前の見積もりで数えています。</p> : null}</> : <p className="today-empty">直近24時間は、モデルを呼び出していません。</p>}

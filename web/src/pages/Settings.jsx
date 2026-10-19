@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Switch, Segmented } from '../components.jsx';
+import { Modal, Switch, Segmented } from '../components.jsx';
 import { THEMES } from '../data.js';
 import { AutonomyStatus } from '../AutonomyStatus.jsx';
 import { BackupStatus } from '../BackupStatus.jsx';
@@ -11,8 +11,9 @@ import { ModelDefaults } from '../ModelDefaults.jsx';
 import { ModelRoutes } from '../ModelRoutes.jsx';
 import { McpConnections } from '../McpConnections.jsx';
 import { NightPreviewSetting } from '../NightPlan.jsx';
-import { CheckIcon, PauseIcon, PlayIcon, ShieldIcon } from '../icons.jsx';
+import { CheckIcon, GlobeIcon, MemoryIcon, PaletteIcon, PauseIcon, PlayIcon, ShieldIcon, SlidersIcon, UsersIcon } from '../icons.jsx';
 
+const TABS = [{ value: 'theme', label: 'テーマ', icon: PaletteIcon }, { value: 'rules', label: '共通ルール', icon: ShieldIcon }, { value: 'models', label: 'モデルと接続', icon: SlidersIcon }, { value: 'mcp', label: 'MCP接続', icon: GlobeIcon }, { value: 'activity', label: '活動と人数', icon: UsersIcon }, { value: 'backup', label: 'バックアップ', icon: MemoryIcon }];
 const FIELD_TABS = { theme: 'テーマ', rules: '共通ルール', autonomous: '活動と人数', maxMembers: '活動と人数', unlimited: '活動と人数', concurrent: '活動と人数', backupEnabled: 'バックアップ', backupTime: 'バックアップ', backupDays: 'バックアップ' };
 
 /** 上に「いつものモデル」、下に接続先のカード。接続とモデルは、枠ごとにその場で保存する（ページ下の「設定を保存」は使わない）。 */
@@ -30,7 +31,7 @@ function ModelSettings() {
 }
 
 /** 開いている欄はURL（#settings/欄）で決まる。MCPの認証から戻るページと、モデル接続の案内がここへつなぐ。 */
-export function Settings({ tab = 'theme', onTab, onPreviewTheme, settings, onSave, paused, onPause, members }) {
+export function Settings({ tab = 'theme', onTab, onClose, onPreviewTheme, settings, onSave, paused, onPause, members }) {
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
   const [touched, setTouched] = useState(() => new Set());
@@ -44,12 +45,13 @@ export function Settings({ tab = 'theme', onTab, onPreviewTheme, settings, onSav
   // 下の「設定を保存」は、テーマ・共通ルール・活動と人数・バックアップの欄をまとめて保存する。どの欄に未保存の変更があるかを示す。
   const unsaved = [...new Set([...touched].map(field => FIELD_TABS[field]).filter(Boolean))];
   async function submit(e) { e.preventDefault(); const ok = await onSave(draft, touched); if (ok) setTouched(new Set()); setSaved(ok); }
-  return <main className="work-area settings-page" id="main-content" tabIndex={-1}>
-    <div className="page-heading"><div><span className="eyebrow">心地よく、一緒に過ごすために。</span><h1>設定</h1><p>みんなのルールと、活動の仕方を整えます。</p></div></div>
-    <Segmented label="設定のカテゴリ" className="settings-tabs" options={[{ value: 'theme', label: 'テーマ' }, { value: 'rules', label: '共通ルール' }, { value: 'models', label: 'モデルと接続' }, { value: 'mcp', label: 'MCP接続' }, { value: 'activity', label: '活動と人数' }, { value: 'backup', label: 'バックアップ' }]} value={tab} onChange={value => { onTab(value); setSaved(false); }} />
+  // 設定は今の画面の上に重ねて開く。左に欄を並べ、右でその欄を設定する。
+  return <Modal title="設定" onClose={onClose} className="settings-modal"><div className="settings-layout">
+    <nav className="settings-nav" aria-label="設定の欄"><Segmented label="設定のカテゴリ" options={TABS.map(({ value, label, icon: Icon }) => ({ value, label: <><Icon size={19} />{label}</> }))} value={tab} onChange={value => { onTab(value); setSaved(false); }} /></nav>
+    <div className="settings-pane">
     <div className="settings-scroll" key={tab}>
     {tab === 'mcp' ? <McpConnections /> : tab === 'models' ? <ModelSettings /> : <form className="settings-form" onSubmit={submit}>
-      {tab === 'theme' ? <section className="settings-section"><h2>Niwaの色を選ぶ</h2><p>気分に合う配色で、心地よい場所に。</p><div className="theme-picker" role="group" aria-label="配色テーマ">{THEMES.map(theme => <button type="button" key={theme.id} className={`theme-option ${draft.theme === theme.id ? 'selected' : ''}`} aria-pressed={draft.theme === theme.id} onClick={() => change('theme', theme.id)}><span className="theme-colors" aria-hidden="true">{theme.colors.map(color => <span key={color} style={{ backgroundColor: color }} />)}</span><strong>{theme.name}</strong><small>{theme.description}</small>{draft.theme === theme.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">選ぶとすぐに全画面でプレビューできます。<br />「設定を保存」で、このNiwaを開くすべての端末でこの配色を使います。<br />保存せずに設定画面を離れると元に戻ります。</p></section> : null}
+      {tab === 'theme' ? <section className="settings-section"><h2>Niwaの色を選ぶ</h2><p>気分に合う配色で、心地よい場所に。</p><div className="theme-picker" role="group" aria-label="配色テーマ">{THEMES.map(theme => <button type="button" key={theme.id} className={`theme-option ${draft.theme === theme.id ? 'selected' : ''}`} aria-pressed={draft.theme === theme.id} onClick={() => change('theme', theme.id)}><ThemePreview theme={theme} /><strong>{theme.name}</strong><small>{theme.description}</small>{draft.theme === theme.id ? <CheckIcon size={18} /> : null}</button>)}</div><p className="field-hint">選ぶとすぐに全画面でプレビューできます。<br />「設定を保存」で、このNiwaを開くすべての端末でこの配色を使います。<br />保存せずに設定画面を離れると元に戻ります。</p></section> : null}
       {tab === 'rules' ? <section className="settings-section"><h2>みんなが大切にすること</h2><p>全Botに共通して渡す指示です。<br />保存すると、進行中の応答も新しいルールで取り直します。</p><label className="field"><span>共通の指示</span><textarea rows={9} maxLength={20000} value={draft.rules} onChange={e => change('rules', e.target.value)} /></label><p className="field-hint">別の画面で更新された場合は「変更を戻す」で最新の内容を読み直してください。<br />空欄にすると追加の指示を解除します。</p><div className="inline-note"><ShieldIcon size={20} /><span>停止・権限・予算・記憶の分離は本体が管理します。<br />共通の指示や個別の性格設定では上書きできません。</span></div></section> : null}
       {tab === 'activity' ? <section className="settings-section"><h2>Botたちの活動</h2><p>人数と同時に活動できる数は、別々に設定できます。</p>
         <div className="pause-setting"><div><strong>{paused ? '活動を一時停止しています' : 'Botたちは活動中です'}</strong><small>一時停止中も、会話や設定を確認できます。</small></div><button className="button secondary" type="button" onClick={onPause}>{paused ? <PlayIcon size={17} /> : <PauseIcon size={17} />}{paused ? '再開' : '一時停止'}</button></div>
@@ -65,8 +67,16 @@ export function Settings({ tab = 'theme', onTab, onPreviewTheme, settings, onSav
         <div className="field-pair"><label className="field"><span>実行する時刻（日本時間）</span><input type="time" value={draft.backupTime} onChange={e => change('backupTime', e.target.value)} required /></label><label className="field"><span>保存する日数</span><div className="input-with-unit"><input type="number" min="1" max="365" value={draft.backupDays} onChange={e => change('backupDays', e.target.value)} required /><span>日</span></div></label></div>
         <BackupStatus enabled={settings.backupEnabled} />
       </section> : null}
-      <div className="form-actions settings-save"><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />保存しました</> : unsaved.length ? `保存していない変更：${unsaved.join('・')}` : null}</span><button type="button" className="button subtle" disabled={!touched.size} onClick={() => { setDraft(settings); setTouched(new Set()); setSaved(false); }}>変更を戻す</button><button className="button primary" disabled={!touched.size}>設定を保存</button></div>
+      <div className={`form-actions settings-save ${unsaved.length && !saved ? 'dirty' : ''}`}><span className="saved-inline" role="status">{saved ? <><CheckIcon size={16} />保存しました</> : unsaved.length ? `保存していない変更：${unsaved.join('・')}` : null}</span><button type="button" className="button subtle" disabled={!touched.size} onClick={() => { setDraft(settings); setTouched(new Set()); setSaved(false); }}>変更を戻す</button><button className="button primary" disabled={!touched.size}>設定を保存</button></div>
     </form>}
     </div>
-  </main>;
+    </div>
+  </div></Modal>;
+}
+
+/** 配色の見本。左の列・地・紙・主色を小さな画面の形で描く。自動は明るい地と暗い地を斜めに分けて見せる。 */
+function ThemePreview({ theme }) {
+  const night = THEMES.find(item => item.id === 'night').preview;
+  const colors = theme.id === 'auto' ? { ...THEMES.find(item => item.id === 'garden').preview, canvas2: night.canvas } : theme.preview;
+  return <span className={`theme-preview ${theme.id === 'auto' ? 'split' : ''}`} aria-hidden="true" style={{ '--p-canvas': colors.canvas, '--p-canvas-2': colors.canvas2, '--p-rail': colors.rail, '--p-paper': colors.paper, '--p-accent': colors.accent, '--p-soft': colors.soft }}><i /><span><i /><i /><i /></span></span>;
 }
