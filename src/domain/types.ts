@@ -40,6 +40,8 @@ export interface Settings {
   backupTime: string;
   backupEnabled: boolean;
   theme: string | null;
+  /** One of LANGUAGE_IDS: the screens show it and the Bots are asked to reply in it. */
+  language: string;
 }
 export class DomainError extends Error {
   code: 'forbidden' | 'invalid' | 'not_found' | 'conflict' | 'limit';

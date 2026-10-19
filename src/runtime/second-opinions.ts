@@ -9,6 +9,7 @@ import { collectModelEvents, type ModelAdapter } from '../providers/shared/adapt
 import { isReasoningEffort } from '../providers/shared/catalog.ts';
 import { setupFailure } from '../providers/shared/setup-error.ts';
 import { ContextLimit, fitContext } from './context/fit.ts';
+import { replyLanguage } from './context/reply-language.ts';
 import type { ModelCheck } from './artifact-versions.ts';
 
 export type Selection = Pick<Agent, 'provider' | 'model' | 'reasoning'>;
@@ -78,7 +79,7 @@ export class SecondOpinions {
     const members = runtime.agents(actor).map(member => ({ id: member.id, name: member.name, role: member.role, status: member.status }));
     const memories = context.memories.slice(-20);
     const request: ModelRequest = {
-      system_instructions: `${COMPARE}\n管理者が設定した共通の指示: ${rules.body}\nあなた: ${JSON.stringify({ id: agent.id, name: agent.name, role: agent.role, profile: runtime.profile(actor, agent.id) })}\nメンバー: ${JSON.stringify(members)}\n利用できる自分の記憶: ${JSON.stringify(memories.map(memory => ({ id: memory.id, body: memory.body })))}`,
+      system_instructions: `${COMPARE}\n${replyLanguage(runtime.settings(actor).language)}\n管理者が設定した共通の指示: ${rules.body}\nあなた: ${JSON.stringify({ id: agent.id, name: agent.name, role: agent.role, profile: runtime.profile(actor, agent.id) })}\nメンバー: ${JSON.stringify(members)}\n利用できる自分の記憶: ${JSON.stringify(memories.map(memory => ({ id: memory.id, body: memory.body })))}`,
       messages: [...conversation, { role: 'user', content: task ? `現在の依頼: ${task.prompt}` : '現在の依頼: 直前までの会話に、あなたとして返答してください。' }],
       tools: [], response_contract: { type: 'text' }, model_options: {},
       budget: { max_output_tokens: 4096, max_total_tokens: 64_000, max_requests: 1, max_tool_calls: 0 },
@@ -152,7 +153,7 @@ export class SecondOpinions {
     const criteria = artifact.quality ? artifact.quality.plan.criteria.map(c => ({ id: c.id, condition: c.condition, kind: c.kind })) : [OVERALL];
     const content = String(artifact.content);
     const request: ModelRequest = {
-      system_instructions: CHECK,
+      system_instructions: `${CHECK}\n${replyLanguage(this.#runtime.settings(actor).language)}`,
       messages: [{ role: 'user', content: JSON.stringify({ artifact: { name: artifact.name, kind: artifact.kind, description: artifact.description, version: artifact.version, untrusted: true,
         content: content.slice(0, CHECK_CONTENT_LIMIT), truncated: content.length > CHECK_CONTENT_LIMIT }, criteria,
         note: 'criteria の各 id について1件ずつ判断します。実行結果・出典の照合は渡していません。' }) }],
