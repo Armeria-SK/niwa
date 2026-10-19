@@ -138,6 +138,8 @@ const toolId = (id: string) => TOOL_ID.test(id) ? id : `toolu_niwa_${createHash(
 const turnKey = (text: string, calls: readonly { tool_call_id: string; name: string; arguments: unknown }[]) =>
   JSON.stringify([text, calls.map(call => [call.tool_call_id, call.name, call.arguments])]);
 
+/** One prompt-cache breakpoint with the default five-minute lifetime. */
+const CACHE_POINT = { type: 'ephemeral' } as const;
 /**
  * Messages API with Niwa-owned tools, streamed so long outputs never hit a non-streaming timeout.
  * Thinking blocks are provider-private continuation: each adapter instance keeps the blocks of the turns it produced (memory only)
@@ -190,7 +192,9 @@ export class AnthropicAdapter implements ModelAdapter {
       const content: BetaContentBlockParam[] = []; out.push({ role: 'user', content }); return content;
     };
     let pending = new Set<string>();
-    for (const message of messages) {
+    // The system text takes one of the four cache breakpoints; the newest marked messages take the rest.
+    const marked = new Set(messages.flatMap((message, index) => message.role !== 'assistant' && message.cache_point ? [index] : []).slice(-3));
+    for (const [index, message] of messages.entries()) {
       if (message.role === 'assistant') {
         if (pending.size) pending = this.#answerMissing(user(), pending);
         const calls = message.tool_calls ?? [], text = message.content ?? '';
@@ -204,17 +208,18 @@ export class AnthropicAdapter implements ModelAdapter {
         continue;
       }
       const blocks = user();
+      const cache = marked.has(index) ? { cache_control: CACHE_POINT } : {};
       if (message.role === 'tool' && pending.has(toolId(message.tool_call_id))) {
         pending.delete(toolId(message.tool_call_id));
         // tool_result blocks must precede any text in the same user turn.
         const at = blocks.findIndex(block => block.type !== 'tool_result');
-        const result: BetaToolResultBlockParam = { type: 'tool_result', tool_use_id: toolId(message.tool_call_id), content: message.content || '（結果なし）' };
+        const result: BetaToolResultBlockParam = { type: 'tool_result', tool_use_id: toolId(message.tool_call_id), content: message.content || '（結果なし）', ...cache };
         if (at < 0) blocks.push(result); else blocks.splice(at, 0, result);
       } else {
         // A result whose call is no longer in the history is kept as plain data.
         const text = message.role === 'tool' ? JSON.stringify({ tool_result: message.name, content: message.content }) : message.content;
         if (message.role === 'user') for (const image of message.images ?? []) blocks.push({ type: 'image', source: { type: 'base64', media_type: image.media_type, data: image.data } });
-        blocks.push({ type: 'text', text: text || '（空）' });
+        blocks.push({ type: 'text', text: text || '（空）', ...cache });
       }
       if (pending.size && message.role !== 'tool') pending = this.#answerMissing(blocks, pending);
     }
@@ -242,10 +247,11 @@ export class AnthropicAdapter implements ModelAdapter {
     const betas = [...(this.#model.adaptive ? [BINDING_BETA] : []), ...(fallback ? [FALLBACK_BETA] : [])];
     const body: BetaMessageStreamParams = {
       model, max_tokens: this.#model.max_tokens,
-      // Niwa rebuilds the system text per step from task state; identical text within a task stays byte-stable for caching.
-      system: safe.system_instructions, messages: this.#messages(safe.messages),
-      // Automatic prompt caching of the longest stable prefix.
-      cache_control: { type: 'ephemeral' },
+      // Caching happens only where Niwa marks a stable prefix. Automatic caching would put its one breakpoint on the per-call work state
+      // at the end, writing (at a premium) a cache entry no later request can read. Unmarked requests are sent uncached at the plain price.
+      system: safe.messages.some(message => message.role !== 'assistant' && message.cache_point) && safe.system_instructions
+        ? [{ type: 'text' as const, text: safe.system_instructions, cache_control: CACHE_POINT }] : safe.system_instructions,
+      messages: this.#messages(safe.messages),
       // Forced tool_choice is a 400 on current models, so tools are always offered with `auto`. eager_input_streaming stays off
       // so the API keeps validating tool input before streaming it; Niwa runs a call only after the whole message is checked.
       ...(safe.tools.length ? { tools: safe.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.input_schema as { type: 'object'; [key: string]: unknown } })), tool_choice: { type: 'auto' as const } } : {}),
@@ -333,9 +339,10 @@ export class AnthropicAdapter implements ModelAdapter {
     for (const call of calls) events.push({ type: 'tool_call', ...call });
     const usage = message.usage;
     if (isRecord(usage) && Number.isSafeInteger(usage.input_tokens) && Number.isSafeInteger(usage.output_tokens)) {
-      const cached = (Number(usage.cache_read_input_tokens) || 0) + (Number(usage.cache_creation_input_tokens) || 0);
-      const input = Number(usage.input_tokens) + (Number.isSafeInteger(cached) && cached >= 0 ? cached : 0), output = Number(usage.output_tokens);
-      if (input >= 0 && output >= 0) events.push({ type: 'usage', input_tokens: input, output_tokens: output, total_tokens: input + output });
+      const part = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
+      const read = part(usage.cache_read_input_tokens), written = part(usage.cache_creation_input_tokens);
+      const input = Number(usage.input_tokens) + read + written, output = Number(usage.output_tokens);
+      if (input >= 0 && output >= 0) events.push({ type: 'usage', input_tokens: input, output_tokens: output, total_tokens: input + output, cache_read_input_tokens: read, cache_creation_input_tokens: written });
     }
     if (calls.length) {
       this.#turns = [...this.#turns.filter(turn => turn.key !== turnKey(text, calls)), { key: turnKey(text, calls), content: Object.freeze(replay) }].slice(-MAX_REPLAY_TURNS);

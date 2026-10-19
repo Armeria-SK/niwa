@@ -180,7 +180,7 @@ test('tool calls round-trip with thinking blocks replayed verbatim and the reque
     const deltas: ModelOutputDelta[] = [];
     const first = await collectModelEvents(adapter.run({ ...local, tools, reasoning_effort: 'xhigh' }, { timeout_ms: 5000, on_delta: delta => deltas.push(delta) }));
     assert.deepEqual(first, [{ type: 'text_delta', text: '確認します。' }, { type: 'tool_call', tool_call_id: 'toolu_01Artificial', name: 'remember', arguments: { query: '人工の記憶' } },
-      { type: 'usage', input_tokens: 19, output_tokens: 7, total_tokens: 26 }, { type: 'completed', finish_reason: 'tool_calls' }]);
+      { type: 'usage', input_tokens: 19, output_tokens: 7, total_tokens: 26, cache_read_input_tokens: 5, cache_creation_input_tokens: 3 }, { type: 'completed', finish_reason: 'tool_calls' }]);
     assert.equal(deltas.filter(delta => delta.channel === 'text').map(delta => delta.delta).join(''), '確認します。');
     const args = deltas.filter(delta => delta.channel === 'tool_arguments');
     assert.ok(args.length > 1 && args.every(delta => delta.channel === 'tool_arguments' && delta.call_id === 'toolu_01Artificial' && delta.name === 'remember'));
@@ -191,7 +191,8 @@ test('tool calls round-trip with thinking blocks replayed verbatim and the reque
     const body = sent.body!;
     assert.equal(body.model, 'claude-opus-5-5'); assert.equal(body.stream, true); assert.equal(body.max_tokens, 64000);
     assert.equal(body.system, local.system_instructions);
-    assert.deepEqual(body.cache_control, { type: 'ephemeral' });
+    assert.equal(body.cache_control, undefined, 'no automatic caching: an unmarked request is sent uncached');
+    assert.ok(!JSON.stringify(body).includes('cache_control'));
     assert.deepEqual(body.thinking, { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
     assert.deepEqual(body.output_config, { effort: 'xhigh' });
     assert.equal(body.fallbacks, 'default');
@@ -218,6 +219,95 @@ test('tool calls round-trip with thinking blocks replayed verbatim and the reque
     assert.deepEqual((fake.messages()[2]!.body!.messages as { content: unknown }[])[1]!.content, [{ type: 'text', text: '確認します。' }, { type: 'tool_use', id: 'toolu_01Artificial', name: 'remember', input: { query: '人工の記憶' } }]);
   } finally { await fake.close(); }
 });
+
+test('marked messages become cache breakpoints after the system text; at most three, the newest, and never on the volatile tail', async () => {
+  const fake = await server((_req, _body, res) => sse(res, [{ type: 'text', text: '了解' }], 'end_turn'));
+  try {
+    const adapter = new AnthropicAdapter({ apiKey: KEY, fetch: fake.transport }, opus);
+    const messages: ModelRequest['messages'] = [
+      ...[0, 1, 2].map(i => ({ role: 'user' as const, content: `古い${i}`, cache_point: true as const })),
+      { role: 'user', content: '会話の最後', cache_point: true },
+      { role: 'assistant', content: '', tool_calls: [{ tool_call_id: 'toolu_a', name: 'remember', arguments: {} }] },
+      { role: 'tool', tool_call_id: 'toolu_a', name: 'remember', content: '{"ok":true}', cache_point: true },
+      { role: 'user', content: '{"work_state":{}}' }];
+    await collectModelEvents(adapter.run({ ...local, tools, messages }, { timeout_ms: 5000 }));
+    const body = fake.messages()[0]!.body!;
+    assert.equal(body.cache_control, undefined);
+    assert.deepEqual(body.system, [{ type: 'text', text: local.system_instructions, cache_control: { type: 'ephemeral' } }]);
+    const blocks = (body.messages as { content: Record<string, unknown>[] }[]).flatMap(message => message.content);
+    const cached = blocks.filter(block => block.cache_control).map(block => block.text ?? block.type);
+    assert.deepEqual(cached, ['古い2', '会話の最後', 'tool_result'], 'one breakpoint is the system text, so only the newest three marks are kept');
+    assert.equal(blocks.at(-1)!.text, '{"work_state":{}}'); assert.equal(blocks.at(-1)!.cache_control, undefined);
+  } finally { await fake.close(); }
+});
+
+/** The blocks of a Messages API body in order, each with its role, without cache markers. */
+const flat = (body: Body) => (body.messages as { role: string; content: Record<string, unknown>[] }[])
+  .flatMap(message => message.content.map(({ cache_control: _cache, ...block }) => ({ role: message.role, block })));
+const breakpoints = (body: Body) => (body.messages as { content: Record<string, unknown>[] }[]).flatMap(message => message.content).flatMap((block, index) => block.cache_control ? [index] : []);
+const systemText = (body: Body) => Array.isArray(body.system) ? (body.system as { text: string }[]).map(block => block.text).join('') : body.system;
+
+for (const version of ['legacy-v4', 'structured-v5'] as const) {
+  test(`${version}: work calls cache what the next step and the same Bot's next task send again; phase calls are sent uncached`, async () => {
+    const fake = await server((req, body, res) => {
+      if (req.url!.startsWith('/v1/models')) return models(req, res);
+      const names = (body!.tools as { name: string }[] | undefined)?.map(tool => tool.name) ?? [];
+      if (names.length === 1) return sse(res, [{ type: 'text', text: '{"memories":[]}' }], 'end_turn');
+      // Each task searches once (its first work step) and then answers; the memory review exchange is already in its history.
+      if (!JSON.stringify(body!.messages).includes('"name":"memory_search"')) return sse(res, [{ type: 'tool_use', id: `toolu_${fake.messages().length}`, name: 'memory_search', input: { query: '人工' } }], 'tool_use');
+      sse(res, [{ type: 'text', text: '確認して答えました' }], 'end_turn');
+    });
+    const root = mkdtempSync(join(tmpdir(), 'niwa-anthropic-cache-')); const runtime = new Runtime(root);
+    try {
+      const admin = runtime.administrator(); const leader = runtime.bootstrap(admin);
+      const gateway = new ModelGateway(runtime, fake.transport, undefined, undefined, { key: new MemoryApiKeyStore() });
+      await gateway.configureAnthropic({ apiKey: KEY });
+      await gateway.selectAnthropic(leader.id, 'claude-sonnet-5-5', 'medium');
+      const room = runtime.createRoom(admin, 'キャッシュ');
+      runtime.post(admin, room.id, '一つ目の話題'); runtime.post(admin, room.id, '二つ目の話題');
+      const run = async (prompt: string) => {
+        const from = fake.messages().length;
+        runtime.tasks.create(admin, leader.id, room.id, prompt);
+        await new TurnRunner(runtime, gateway.resolve, {}, { promptVersion: version }).run(runtime.tasks.claim(admin)!);
+        return fake.messages().slice(from).map(item => item.body!);
+      };
+      const first = await run('記憶を確かめて答えてください');
+      const phase = first.filter(body => (body.tools as unknown[]).length === 1), work = first.filter(body => (body.tools as unknown[]).length > 1);
+      assert.ok(phase.length >= 1 && work.length === 2, `${phase.length} phase, ${work.length} work calls`);
+      for (const body of phase) { assert.ok(!JSON.stringify(body).includes('cache_control'), 'phase calls are sent uncached'); assert.equal(typeof body.system, 'string'); }
+      if (version === 'structured-v5') {
+        for (const body of work) assert.ok(!JSON.stringify(body).includes('cache_control'), 'structured-v5 changes its system text per call, so it is sent uncached');
+        return;
+      }
+      for (const body of work) {
+        assert.equal(body.cache_control, undefined);
+        assert.ok(Array.isArray(body.system) && (body.system as { cache_control?: unknown }[])[0]!.cache_control);
+        const blocks = flat(body), points = breakpoints(body);
+        assert.equal(points.length, 2, 'after the room conversation and before the work state');
+        assert.match(String(blocks[points[0]!]!.block.text), /二つ目の話題/);
+        assert.equal(points[1], blocks.length - 2); assert.match(String(blocks.at(-1)!.block.text), /work_state/);
+      }
+      // The second step starts with exactly what the first step cached: tools, system and every block up to its last breakpoint.
+      const [one, two] = work as [Body, Body];
+      assert.deepEqual(two.tools, one.tools); assert.equal(systemText(two), systemText(one));
+      const cachedPrefix = flat(one).slice(0, breakpoints(one).at(-1)! + 1);
+      assert.deepEqual(flat(two).slice(0, cachedPrefix.length), cachedPrefix);
+      assert.ok(breakpoints(two).at(-1)! - breakpoints(one).at(-1)! < 20, 'within the lookback of the next breakpoint');
+      // The same Bot's next task starts with the same tools, system text and room conversation as far as the earlier room breakpoint.
+      runtime.post(admin, room.id, '三つ目の話題');
+      const next = (await run('もう一度確かめてください')).filter(body => (body.tools as unknown[]).length > 1)[0]!;
+      assert.deepEqual(next.tools, one.tools); assert.equal(systemText(next), systemText(one));
+      const roomPrefix = flat(one).slice(0, breakpoints(one)[0]! + 1);
+      assert.deepEqual(flat(next).slice(0, roomPrefix.length), roomPrefix);
+      // The cache split is stored next to the total.
+      const db = new DatabaseSync(join(root, 'control.db'), { readOnly: true });
+      try {
+        const rows = db.prepare("SELECT input_tokens,cache_read_input_tokens,cache_creation_input_tokens FROM prompt_runs WHERE phase='work'").all();
+        assert.ok(rows.length >= 3 && rows.every(row => row.input_tokens === 19 && row.cache_read_input_tokens === 5 && row.cache_creation_input_tokens === 3), JSON.stringify(rows));
+      } finally { db.close(); }
+    } finally { runtime.close(); await fake.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+}
 
 test('models without adaptive thinking or server-side fallback get neither option and unanswered calls are closed', async () => {
   const fake = await server((_req, _body, res) => sse(res, [{ type: 'text', text: 'ok' }], 'end_turn', 'claude-haiku-4-5'));
@@ -415,7 +505,7 @@ test('upgrading a schema51 database widens the provider and fallback constraints
     runtime = new Runtime(root); admin = runtime.administrator();
     const after = new DatabaseSync(join(root, 'control.db'));
     try {
-      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 64);
+      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 65);
       assert.equal(JSON.stringify(after.prepare('SELECT * FROM agents ORDER BY id').all()), before);
       assert.equal(after.prepare('SELECT count(*) AS count FROM agent_autonomy').get()!.count, autonomy);
       assert.match(String(after.prepare("SELECT sql FROM sqlite_schema WHERE name='agents'").get()!.sql), /'openai_compatible','anthropic'/);

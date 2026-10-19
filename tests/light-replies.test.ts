@@ -178,6 +178,9 @@ test('review marks are kept per conversation: a Bot\'s first reply in another co
  r.post(admin,room.id,'話して');
  c.say(1);r.tasks.create(admin,a.id,room.id,'聞き手と話して');await drain(admin);
  assert.equal(count(log,b.id,'memory_review'),1);
- c.say(1);r.tasks.create(admin,a.id,other.id,'別室で聞き手と');await drain(admin);
+ // b answers mid-exchange there, so only its first-reply rule (not the end of the exchange) can make it review.
+ c.say(2);r.tasks.create(admin,a.id,other.id,'別室で聞き手と');await drain(admin);
+ const reply=r.tasks.list(admin).find(task=>task.agent_id===b.id&&task.room_id===other.id)!;
+ assert.equal(log.filter(entry=>entry.task===reply.id&&entry.phase==='memory_review').length,1);
  assert.equal(count(log,b.id,'memory_review'),2);
 });

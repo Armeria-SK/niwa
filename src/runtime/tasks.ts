@@ -487,7 +487,8 @@ export class Tasks {
   finishPrompt(actor:Actor,lease:TaskLease,id:number,events:readonly ModelEvent[]){
     this.get(actor,lease.task.id);const usage=events.filter(e=>e.type==='usage').at(-1);
     const status=events.some(e=>e.type==='failed')?'failed':events.some(e=>e.type==='completed')?'completed':'unknown';
-    this.#db.prepare('UPDATE prompt_runs SET status=?,input_tokens=?,output_tokens=? WHERE id=? AND task_id=?').run(status,usage?.input_tokens??null,usage?.output_tokens??null,id,lease.task.id);
+    this.#db.prepare('UPDATE prompt_runs SET status=?,input_tokens=?,output_tokens=?,cache_read_input_tokens=?,cache_creation_input_tokens=? WHERE id=? AND task_id=?')
+      .run(status,usage?.input_tokens??null,usage?.output_tokens??null,usage?.cache_read_input_tokens??null,usage?.cache_creation_input_tokens??null,id,lease.task.id);
     // A successful response ends the failure streak so backoff and progress describe only consecutive failures.
     if(status==='completed')this.#db.prepare('DELETE FROM provider_failures WHERE task_id=?').run(lease.task.id);
   }
@@ -503,7 +504,8 @@ export class Tasks {
   finishAdminPrompt(actor:Actor,id:number,events:readonly ModelEvent[]){
     this.#admin(actor);const usage=events.filter(e=>e.type==='usage').at(-1);
     const status=events.some(e=>e.type==='failed')?'failed':events.some(e=>e.type==='completed')?'completed':'unknown';
-    this.#db.prepare('UPDATE prompt_runs SET status=?,input_tokens=?,output_tokens=? WHERE id=? AND task_id IS NULL').run(status,usage?.input_tokens??null,usage?.output_tokens??null,id);
+    this.#db.prepare('UPDATE prompt_runs SET status=?,input_tokens=?,output_tokens=?,cache_read_input_tokens=?,cache_creation_input_tokens=? WHERE id=? AND task_id IS NULL')
+      .run(status,usage?.input_tokens??null,usage?.output_tokens??null,usage?.cache_read_input_tokens??null,usage?.cache_creation_input_tokens??null,id);
     return {status,input_tokens:usage?.input_tokens??null,output_tokens:usage?.output_tokens??null};
   }
   /** The work a Bot's message answered or reported on, when the message was posted by work. */

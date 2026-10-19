@@ -33,6 +33,17 @@ function endsExchange(step: { events: readonly ModelEvent[] }): boolean {
   const recipients = calls[0]!.arguments.recipient_ids;
   return calls.length === 1 && (calls[0]!.name === 'task_rest' || calls[0]!.name === 'conversation_send' && Array.isArray(recipients) && recipients.length === 0);
 }
+/**
+ * Prompt-cache points for a work call: after the room conversation, which the same Bot's next reply can read back while it stays
+ * the same, and after the step history, which the next step of this task extends. The work state that follows changes every call.
+ */
+function withCachePoints(request: ModelRequest, room: ReadonlySet<ModelMessage>): ModelRequest {
+  const tail = request.messages.length - 2;
+  let roomEnd = -1;
+  request.messages.forEach((message, index) => { if (room.has(message)) roomEnd = index; });
+  const points = new Set([roomEnd, tail].filter(index => index >= 0 && request.messages[index]!.role !== 'assistant'));
+  return points.size ? { ...request, messages: request.messages.map((message, index) => points.has(index) ? { ...message, cache_point: true } as ModelMessage : message) } : request;
+}
 /** Runs one claimed task; model APIs never own the tool loop or the bot's lifetime. */
 export class TurnRunner {
   #runtime: Runtime;
@@ -209,7 +220,10 @@ export class TurnRunner {
         const draft=phaseTool?undefined:runtime.live.open({room_id:lease.task.room_id,agent_id:agent.id,task_id:lease.task.id});
         let events: readonly ModelEvent[]; let draftEnd: DraftEnd = 'failed';
         try {
-          events = await collectModelEvents(adapter.run(fitted.request, { timeout_ms: 600_000, ...(signal ? { signal } : {}), ...(draft ? { on_delta: delta => draft.push(delta) } : {}) }),
+          // Only legacy work calls are cached: their tools and system text stay the same across a task's steps and the same Bot's replies.
+          // Phase calls change both, and structured-v5 changes its system text per call, so caching them would only pay the write premium.
+          const sent = promptVersion === 'legacy-v4' && !phaseTool && !reportingReads ? withCachePoints(fitted.request, new Set(base)) : fitted.request;
+          events = await collectModelEvents(adapter.run(sent, { timeout_ms: 600_000, ...(signal ? { signal } : {}), ...(draft ? { on_delta: delta => draft.push(delta) } : {}) }),
             { ...(signal ? { signal } : {}), timeout_ms: 605_000, max_tool_calls: 8, max_total_bytes: 2 * 1024 * 1024,on_summary:summary=>runtime.tasks.summary(actor,lease,String(promptRun),context.revision,summary),on_event:event=>{if(event.type!=='reasoning_summary'&&runtime.tasks.active(actor,lease))runtime.tasks.activity(actor,lease,String(promptRun),modelPhase,'running',context.revision);} });
           const failed=events.find(event=>event.type==='failed');
           draftEnd=signal?.aborted||failed?.error.code==='ABORTED'?'cancelled':failed?'failed':'completed';

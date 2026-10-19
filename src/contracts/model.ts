@@ -36,8 +36,10 @@ export const modelImageSchema = Type.Object(
 export type ModelImage = Static<typeof modelImageSchema>;
 
 /** Images ride on a user message and go only to an adapter whose capabilities say it can see them. */
+/** A provider that caches prompts may end a cached prefix after a message marked `cache_point`; other providers ignore the mark. */
+const cachePointSchema = Type.Optional(Type.Literal(true));
 export const userModelMessageSchema = Type.Object(
-  { role: Type.Literal('user'), content: Type.String(), images: Type.Optional(Type.Array(modelImageSchema, { minItems: 1, maxItems: 5 })) },
+  { role: Type.Literal('user'), content: Type.String(), images: Type.Optional(Type.Array(modelImageSchema, { minItems: 1, maxItems: 5 })), cache_point: cachePointSchema },
   { additionalProperties: false },
 );
 /** The request with image bytes left out, for size and shape checks; images are bounded separately by their schema. */
@@ -62,6 +64,7 @@ export const toolModelMessageSchema = Type.Object(
     tool_call_id: Type.String({ minLength: 1, maxLength: 128 }),
     name: Type.String({ minLength: 1, maxLength: 128 }),
     content: Type.String(),
+    cache_point: cachePointSchema,
   },
   { additionalProperties: false },
 );
@@ -191,9 +194,13 @@ export const modelEventSchema = Type.Union([
   Type.Object(
     {
       type: Type.Literal('usage'),
+      /** All input, cached or not. */
       input_tokens: Type.Integer({ minimum: 0 }),
       output_tokens: Type.Integer({ minimum: 0 }),
       total_tokens: Type.Integer({ minimum: 0 }),
+      /** The part of input_tokens read from or written to the provider's prompt cache, when the provider reports it. */
+      cache_read_input_tokens: Type.Optional(Type.Integer({ minimum: 0 })),
+      cache_creation_input_tokens: Type.Optional(Type.Integer({ minimum: 0 })),
     },
     { additionalProperties: false },
   ),
