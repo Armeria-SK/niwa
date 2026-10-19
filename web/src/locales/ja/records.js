@@ -51,6 +51,7 @@ export default {
 
   // 仕事の履歴と経過の再生で使う、状態の変化の名前
   eventQueued: '実行待ち',
+  eventSummarySkipped: '引継ぎ整理を見送り',
   eventRunning: '実行を開始',
   eventCompleted: '完了',
   eventFailed: '失敗',

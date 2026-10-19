@@ -16,7 +16,7 @@ import { turnTools, executeAsyncTurnTool, type ExternalTools } from './turn-tool
 import { ContextLimit, fitContext, type FittedContext } from './context/fit.ts';
 import { Value } from '@sinclair/typebox/value';
 import { memoryReviewSchema } from '../domain/memory-review.ts';
-import { summarySchema } from '../domain/summary.ts';
+import { summarySchema, repairSummary } from '../domain/summary.ts';
 import { digestDeltaSchema, type DigestDelta } from '../domain/room-digest.ts';
 import { composeDigestRoom } from './context/room.ts';
 import type { RoomMode } from './room-digests.ts';
@@ -275,7 +275,19 @@ export class TurnRunner {
         if(reportingReads&&events.some(event=>event.type==='tool_call'&&!['conversation_send','task_report'].includes(event.name))){
           runtime.tasks.waitForReadRecovery(actor,lease,observations.retry_at!);return;
         }
-        if (phaseTool) {
+        if (phaseTool === 'task_summary_save') {
+          // The server fills what it knows (each source's revision) and cuts what is too long. A summary only helps later searches,
+          // so one that still does not fit is skipped and the finished answer goes out now, instead of waiting to ask again.
+          const calls = events.filter((event): event is Extract<ModelEvent, { type: 'tool_call' }> => event.type === 'tool_call');
+          let raw: unknown = calls.length === 1 && calls[0]!.name === phaseTool ? calls[0]!.arguments : undefined;
+          if (raw === undefined && !calls.length) try { raw = JSON.parse(events.filter(event => event.type === 'text_delta').map(event => event.text).join('')); } catch { /* not JSON */ }
+          const repaired = repairSummary(raw, (inputState.summary_sources ?? []) as { kind: string; source_id: string; revision: string }[]);
+          if (!repaired.summary) {
+            console.error(`Handoff summary skipped for task ${lease.task.id}: ${calls.length > 1 ? 'several calls' : calls.length && calls[0]!.name !== phaseTool ? `called ${calls[0]!.name}` : `invalid ${repaired.invalid.join(', ')}`}`);
+            runtime.tasks.skipSummary(actor, lease); continue;
+          }
+          events = [{ type: 'tool_call', name: phaseTool, tool_call_id: calls[0]?.tool_call_id ?? phaseTool, arguments: repaired.summary }, { type: 'completed', finish_reason: 'tool_calls' }];
+        } else if (phaseTool) {
           let review = events.filter(event => event.type === 'tool_call');
           if (!review.length && events.some(event => event.type === 'completed' && event.finish_reason === 'stop')) {
             try {
