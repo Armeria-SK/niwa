@@ -747,6 +747,20 @@ export class Tasks {
       return;
     }
     if(this.independentActivity(actor,lease)) return; // Deliberate delegation only; status messages never start reply chains.
+    // A Bot answers what piled up in one turn: a reply it has not started yet takes the new message,
+    // instead of another reply that would work from a stale view alongside it.
+    const autonomous = this.#autonomyLineage(task.id).autonomous;
+    const pending = this.#db.prepare(`SELECT id,prompt FROM tasks WHERE agent_id=? AND room_id=? AND conversation_reply=1
+      AND state='queued' AND attempt=0 AND paused=0 AND lease_token IS NULL ORDER BY rowid DESC`).all(agentId, task.room_id) as { id: string; prompt: string }[];
+    const sender = this.#db.prepare('SELECT name FROM agents WHERE id=?').get(task.agent_id)?.name;
+    for (const row of pending) {
+      if (this.#autonomyLineage(row.id).autonomous !== autonomous) continue;
+      const merged = `${row.prompt}\n\n（続けて届いた${sender ? `${String(sender)}からの` : ''}発言）\n${prompt}`;
+      if (merged.length > 20_000) break;
+      this.#db.prepare('UPDATE tasks SET prompt=? WHERE id=?').run(merged, row.id);
+      this.#event(row.id, 'merged');
+      return;
+    }
     const next = this.create(actor, agentId, task.room_id, prompt, task.deadline_at);
     this.#db.prepare('UPDATE tasks SET parent_id=?,conversation_reply=1,source_message_id=? WHERE id=?').run(task.id, sourceMessageId ?? null, next.id);
   }
