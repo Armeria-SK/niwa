@@ -399,6 +399,49 @@ test('pause and dormancy invalidate running leases and preserve queued work', t 
   assert.equal(f.tasks.claim(f.admin)?.task.id, task.id);
 });
 
+test('a dormant recipient releases its required children so the parent does not wait forever', t => {
+  const f = fixture(t);
+  const parent = f.tasks.create(f.admin, f.leader.id, f.room.id, '共同作業');
+  const parentLease = f.tasks.claim(f.admin)!;
+  const child = f.tasks.delegate(f.parentActor, parentLease, f.child.id, '子の担当');
+  const childLease = f.tasks.claim(f.admin)!;
+  assert.equal(childLease.task.id, child.id);
+  const grandchild = f.tasks.delegate(f.childActor, childLease, f.leader.id, '孫の担当', false);
+  f.tasks.wait(f.childActor, childLease, 'waiting_provider', 'モデル応答を完了できませんでした (QUOTA_EXCEEDED)。再確認予定まで待機します。', true);
+  f.runtime.setDormant(f.parentActor, f.child.id, true);
+  // The wait used to stay forever: retries and claims skip dormant Bots.
+  f.tasks.retryProviders(f.admin, Date.now() + 3_600_000);
+  assert.equal(f.tasks.get(f.admin, child.id).state, 'waiting_provider');
+  f.runtime.updateSettings(f.admin, { paused: true });
+  f.tasks.releaseDormantChildren(f.admin);
+  assert.equal(f.tasks.get(f.admin, parent.id).state, 'waiting_child');
+  f.runtime.updateSettings(f.admin, { paused: false });
+  assert.throws(() => f.tasks.releaseDormantChildren(f.parentActor), /Administrator/);
+  f.tasks.releaseDormantChildren(f.admin);
+  assert.equal(f.tasks.get(f.admin, child.id).state, 'cancelled');
+  assert.match(f.tasks.get(f.admin, child.id).result!, /休眠中のため取り消しました/);
+  assert.equal(f.tasks.get(f.admin, grandchild.id).state, 'cancelled');
+  assert.equal(f.tasks.get(f.admin, parent.id).state, 'queued');
+  const resumed = f.tasks.claim(f.admin)!;
+  assert.equal(resumed.task.id, parent.id);
+  // Waking the recipient does not revive the cancelled request.
+  f.runtime.setDormant(f.parentActor, f.child.id, false);
+  assert.equal(f.tasks.claim(f.admin), undefined);
+  // Without wait, a required child still gates completion; detached children and the Bot's own requests stay queued.
+  const required = f.tasks.delegate(f.parentActor, resumed, f.child.id, '並行の担当', false);
+  const detached = f.tasks.delegate(f.parentActor, resumed, f.child.id, '独立の担当', false);
+  f.tasks.childDisposition(f.parentActor, resumed, detached.id, 'independent', f.tasks.controlRevision(f.parentActor, detached.id));
+  const own = f.tasks.create(f.admin, f.child.id, f.room.id, '自分の仕事');
+  f.runtime.setDormant(f.parentActor, f.child.id, true);
+  assert.throws(() => f.tasks.assertCompletion(f.parentActor, resumed), /Required children remain/);
+  f.tasks.releaseDormantChildren(f.admin);
+  assert.equal(f.tasks.get(f.admin, required.id).state, 'cancelled');
+  assert.equal(f.tasks.get(f.admin, detached.id).state, 'queued');
+  assert.equal(f.tasks.get(f.admin, own.id).state, 'queued');
+  assert.equal(f.tasks.get(f.admin, parent.id).state, 'running');
+  f.tasks.assertCompletion(f.parentActor, resumed);
+});
+
 test('restart recovers interrupted model work; user replies and wait states survive', t => {
   const f = fixture(t);
   const task = f.tasks.create(f.admin, f.leader.id, f.room.id, '確認が必要');
