@@ -52,6 +52,7 @@ export class Scheduler {
     this.#guard('recoverCountLimits', () => tasks.recoverCountLimits(this.#admin));
     this.#guard('expire', () => tasks.expire(this.#admin));
     this.#guard('retryProviders', () => tasks.retryProviders(this.#admin));
+    this.#guard('releaseDormantChildren', () => tasks.releaseDormantChildren(this.#admin));
     this.#guard('schedules', () => this.#runtime.schedules.dispatch(this.#admin));
     if (Date.now() >= this.#nextWakeCheck) {
       this.#nextWakeCheck = Date.now() + 1000;

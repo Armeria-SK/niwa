@@ -130,6 +130,7 @@ const exact = {
 
   // サーバーが英語で残す仕事の結果（取り消し・期限切れ）
   'Cancelled': 'Canceled.',
+  '依頼先のBotが休眠中のため取り消しました。休眠を解除しても再開しません。必要なら依頼し直すか、ほかの方法で進めてください。': 'Canceled because the assigned Bot is dormant. Waking it won’t restart this; ask again or find another way.',
   'Task deadline exceeded': 'Ended because the deadline passed.',
 
   // できごと（updates の title・detail）

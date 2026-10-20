@@ -23,6 +23,7 @@ type RecordWithLease = Task & { lease_token: string | null };
 const publicTask = ({ lease_token: _token, ...task }: RecordWithLease): Task => task;
 const CONVERSATION_LIMIT_REASON = '会話の継続が16回の区切りに達しました。続ける場合は仕事の詳細から再開してください。';
 const TURN_LIMIT_REASON = 'この仕事の実行区切りに達しました。続行する場合は、新しい依頼として必要な範囲を指定してください。';
+const DORMANT_CHILD_RESULT = '依頼先のBotが休眠中のため取り消しました。休眠を解除しても再開しません。必要なら依頼し直すか、ほかの方法で進めてください。';
 /** Model input lists at most this many open tasks of the conversation, and finished ones only from the last half hour, at most this many. */
 const LEAN_OPEN=20, LEAN_FINISHED=8, LEAN_FINISHED_MS=30*60_000;
 const READ_OBSERVATION=/^(task_history_read|history_read|history_search|memory_search|web_read|web_search|browser_navigate|browser_snapshot|browser_follow|workspace_read|workspace_list)$/;
@@ -867,6 +868,21 @@ export class Tasks {
         if (!this.#access.participant(task.agent_id, task.room_id)) continue;
         this.#change(task.id, 'queued');
         this.#db.prepare('UPDATE tasks SET lease_token=NULL WHERE id=?').run(task.id);
+      }
+    });
+  }
+  /** A dormant Bot claims and retries nothing, so its required children would hold their parents forever. Hand the parent back instead. */
+  releaseDormantChildren(actor: Actor): void {
+    this.#admin(actor);
+    if (this.#paused()) return;
+    transaction(this.#db, () => {
+      const children = this.#db.prepare(`SELECT t.id,t.parent_id FROM tasks t JOIN agents a ON a.id=t.agent_id JOIN tasks p ON p.id=t.parent_id
+        WHERE a.status='dormant' AND t.state NOT IN ('completed','failed','cancelled') AND p.state NOT IN ('completed','failed','cancelled')
+        AND t.id NOT IN(SELECT task_id FROM task_child_dependencies WHERE required=0)`).all() as { id: string; parent_id: string }[];
+      for (const child of children) {
+        for (const descendant of this.#db.prepare('SELECT id FROM tasks WHERE parent_id=?').all(child.id) as { id: string }[]) this.#cancelTree(descendant.id);
+        this.#change(child.id, 'cancelled', DORMANT_CHILD_RESULT);
+        this.#resumeParent(child.parent_id);
       }
     });
   }
