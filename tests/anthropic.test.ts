@@ -388,6 +388,9 @@ test('HTTP failures map to trusted classes with retry-after and never echo the k
     reply = error(404, 'not_found_error'); result = await failure(); assert.equal(result.code, 'INVALID_REQUEST'); assert.equal(result.retryable, false);
     reply = error(400, 'invalid_request_error'); result = await failure(); assert.equal(result.code, 'INVALID_REQUEST'); assert.equal(result.retryable, false);
     reply = error(402, 'billing_error'); assert.equal((await failure()).code, 'QUOTA_EXCEEDED');
+    // An exhausted credit balance comes back as a plain 400; it waits like a quota instead of stopping as a broken request.
+    reply = res => json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API.' } });
+    result = await failure(); assert.equal(result.code, 'QUOTA_EXCEEDED'); assert.equal(result.retryable, true); assert.match(result.message, /クレジット/);
     const before = Math.floor(Date.now() / 1000);
     reply = error(429, 'rate_limit_error', { 'retry-after': '30' }); result = await failure();
     assert.equal(result.code, 'RATE_LIMITED'); assert.equal(result.retryable, true); assert.ok(result.reset_at! >= before + 29 && result.reset_at! <= before + 32);

@@ -52,6 +52,13 @@ function retryAfter(headers: Headers | undefined, now = Date.now()): number | un
   return Math.ceil(Math.min(at, now + 86_400_000) / 1000);
 }
 /** SDK error classes, most specific first. Messages are fixed Japanese text: SDK messages may quote response bodies. */
+const creditExhausted = (error: InstanceType<typeof Anthropic.APIError>) => /credit balance/i.test(String(error.message));
+/** What the server log may say about a failed call: status, error type and whether it was the credit balance. Never the body, which can echo input. */
+export function anthropicFailureNote(error: unknown): string | undefined {
+  if (!(error instanceof Anthropic.APIError)) return undefined;
+  const type = typeof error.type === 'string' && /^[a-z_]{1,40}$/.test(error.type) ? error.type : 'unknown';
+  return `Anthropic request failed: status ${error.status ?? 'none'}, type ${type}${creditExhausted(error) ? ', credit balance too low' : ''}`;
+}
 export function anthropicFailure(error: unknown, sent: boolean, timedOut = false): Failure {
   const base = { provider_request_sent: sent, origin: 'provider' as const };
   if (error instanceof LocalError) return error.failure;
@@ -63,7 +70,9 @@ export function anthropicFailure(error: unknown, sent: boolean, timedOut = false
   if (error instanceof Anthropic.AuthenticationError) return { ...base, code: 'AUTHENTICATION_FAILED', retryable: false, message: MESSAGES.auth };
   if (error instanceof Anthropic.PermissionDeniedError) return { ...base, code: 'PERMISSION_DENIED', retryable: false, message: MESSAGES.permission };
   if (error instanceof Anthropic.NotFoundError) return { ...base, code: 'INVALID_REQUEST', retryable: false, message: MESSAGES.not_found };
-  if (error instanceof Anthropic.BadRequestError) return { ...base, code: 'INVALID_REQUEST', retryable: false, message: MESSAGES.request };
+  // The API answers an exhausted credit balance with a plain 400; it is a billing wait, not a malformed request.
+  if (error instanceof Anthropic.BadRequestError) return creditExhausted(error) ? { ...base, code: 'QUOTA_EXCEEDED', retryable: true, message: MESSAGES.quota }
+    : { ...base, code: 'INVALID_REQUEST', retryable: false, message: MESSAGES.request };
   if (error instanceof Anthropic.RateLimitError) { const reset = retryAfter(error.headers); return { ...base, code: 'RATE_LIMITED', retryable: true, message: MESSAGES.rate, ...(reset === undefined ? {} : { reset_at: reset }) }; }
   // 529 overloaded and other 5xx; also reached by errors reported inside an open stream.
   if (error instanceof Anthropic.InternalServerError) { const reset = retryAfter(error.headers); return { ...base, code: 'PROVIDER_UNAVAILABLE', retryable: true, message: MESSAGES.unavailable, ...(reset === undefined ? {} : { reset_at: reset }) }; }
@@ -296,6 +305,8 @@ export class AnthropicAdapter implements ModelAdapter {
         return this.#parse(message, request.budget.max_tool_calls).map(event => event.type === 'failed' ? fail(event.error)[0]! : event);
       } finally { clearTimeout(timer); }
     } catch (error) {
+      const note = anthropicFailureNote(error);
+      if (note) console.error(note);
       return fail(anthropicFailure(error, sent, timedOut));
     } finally { release?.(); }
   }
